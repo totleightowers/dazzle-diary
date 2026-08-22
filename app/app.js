@@ -1,0 +1,1726 @@
+import { api, isStandalone } from './api.js';
+import { statusFromDates, applyStatus } from './core/status.js';
+import { productUrl, shopById, displayCurrency, SHOPS } from './core/shops.js';
+const SHOP_BY_NAME = Object.fromEntries(SHOPS.map((s) => [s.name, s]));
+/* Diamond Painting Logbook — the whole client. Vanilla; no build step. */
+
+const $app = document.getElementById('app');
+window.__logbookReady = true;
+
+/* --------------------------------------------------------------- theme */
+const THEMES = [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']];
+function applyTheme(mode) {
+  const root = document.documentElement;
+  if (!root) return;
+  // resolve "system" ourselves rather than trusting the media query
+  root.setAttribute('data-theme', mode === 'system' ? (systemIsDark() ? 'dark' : 'light') : mode);
+  const dark = mode === 'dark' || (mode === 'system' && systemIsDark());
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', dark ? '#2a2320' : '#fbf9f5');
+  // the phone's own status and navigation bars are part of the app surface
+  try { window.LogbookNative?.setBarColor?.(dark); } catch {}
+}
+/* Android's WebView does not follow the system theme on its own —
+ * prefers-color-scheme stays "light" however the phone is set — so the shell
+ * tells us, and matchMedia is the fallback for a normal browser. */
+function systemIsDark() {
+  try {
+    const n = window.LogbookNative;
+    if (n && typeof n.isSystemDark === 'function') return !!n.isSystemDark();
+  } catch {}
+  return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+}
+const themeMode = () => localStorage.getItem('theme') || 'system';
+applyTheme(themeMode());
+window.__logbookThemeChanged = () => { if (themeMode() === 'system') applyTheme('system'); };
+if (window.matchMedia) {
+  window.matchMedia('(prefers-color-scheme: dark)')
+    .addEventListener('change', window.__logbookThemeChanged);
+}
+
+/* ------------------------------------------------------------------ utils */
+const h = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const sized = (url, w) => {
+  try { const u = new URL(url); u.searchParams.set('width', String(w)); return u.toString(); }
+  catch { return url; }
+};
+const bigNum = (n) => {
+  const v = Number(n) || 0;
+  if (v >= 1e6) return (v / 1e6).toFixed(v >= 1e7 ? 1 : 2) + 'M';
+  if (v >= 10000) return Math.round(v / 1000) + 'k';
+  return v.toLocaleString('en-GB');
+};
+const num = (n) => n == null || n === '' ? '—' : Number(n).toLocaleString('en-GB');
+const SYMBOL = { GBP: '£', USD: '$', EUR: '€', CAD: 'CA$', AUD: 'A$', NZD: 'NZ$' };
+const money = (n, c) => n == null || n === '' ? '—'
+  : (SYMBOL[c || S.prefs.currency] || ((c || '') + ' ')) + Number(n).toFixed(2);
+const cm = (inches) => inches == null ? null : Math.round(inches * 2.54 * 100) / 100;
+const sizeText = (p) => p.width_in == null || p.height_in == null ? '—'
+  : `${cm(p.width_in)} × ${cm(p.height_in)} cm`;
+const dateText = (s) => {
+  if (!s) return null;
+  const d = new Date(s + (s.length === 10 ? 'T12:00:00' : ''));
+  return isNaN(d) ? s : d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+};
+const today = () => new Date().toISOString().slice(0, 10);
+
+const PRICE_SOURCE = {
+  order:     ['what you paid',        'the only kit in its order'],
+  allocated: ['share of the order',   'order total split across its kits by list price'],
+  catalogue: ['list price today',     'the order also held accessories, so the split is unknowable'],
+  receipt:   ['from the receipt',   'the exact figure from the shop’s emailed receipt'],
+  you:       ['your figure',          null]
+};
+
+const STATUS = {
+  notReceived: { label: 'Not received', short: 'Not received' },
+  received:    { label: 'Received, not started', short: 'Received' },
+  started:     { label: 'Started', short: 'Started' },
+  completed:   { label: 'Completed', short: 'Completed' }
+};
+const ORDER = ['started', 'received', 'notReceived', 'completed'];
+const stVar = (s) => `var(--st-${s})`, stDot = (s) => `var(--st-${s}-dot)`;
+
+const ICON = {
+  back: '<path d="M15 5l-7 7 7 7"/>', close: '<path d="M6 6l12 12M18 6L6 18"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
+  add: '<path d="M12 5v14M5 12h14"/>',
+  grid: '<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/>',
+  list: '<path d="M4 6.5h16M4 12h16M4 17.5h16"/>',
+  edit: '<path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3z"/>',
+  camera: '<path d="M4 8.5h3l1.5-2.5h7L17 8.5h3v11H4z"/><circle cx="12" cy="14" r="3.4"/>',
+  date: '<rect x="3.5" y="5.5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3.5v4M16 3.5v4"/>',
+  imp: '<path d="M12 15V3m0 0L7.5 7.5M12 3l4.5 4.5"/><path d="M4 14v4.5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V14"/>',
+  // a toothed gear. the old one was a circle with eight rays, which is the
+  // universal icon for "light mode" — no wonder it read as the wrong control
+  cog: '<circle cx="12" cy="12" r="3"/><path d="M19.1 14.4a1.5 1.5 0 0 0 .3 1.65l.05.05a1.8 1.8 0 1 1-2.55 2.55l-.05-.05a1.5 1.5 0 0 0-1.65-.3 1.5 1.5 0 0 0-.9 1.37V20a1.8 1.8 0 1 1-3.6 0v-.1a1.5 1.5 0 0 0-.98-1.37 1.5 1.5 0 0 0-1.65.3l-.05.05A1.8 1.8 0 1 1 4.47 16.1l.05-.05a1.5 1.5 0 0 0 .3-1.65 1.5 1.5 0 0 0-1.37-.9H3.3a1.8 1.8 0 1 1 0-3.6h.1a1.5 1.5 0 0 0 1.37-.98 1.5 1.5 0 0 0-.3-1.65l-.05-.05A1.8 1.8 0 1 1 7 4.67l.05.05a1.5 1.5 0 0 0 1.65.3h.07a1.5 1.5 0 0 0 .9-1.37V3.5a1.8 1.8 0 1 1 3.6 0v.1a1.5 1.5 0 0 0 .9 1.37 1.5 1.5 0 0 0 1.65-.3l.05-.05a1.8 1.8 0 1 1 2.55 2.55l-.05.05a1.5 1.5 0 0 0-.3 1.65v.07a1.5 1.5 0 0 0 1.37.9h.1a1.8 1.8 0 1 1 0 3.6h-.1a1.5 1.5 0 0 0-1.37.9z"/>',
+  tick: '<path d="M4 12.5l5.5 5.5L20 7"/>', info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5.5M12 16.2v.1"/>',
+  file: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>',
+  trash: '<path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13"/>',
+  filter: '<path d="M4 6.5h6M14 6.5h6M4 17.5h10M18 17.5h2M4 12h2M10 12h10"/>'
+         + '<circle cx="12" cy="6.5" r="2.2"/><circle cx="8" cy="12" r="2.2"/><circle cx="16" cy="17.5" r="2.2"/>',
+  chev: '<path d="M9 5l7 7-7 7"/>',
+  link: '<path d="M10.5 13.5a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.7 1.7"/><path d="M13.5 10.5a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.7-1.7"/>',
+  gem: '<path d="M6 3h12l4 6-10 12L2 9l4-6z"/><path d="M2 9h20M9 3l-3 6 6 12M15 3l3 6-6 12"/>'
+};
+const svg = (name, size = 20, sw = 1.7) => {
+  // an unknown name used to render a silently empty box — a blank gap in the UI
+  if (!ICON[name]) console.warn('missing icon:', name);
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+     stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round">${ICON[name] || ''}</svg>`;
+};
+
+
+/* Phone cameras produce 7–12 MB frames. A progress photo is looked at on a
+ * phone screen, so 1600px at q0.82 is indistinguishable and ~40x smaller —
+ * which is the difference between a 12 MB backup and a 500 MB one. */
+async function downscale(file, maxEdge = 1600, quality = 0.82) {
+  if (!file || !/^image\//.test(file.type || '')) return file;
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
+    if (scale === 1 && file.size < 900 * 1024) { bitmap.close?.(); return file; }
+    const w = Math.round(bitmap.width * scale), h = Math.round(bitmap.height * scale);
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
+    bitmap.close?.();
+    const blob = await new Promise((ok) => canvas.toBlob(ok, 'image/jpeg', quality));
+    return blob && blob.size < file.size ? blob : file;
+  } catch { return file; }        // unreadable image: send it as-is
+}
+
+/* Android's WebView ignores downloads entirely unless the app installs a
+ * DownloadListener — and it cannot handle blob: URLs even then. So hand the
+ * bytes to the shell, which writes them to the real Downloads folder. A plain
+ * browser still gets the <a download> path. */
+async function saveToPhone(filename, blob) {
+  const n = window.LogbookNative;
+  if (n && typeof n.saveDownload === 'function') {
+    const buf = new Uint8Array(await blob.arrayBuffer());
+    let bin = '';
+    for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+    const where = n.saveDownload(filename, btoa(bin), blob.type || 'application/octet-stream');
+    if (where) return where;
+    throw new Error('Could not write to Downloads');
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 8000);
+  return 'your Downloads folder';
+}
+
+let toastTimer;
+function toast(msg) {
+  document.querySelector('.toast')?.remove();
+  const t = document.createElement('div');
+  t.className = 'toast'; t.textContent = msg;
+  document.body.appendChild(t);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.remove(), 2600);
+}
+
+/* ------------------------------------------------------------------ state */
+const S = {
+  view: localStorage.getItem('view') || 'grid',
+  filter: 'all',
+  q: '',
+  projects: [],
+  meta: null,
+  importPreview: null,
+  fromCatalogue: null,
+  chooserFor: null,
+  chooserHits: [],
+  prefs: { currency: 'GBP', excluded: [] },
+  browse: { q: '', shop: null, items: [], offset: 0, more: true, loading: false,
+             shape: null, size: null, maxPrice: null, inStock: false, sort: 'relevance',
+             scroll: 0, open: false, loaded: false },
+  facets: null,
+  importSel: new Set(),
+  importTab: 'new'
+};
+
+/* --------------------------------------------------------------- fragments */
+const thumb = (p, cls = '') => {
+  const src = p.cover ? `/covers/${encodeURIComponent(p.cover)}` : null;
+  return `<div class="thumb ${cls}" style="background:${stVar(p.status)}">${
+    src ? `<img src="${h(src)}" alt="" loading="lazy">` : ''}</div>`;
+};
+
+const card = (p) => `
+  <button class="card" data-go="#/p/${p.id}" data-id="${p.id}" data-status="${p.status}"${
+    p.shop ? ` data-shop="${h(p.shop)}"` : ''}>
+    ${thumb(p)}
+    <div class="body">
+      <span class="name">${h(p.title)}</span>
+      <span class="who" style="display:flex;align-items:center;gap:6px">
+        ${p.shop ? `<span class="pip" data-shop="${h(p.shop)}"></span>` : ''}
+        <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${
+          h(p.artist || (shopById(p.shop) || {}).name || '')}</span>
+      </span>
+      <div class="tags">
+        ${p.shop && shopById(p.shop) ? `<span class="tag shop-tag" data-shop="${h(p.shop)}">${
+          h(shopById(p.shop).name)}</span>` : ''}
+        <span class="tag tnum">${h(sizeText(p))}</span>
+        ${p.shape ? `<span class="tag">${h(p.shape)}</span>` : ''}
+      </div>
+      <div class="facts tnum">
+        ${p.drills ? `<span>${p.drills_estimated ? '≈' : ''}${num(p.drills)} drills</span>` : ''}
+        ${p.colors ? `<span>${num(p.colors)} colours</span>` : ''}
+      </div>
+      ${p.status === 'started' ? `<div class="bar"><i style="width:${p.progress || 0}%"></i></div>` : ''}
+    </div>
+  </button>`;
+
+const topbar = (title, { back = null, right = '', sub = false } = {}) => `
+  <div class="titlerow${sub ? ' sub' : ''}">
+    ${back ? `<button class="iconbtn flush-l" data-back="${back}" aria-label="Back">${svg('back', 20, 2)}</button>` : ''}
+    <h1>${h(title)}</h1>${right}
+  </div>`;
+
+/* ------------------------------------------------------------------ router */
+const routes = [];
+const route = (re, fn) => routes.push([re, fn]);
+
+/* Navigation behaves like an app, not a browser.
+ *   go()      goes deeper and adds a history entry
+ *   back()    returns to where you came from, unwinding that entry
+ *   swap()    replaces the current screen without adding one, so a form you
+ *             have finished with never sits in the back stack
+ * Without this, saving pushed ANOTHER copy of the project screen on top of the
+ * one you started from, and back walked through the duplicates. */
+let depth = 0;
+const go = (hash) => { depth++; location.hash = hash; };
+const swap = (hash) => {
+  if (('#' + String(hash).replace(/^#/, '')) === location.hash) { render(); return; }
+  history.replaceState(null, '', hash);
+  render();
+};
+const back = (fallback = '#/') => {
+  if (depth > 0) { depth--; history.back(); }
+  else swap(fallback);
+};
+
+async function render() {
+  const hash = location.hash || '#/';
+  for (const [re, fn] of routes) {
+    const m = hash.match(re);
+    if (m) {
+      try { await fn(...m.slice(1)); }
+      catch (e) { $app.innerHTML = `<div class="screen"><div class="scroll pad"><div class="empty">
+        <h2>Something went wrong</h2><p>${h(e.message)}</p>
+        <button class="btn ghost" data-go="#/">Back to the logbook</button></div></div></div>`; }
+      window.scrollTo(0, 0);
+      return;
+    }
+  }
+  go('#/');
+}
+
+/* ==================================================================== #/ */
+route(/^#\/$/, async () => {
+  const [projects, meta] = await Promise.all([api('/projects'), api('/state')]);
+  S.projects = projects; S.meta = meta;
+  paintLogbook();
+});
+
+function paintLogbook() {
+  const q = S.q.trim().toLowerCase();
+  const match = (p) =>
+    (S.filter === 'all' || p.status === S.filter) &&
+    (!q || p.title.toLowerCase().includes(q) || (p.artist || '').toLowerCase().includes(q));
+
+  // keep empty sections visible when everything is shown, so there is always
+  // somewhere to drop a card
+  const showEmpty = S.filter === 'all' && !S.q.trim();
+  const groups = ORDER
+    .map((k) => ({ k, items: S.projects.filter((p) => p.status === k).filter(match) }))
+    .filter((g) => g.items.length || showEmpty);
+  const shown = groups.reduce((n, g) => n + g.items.length, 0);
+  const counts = S.meta?.counts || {};
+  const chips = [{ k: 'all', label: 'All', n: S.projects.length }]
+    .concat(ORDER.map((k) => ({ k, label: STATUS[k].short, n: counts[k] || 0 })));
+
+  const needsCatalogue = !S.meta?.catalogue?.kits;
+  const empty = !S.projects.length;
+
+  $app.innerHTML = `
+  <div class="screen ${S.view}-view">
+    <div class="topbar plain">
+      ${topbar('My Logbook', { right: `
+        <button class="iconbtn" data-go="#/settings" aria-label="Settings">${svg('cog')}</button>
+        <span class="avatar">JL</span>` })}
+      <div class="search">
+        ${svg('search', 18)}
+        <input id="q" value="${h(S.q)}" placeholder="Search by title or artist" autocomplete="off">
+        ${S.q ? `<button class="iconbtn" data-act="clearq" aria-label="Clear"><span class="clear">${svg('close', 12, 2.6)}</span></button>` : ''}
+      </div>
+      <div class="chiprow">${chips.map((c) => `
+        <button class="chip" data-act="filter" data-k="${c.k}" aria-pressed="${S.filter === c.k}">
+          <span>${h(c.label)}</span><span class="n tnum">${c.n}</span></button>`).join('')}
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <span style="font-size:13px;font-weight:600;color:var(--ink-mid)">
+          ${shown} project${shown === 1 ? '' : 's'}${
+            S.filter !== 'all' ? ` <span style="color:var(--ink-mute);font-weight:400">· ${
+              h(STATUS[S.filter].short.toLowerCase())}</span>` : ''}</span>
+        <div class="seg tight compact">
+          <button data-act="view" data-k="grid" aria-pressed="${S.view === 'grid'}" aria-label="Grid view">${svg('grid', 16)}</button>
+          <button data-act="view" data-k="list" aria-pressed="${S.view === 'list'}" aria-label="List view">${svg('list', 16)}</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="scroll pad" style="padding-bottom:24px">
+      ${needsCatalogue && !empty ? `<div class="notice" style="margin-top:16px">${svg('info', 18)}
+        <span>Sync the Diamond Art Club catalogue in Settings to fetch covers and details.</span></div>` : ''}
+      ${empty ? emptyLogbook(needsCatalogue) : groups.map((g) => `
+        <section class="group" data-status="${g.k}">
+          <header><span class="dot" style="background:${stDot(g.k)}"></span>
+            <h2>${h(STATUS[g.k].label)}</h2><span class="n tnum">${g.items.length}</span></header>
+          <div class="group-body">${g.items.map(card).join('')}</div>
+        </section>`).join('')}
+      ${!empty && !groups.length ? `<div class="empty">${svg('gem', 40, 1.3)}
+        <h2>Nothing matches that</h2><p>Try a different title or artist, or clear the filters.</p></div>` : ''}
+    </div>
+
+    <div class="actionbar">
+      <button class="btn primary" data-go="#/browse">${svg('search', 18)} Add from catalogue</button>
+      <button class="btn ghost square" data-go="#/new" aria-label="Add by hand">${svg('add', 20, 2)}</button>
+      <button class="btn ghost square" data-go="#/import" aria-label="Import orders">${svg('imp')}</button>
+    </div>
+  </div>`;
+
+  const input = document.getElementById('q');
+  if (input) {
+    input.oninput = (e) => { S.q = e.target.value; paintLogbookBody(); syncClear(); };
+  }
+  syncClear();
+}
+
+// keep the clear button in step with the field without repainting the input itself
+function syncClear() {
+  const wrap = $app.querySelector('.search');
+  if (!wrap) return;
+  const has = !!S.q;
+  const btn = wrap.querySelector('[data-act="clearq"]');
+  if (has && !btn) {
+    const b = document.createElement('button');
+    b.className = 'iconbtn'; b.dataset.act = 'clearq'; b.setAttribute('aria-label', 'Clear');
+    b.innerHTML = `<span class="clear">${svg('close', 12, 2.6)}</span>`;
+    wrap.appendChild(b);
+  } else if (!has && btn) btn.remove();
+}
+
+// re-render only the list while typing, so the field keeps focus and caret
+function paintLogbookBody() {
+  const q = S.q.trim().toLowerCase();
+  const match = (p) =>
+    (S.filter === 'all' || p.status === S.filter) &&
+    (!q || p.title.toLowerCase().includes(q) || (p.artist || '').toLowerCase().includes(q));
+  const groups = ORDER.map((k) => ({ k, items: S.projects.filter((p) => p.status === k).filter(match) }))
+                      .filter((g) => g.items.length);
+  const shown = groups.reduce((n, g) => n + g.items.length, 0);
+  const scroll = $app.querySelector('.scroll');
+  scroll.innerHTML = groups.length ? groups.map((g) => `
+    <section class="group" data-status="${g.k}">
+      <header><span class="dot" style="background:${stDot(g.k)}"></span>
+        <h2>${h(STATUS[g.k].label)}</h2><span class="n tnum">${g.items.length}</span></header>
+      <div class="group-body">${g.items.map(card).join('')}</div>
+    </section>`).join('')
+    : `<div class="empty">${svg('gem', 40, 1.3)}<h2>Nothing matches that</h2>
+       <p>Try a different title or artist, or clear the filters.</p></div>`;
+  $app.querySelector('.label').textContent = `${shown} project${shown === 1 ? '' : 's'}`;
+}
+
+const emptyLogbook = (needsCatalogue) => `
+  <div class="empty">${svg('gem', 44, 1.2)}
+    <h2>Your logbook is empty</h2>
+    <p>Import your Diamond Art Club order history and every kit you have bought becomes a project — cover, size, colours and drill count included.</p>
+    <button class="btn primary wide" style="margin-top:8px" data-go="#/import">${svg('imp', 18)} Import order history</button>
+    <button class="btn ghost wide" data-go="#/new">Add one by hand instead</button>
+    ${needsCatalogue ? `<p style="margin-top:6px">You will be asked to sync the catalogue first — that is a one-off 30 second download.</p>` : ''}
+  </div>`;
+
+/* =============================================================== #/p/:id */
+route(/^#\/p\/(\d+)$/, async (id) => {
+  const p = await api('/projects/' + id);
+  const spec = [
+    ['Canvas size', sizeText(p) + (p.width_in ? ` · ${p.width_in}" × ${p.height_in}"` : '')],
+    ['Drill shape', p.shape], ['Coverage', p.coverage],
+    ['Diamonds', p.drills ? (p.drills_estimated ? '\u2248 ' + num(p.drills) : num(p.drills)) : null], ['Colours', p.colors ? num(p.colors) : null],
+    ['Special diamonds', p.special], ['Brand', p.brand], ['Obtained from', p.source]
+  ].filter(([, v]) => v);
+
+  const dates = [['Ordered', p.date_ordered], ['Received', p.date_received],
+                 ['Started', p.date_started], ['Completed', p.date_completed]];
+  const costs = [['Price', p.price], ['Shipping', p.shipping], ['Tax', p.tax]].filter(([, v]) => v != null);
+  const total = costs.reduce((n, [, v]) => n + Number(v || 0), 0);
+
+  $app.innerHTML = `
+  <div class="screen">
+    <div class="scroll">
+      ${(() => {
+        const shots = (() => {
+          try { const a = JSON.parse(p.covers || '[]'); if (a.length) return a; } catch {}
+          return p.cover ? [p.cover] : [];
+        })();
+        return `<div class="hero" style="background:${stVar(p.status)}">
+        ${shots.length ? `<span class="wash" id="herowash" style="background-image:url('/covers/${
+          encodeURIComponent(shots[0])}')"></span>
+        <div class="shots" id="shots">${shots.map((f) =>
+          `<img src="/covers/${encodeURIComponent(f)}" alt="" loading="lazy">`).join('')}</div>` : ''}
+        <div class="overlay"></div>
+        <div class="controls">
+          <button class="iconbtn" data-back="#/" aria-label="Back">${svg('back', 20, 2)}</button>
+          <button class="btn primary" style="height:44px;flex:0 0 auto" data-go="#/p/${p.id}/edit">${svg('edit', 16)} Edit</button>
+        </div>
+        ${shots.length > 1 ? `<div class="dots" id="dots">${shots.map((_, i) =>
+          `<button data-act="shot" data-i="${i}" aria-current="${i === 0}" aria-label="Photo ${i + 1}"><i></i></button>`).join('')}</div>` : ''}
+      </div>`;
+      })()}
+
+      <div class="pad" style="padding-top:18px">
+        <span class="statuspill" style="background:${stVar(p.status)}">
+          <span class="dot" style="background:${stDot(p.status)}"></span>${h(STATUS[p.status].label)}</span>
+        <h1 style="font-size:27px;line-height:1.15;margin:10px 0 2px">${h(p.title)}</h1>
+        ${p.artist ? `<p style="margin:0;color:var(--ink-mute);font-size:14px">By ${h(p.artist)}${p.brand ? ' · ' + h(p.brand) : ''}</p>` : ''}
+        ${(() => {
+          const url = productUrl(p.shop, p.dac_handle);
+          if (!url) return '';
+          const shop = shopById(p.shop);
+          return `<a href="${h(url)}" target="_blank" rel="noopener noreferrer"
+             style="display:inline-flex;align-items:center;gap:7px;margin-top:10px;height:36px;padding:0 13px;
+                    border-radius:999px;background:var(--shop-${h(p.shop)}-bg);
+                    border:1px solid var(--shop-${h(p.shop)});
+                    font-size:13px;font-weight:600;color:var(--ink-mid)">
+            <span class="pip" data-shop="${h(p.shop)}"></span>
+            ${svg('link', 15)}<span>View on ${h(shop ? shop.name : 'the shop')}</span></a>`;
+        })()}
+      </div>
+
+      <div class="pad stack" style="padding-top:16px;padding-bottom:26px">
+        ${p.status === 'started' || p.progress ? `
+        <div class="panel" style="padding:18px">
+          <div style="display:flex;align-items:baseline;justify-content:space-between">
+            <span style="font-family:var(--serif);font-size:40px;font-weight:600;line-height:1" class="tnum" id="pctv">${p.progress || 0}%</span>
+            <span class="tnum" style="font-size:13px;color:var(--ink-mute)" id="placed">${
+              p.drills ? num(Math.round(p.drills * (p.progress || 0) / 100)) + ' of ' + num(p.drills) + ' placed' : 'placed'}</span>
+          </div>
+          <div class="progressline" style="margin-top:14px;height:10px"><i id="pctbar" style="width:${p.progress || 0}%"></i></div>
+          <input type="range" min="0" max="100" value="${p.progress || 0}" id="pct" style="margin-top:6px">
+          <p style="margin:2px 0 0;font-size:12px;color:var(--ink-mute)">Drag to log where you are today. Saved automatically.</p>
+        </div>` : ''}
+
+        <div class="panel pad-in">${spec.map(([k, v]) =>
+          `<div class="row"><span class="k">${h(k)}</span><span class="v tnum">${h(v)}</span></div>`).join('')}</div>
+
+        <div>
+          <h3 class="label">Timeline</h3>
+          <div class="panel pad-in">${dates.map(([k, v]) =>
+            `<div class="row"><span class="k">${h(k)}</span>
+             <span class="v tnum" style="${v ? '' : 'color:var(--ink-faint);font-weight:400'}">${h(dateText(v) || 'Not logged')}</span></div>`).join('')}</div>
+        </div>
+
+        ${p.order_ref ? `<div>
+          <h3 class="label">Order</h3>
+          <div class="panel pad-in">
+            <div class="row"><span class="k">Reference</span><span class="v tnum">${h(p.order_ref)}</span></div>
+            <div class="row"><span class="k">Order total</span><span class="v tnum">${money(p.order_total, p.currency)}${
+              p.order_items > 1 ? ` <span style="color:var(--ink-mute);font-weight:400">· ${p.order_items} items</span>` : ''}</span></div>
+            ${p.order_flag ? `<div class="row"><span class="k">Flag</span><span class="v" style="color:var(--danger)">${h(p.order_flag.replace(/_/g, ' '))}</span></div>` : ''}
+          </div></div>` : ''}
+
+        <div>
+          <h3 class="label">Cost</h3>
+          <div class="panel pad-in">
+            ${costs.length ? costs.map(([k, v]) => {
+              const src = k === 'Price' && p.price_source ? PRICE_SOURCE[p.price_source] : null;
+              return `<div class="row"><span class="k">${h(k)}${
+                src ? `<br><span style="font-size:11px;color:var(--ink-faint)">${h(src[0])}</span>` : ''}</span>
+                <span class="v tnum">${money(v, p.currency)}</span></div>`; }).join('')
+              + `<div class="row"><span class="k" style="font-weight:700;color:var(--ink)">Total</span>
+                 <span class="v tnum" style="font-size:16px">${money(total, p.currency)}</span></div>`
+              : `<div class="row"><span class="k">Not recorded yet</span>
+                 <span class="v"><a href="#/p/${p.id}/edit">Add</a></span></div>`}
+          </div>
+          ${p.price_source && PRICE_SOURCE[p.price_source] && PRICE_SOURCE[p.price_source][1]
+            ? `<p style="margin:8px 2px 0;font-size:11px;line-height:1.45;color:var(--ink-mute)">Price is ${
+                h(PRICE_SOURCE[p.price_source][0])} — ${h(PRICE_SOURCE[p.price_source][1])}. Edit it to set what you actually paid.</p>`
+            : ''}
+        </div>
+
+        <div>
+          <h3 class="label">Progress photos</h3>
+          <div class="photos">
+            ${(p.photos || []).map((ph) => `
+              <div class="shot">
+                <img src="/photos/${encodeURIComponent(ph.file)}" alt="" loading="lazy">
+                <button class="x" data-act="delphoto" data-id="${ph.id}" aria-label="Remove photo">${svg('close', 12, 2.6)}</button>
+              </div>`).join('')}
+            <label class="btn dashed add">
+              ${svg('camera', 20)}<span>Add</span>
+              <input type="file" accept="image/*" multiple id="photo" hidden>
+            </label>
+          </div>
+        </div>
+
+        <div>
+          <h3 class="label">Notes</h3>
+          <textarea class="fld" id="notes" placeholder="Colour matches, missing drills, where you got to…">${h(p.notes || '')}</textarea>
+        </div>
+
+        <button class="btn danger wide" data-act="delete" data-id="${p.id}">Delete project</button>
+      </div>
+    </div>
+  </div>`;
+
+  const shots = document.getElementById('shots');
+  if (shots) {
+    const dots = document.getElementById('dots');
+    const wash = document.getElementById('herowash');
+    shots.onscroll = () => {
+      const i = Math.round(shots.scrollLeft / shots.clientWidth);
+      if (dots) [...dots.children].forEach((d, n) => d.setAttribute('aria-current', n === i));
+      const img = shots.children[i];
+      if (wash && img) wash.style.backgroundImage = `url('${img.getAttribute('src')}')`;
+    };
+    document.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-act="shot"]');
+      if (b && shots) shots.scrollTo({ left: shots.clientWidth * Number(b.dataset.i), behavior: 'smooth' });
+    }, { once: false });
+  }
+
+  const pct = document.getElementById('pct');
+  if (pct) {
+    let t;
+    pct.oninput = (e) => {
+      const v = Number(e.target.value);
+      document.getElementById('pctv').textContent = v + '%';
+      document.getElementById('pctbar').style.width = v + '%';
+      if (p.drills) document.getElementById('placed').textContent =
+        num(Math.round(p.drills * v / 100)) + ' of ' + num(p.drills) + ' placed';
+      clearTimeout(t);
+      t = setTimeout(() => api('/projects/' + p.id, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ progress: v, ...(v >= 100 ? { status: 'completed', date_completed: p.date_completed || today() } : {}) })
+      }), 400);
+    };
+  }
+  const notes = document.getElementById('notes');
+  if (notes) {
+    let t;
+    notes.oninput = () => { clearTimeout(t); t = setTimeout(() => api('/projects/' + p.id, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notes: notes.value }) }).then(() => toast('Notes saved')), 700); };
+  }
+  const photo = document.getElementById('photo');
+  if (photo) {
+    photo.onchange = async () => {
+      const files = Array.from(photo.files || []);
+      if (!files.length) return;
+      let done = 0, failed = 0;
+      const say = () => toast(files.length === 1 ? 'Saving photo…' : `Saving ${done + 1} of ${files.length}…`);
+      say();
+      for (const f of files) {
+        try {
+          const small = await downscale(f);
+          await api(`/projects/${p.id}/photos`, {
+            method: 'POST',
+            headers: { 'Content-Type': small.type || 'image/jpeg' },
+            body: isStandalone() ? await small.arrayBuffer() : small
+          });
+        } catch { failed++; }
+        done++;
+        if (done < files.length) say();
+      }
+      toast(failed ? `${done - failed} added, ${failed} failed` :
+            done === 1 ? 'Photo added' : `${done} photos added`);
+      render();
+    };
+  }
+});
+
+/* ================================================= #/new and #/p/:id/edit */
+const FORM_STATUS = ORDER;
+route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
+  let p = id ? await api('/projects/' + id) : {
+    status: 'notReceived', currency: 'GBP', coverage: 'Full drill', shape: 'Square', brand: '', hours: 0
+  };
+  if (!id && S.fromCatalogue) {
+    const c = S.fromCatalogue;
+    const shopName = (browseShops.find(s => s.id === c.shop) || {}).name || null;
+    p = { ...p, title: c.title, artist: c.artist, shape: c.shape || p.shape,
+          coverage: c.coverage || p.coverage, width_in: c.width_in, height_in: c.height_in,
+          colors: c.colors, drills: c.drills, special: c.special,
+          brand: shopName, source: shopName, price: c.price,
+          currency: displayCurrency(c.shop, c.currency, S.prefs.currency),
+          dac_handle: c.handle, shop: c.shop };
+    S.fromCatalogue = null;
+  }
+  const isNew = !id;
+  const f = (name, label, value, extra = '', cls = '') =>
+    `<div class="${cls}"><label class="label" for="${name}">${h(label)}</label>
+     <input class="fld" id="${name}" name="${name}" value="${h(value ?? '')}" ${extra}></div>`;
+
+  $app.innerHTML = `
+  <div class="screen">
+    <div class="topbar">
+      ${topbar(isNew ? 'New project' : 'Edit project', { back: isNew ? '#/' : '#/p/' + id, sub: true })}
+    </div>
+    <div class="scroll pad stack" style="padding-top:18px;padding-bottom:26px">
+      <div><label class="label" for="title">Project name</label>
+        <input class="fld" id="title" name="title" value="${h(p.title || '')}" placeholder="Start typing to search the catalogue" autocomplete="off"
+               data-handle="${h(p.dac_handle || '')}" data-shop="${h(p.shop || '')}">
+        <div id="sugg" class="stack" style="gap:6px;margin-top:6px"></div></div>
+
+      ${f('artist', 'Artist', p.artist)}
+
+      <div><span class="label">Project status</span>
+        <div class="opts" id="status">${FORM_STATUS.map((k) => `
+          <button type="button" class="opt" data-k="${k}" aria-pressed="${p.status === k}"
+            style="flex:1 1 46%"><span class="dot" style="background:${stDot(k)}"></span>${h(STATUS[k].short)}</button>`).join('')}</div></div>
+
+      <div><span class="label">Drill shape</span>
+        <div class="opts" id="shape">${['Round', 'Square'].map((k) =>
+          `<button type="button" class="opt" data-k="${k}" aria-pressed="${p.shape === k}">${k}</button>`).join('')}</div></div>
+
+      <div><span class="label">Coverage</span>
+        <div class="opts" id="coverage">${['Full drill', 'Partial drill'].map((k) =>
+          `<button type="button" class="opt" data-k="${k}" aria-pressed="${p.coverage === k}">${k}</button>`).join('')}</div></div>
+
+      <div><span class="label">Canvas size (inches)</span>
+        <div class="grid2">
+          <input class="fld tnum" id="width_in" placeholder="W" inputmode="decimal" value="${h(p.width_in ?? '')}">
+          <input class="fld tnum" id="height_in" placeholder="H" inputmode="decimal" value="${h(p.height_in ?? '')}">
+        </div>
+        <p class="tnum" id="cmhint" style="margin:6px 2px 0;font-size:12px;color:var(--ink-mute)"></p></div>
+
+      <div class="grid2">
+        ${f('colors', 'Colours', p.colors, 'inputmode="numeric"')}
+        ${f('drills', 'Diamonds', p.drills, 'inputmode="numeric"')}
+        ${f('special', 'Special diamonds', p.special, '', 'span2')}
+        ${f('brand', 'Brand', p.brand, '', 'span2')}
+        ${f('source', 'Obtained from', p.source, '', 'span2')}
+      </div>
+
+      <div><span class="label">Dates</span>
+        <div class="grid2">
+          ${[['date_ordered', 'Ordered'], ['date_received', 'Received'],
+             ['date_started', 'Started'], ['date_completed', 'Completed']].map(([k, l]) => `
+            <div><span style="display:block;margin-bottom:5px;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-mute)">${l}</span>
+            <input class="fld" type="date" id="${k}" value="${h(p[k] || '')}"></div>`).join('')}
+        </div>
+        <p id="datenote" style="margin:8px 2px 0;font-size:12px;line-height:1.45;color:var(--ink-mute)"></p></div>
+
+      <div><span class="label">Cost</span>
+        <div class="panel" style="padding:14px">
+          <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">
+            ${[['price', 'Price'], ['shipping', 'Shipping'], ['tax', 'Tax']].map(([k, l]) => `
+              <div><span style="display:block;margin-bottom:5px;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-mute)">${l}</span>
+              <input class="fld tnum money" id="${k}" inputmode="decimal" style="height:44px;padding:0 10px" value="${h(p[k] ?? '')}" data-orig="${h(p[k] ?? '')}"></div>`).join('')}
+          </div>
+          <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line-soft);display:flex;align-items:baseline;justify-content:space-between">
+            <span style="font-size:13px;font-weight:700">Total</span>
+            <span class="tnum" id="total" style="font-family:var(--serif);font-size:24px;font-weight:600">—</span>
+          </div>
+        </div></div>
+
+      <div class="grid2">
+        ${f('hours', 'Hours spent', p.hours, 'inputmode="decimal"')}
+        <div><span class="label">Currency</span>
+          <div class="opts" id="currency">${['GBP', 'USD', 'EUR'].map((k) =>
+            `<button type="button" class="opt" data-k="${k}" aria-pressed="${(p.currency || 'GBP') === k}" style="padding:0 6px">${k}</button>`).join('')}</div></div>
+        ${f('sold_price', 'If sold, at what price', p.sold_price, 'inputmode="decimal"', 'span2')}
+      </div>
+    </div>
+    <div class="actionbar">
+      <button class="btn ghost" style="width:110px" data-back="${isNew ? '#/' : '#/p/' + id}">Cancel</button>
+      <button class="btn primary" data-act="save" data-id="${id || ''}">Save project</button>
+    </div>
+  </div>`;
+
+  // segmented groups
+  for (const g of ['status', 'shape', 'coverage', 'currency']) {
+    document.getElementById(g).onclick = (e) => {
+      const b = e.target.closest('.opt'); if (!b) return;
+      [...e.currentTarget.children].forEach((c) => c.setAttribute('aria-pressed', c === b));
+      if (g === 'status') statusChanged(b.dataset.k);
+    };
+  }
+
+  /* Status and dates describe the same journey, so changing either updates the
+     other in front of you rather than silently on save. */
+  const DATE_IDS = ['date_ordered', 'date_received', 'date_started', 'date_completed'];
+  const seg = (g) => document.querySelector(`#${g} .opt[aria-pressed="true"]`)?.dataset.k ?? null;
+  const readDates = () => {
+    const o = { status: seg('status') };
+    for (const id of DATE_IDS) o[id] = document.getElementById(id).value || null;
+    return o;
+  };
+  const setStatusButtons = (status) => {
+    document.querySelectorAll('#status .opt').forEach((b) =>
+      b.setAttribute('aria-pressed', b.dataset.k === status));
+  };
+  function statusChanged(status) {
+    const changes = applyStatus(readDates(), status, today());
+    for (const [k, v] of Object.entries(changes)) {
+      if (k === 'status') continue;
+      const el = document.getElementById(k);
+      if (el) el.value = v || '';
+    }
+    noteDates();
+  }
+  function datesChanged() {
+    const want = statusFromDates(readDates());
+    setStatusButtons(want);
+    noteDates();
+  }
+  function noteDates() {
+    const n = document.getElementById('datenote');
+    if (!n) return;
+    const d = readDates();
+    n.textContent = `Status follows these dates — currently ${
+      { notReceived: 'not received', received: 'received, not started',
+        started: 'started', completed: 'completed' }[statusFromDates(d)]}.`;
+  }
+  DATE_IDS.forEach((id) => { const el = document.getElementById(id); if (el) el.onchange = datesChanged; });
+  noteDates();
+  const recalc = () => {
+    const v = (id) => parseFloat(document.getElementById(id).value.replace(/[^0-9.\-]/g, '')) || 0;
+    const cur = document.querySelector('#currency .opt[aria-pressed="true"]')?.dataset.k || 'GBP';
+    document.getElementById('total').textContent = money(v('price') + v('shipping') + v('tax'), cur);
+  };
+  document.querySelectorAll('.money').forEach((el) => (el.oninput = recalc));
+  document.getElementById('currency').addEventListener('click', () => setTimeout(recalc));
+  recalc();
+
+  const cmHint = () => {
+    const w = parseFloat(document.getElementById('width_in').value);
+    const ht = parseFloat(document.getElementById('height_in').value);
+    document.getElementById('cmhint').textContent =
+      w && ht ? `${cm(w)} × ${cm(ht)} cm` : 'Enter inches — centimetres are worked out for you.';
+  };
+  ['width_in', 'height_in'].forEach((k) => (document.getElementById(k).oninput = cmHint));
+  cmHint();
+
+  // catalogue autocomplete: fills everything DAC knows
+  const titleEl = document.getElementById('title'), sugg = document.getElementById('sugg');
+  let st;
+  titleEl.oninput = () => {
+    clearTimeout(st);
+    st = setTimeout(async () => {
+      const q = titleEl.value.trim();
+      if (q.length < 2) { sugg.innerHTML = ''; return; }
+      const hits = await api('/catalogue/search?q=' + encodeURIComponent(q)).catch(() => []);
+      sugg.innerHTML = hits.slice(0, 5).map((c) => `
+        <button type="button" class="checkrow" data-act="usecat" data-h="${h(c.handle)}" style="min-height:52px">
+          <span style="flex:1 1 auto;min-width:0">
+            <span style="display:block;font-family:var(--serif);font-weight:600;font-size:14px">${h(c.title)}</span>
+            <span style="display:block;font-size:11px;color:var(--ink-mute)" class="tnum">${h(c.artist || '')}${
+              c.price != null ? ' · ' + money(c.price, displayCurrency(c.shop, c.currency, S.prefs.currency)) : ''}${
+                c.drills ? ' · ' + num(c.drills) + ' drills' : ''}</span>
+          </span></button>`).join('');
+      sugg._hits = hits;
+    }, 220);
+  };
+  sugg.onclick = (e) => {
+    const b = e.target.closest('[data-act="usecat"]'); if (!b) return;
+    const c = (sugg._hits || []).find((x) => x.handle === b.dataset.h); if (!c) return;
+    titleEl.value = c.title;
+    const set = (id, v) => { const el = document.getElementById(id); if (el && v != null) el.value = v; };
+    set('artist', c.artist); set('colors', c.colors); set('drills', c.drills);
+    set('special', c.special); set('width_in', c.width_in); set('height_in', c.height_in);
+    set('brand', 'Diamond Art Club'); set('source', 'Diamond Art Club');
+    for (const [g, val] of [['shape', c.shape], ['coverage', c.coverage]]) {
+      document.querySelectorAll(`#${g} .opt`).forEach((o) => o.setAttribute('aria-pressed', o.dataset.k === val));
+    }
+    document.getElementById('title').dataset.handle = c.handle;
+    document.getElementById('title').dataset.shop = c.shop || '';
+    set('price', c.price);
+    sugg.innerHTML = ''; cmHint(); recalc();
+    toast('Filled from the catalogue');
+  };
+});
+
+/* =========================================================== #/import */
+route(/^#\/import$/, async () => {
+  const state = await api('/state');
+  if (!state.catalogue.kits) return paintNeedsCatalogue();
+  if (!S.importPreview) return paintImportPick(state);
+  paintImportReview();
+});
+
+function paintNeedsCatalogue() {
+  $app.innerHTML = `
+  <div class="screen">
+    <div class="topbar">${topbar('Import orders', { back: '#/', sub: true })}</div>
+    <div class="scroll pad stack" style="padding-top:20px">
+      <div class="notice">${svg('info', 18)}<span>Before your orders can be matched, the app needs a copy of the
+        Diamond Art Club catalogue. It is a one-off download of about 20 requests and takes half a minute — after
+        that, importing works with no connection at all.</span></div>
+      <button class="btn primary wide" data-act="sync">Download the catalogue</button>
+      <div id="syncbox"></div>
+    </div>
+  </div>`;
+}
+
+function paintImportPick() {
+  $app.innerHTML = `
+  <div class="screen">
+    <div class="topbar">${topbar('Import orders', { back: '#/', sub: true })}</div>
+    <div class="scroll pad stack" style="padding-top:20px;padding-bottom:26px">
+      <label class="dropzone" id="drop">
+        ${svg('imp', 34, 1.6)}
+        <span style="font-family:var(--serif);font-size:19px;font-weight:600">Choose your order history</span>
+        <span style="font-size:13px;line-height:1.5;color:var(--ink-mute)">The CSV you exported from your shop account.<br>Nothing leaves your phone.</span>
+        <input type="file" accept=".csv,text/csv" id="csv" hidden>
+      </label>
+      <div class="panel pad-in">
+        ${[['Kits become projects', 'Each canvas is matched to the catalogue, so it arrives with its cover, artist, size, colours, drill count and special diamonds.'],
+           ['Tools and accessories are skipped', 'Multiplacers, tweezers, wax, trays and coasters are recognised by product type and left out.'],
+           ['Status comes from fulfilment', 'Shipped orders arrive as Received, not started. Anything still processing arrives as Not received.'],
+           ['Prices are worked out where they can be', 'A kit ordered on its own takes the order total exactly. Several kits with no accessories split the total between them. Otherwise the catalogue list price is used, and every project says which it got.']]
+          .map(([t, b], i, a) => `<div class="row" style="align-items:flex-start;${i === a.length - 1 ? 'border-bottom:0' : ''}">
+            <span style="flex:1 1 auto"><span style="display:block;font-size:14px;font-weight:700">${h(t)}</span>
+            <span style="display:block;margin-top:2px;font-size:13px;line-height:1.5;color:var(--ink-mute)">${h(b)}</span></span></div>`).join('')}
+      </div>
+    </div>
+  </div>`;
+
+  const input = document.getElementById('csv');
+  input.onchange = async () => {
+    const file = input.files[0]; if (!file) return;
+    document.getElementById('drop').classList.add('on');
+    try {
+      const text = await file.text();
+      S.importPreview = await api('/import/preview', { method: 'POST', headers: { 'Content-Type': 'text/csv' }, body: text });
+      S.importSel = new Set(S.importPreview.kits.filter((k) => !k.duplicate).map((k) => k.key));
+      S.importTab = 'new';
+      paintImportReview();
+    } catch (e) {
+      document.getElementById('drop').classList.remove('on');
+      toast(e.message || 'Could not read that file');
+    }
+  };
+}
+
+function paintImportReview() {
+  const P = S.importPreview, sum = P.summary;
+  const kits = P.kits, tab = S.importTab;
+  const visible = tab === 'all' ? kits : tab === 'new' ? kits.filter((k) => !k.duplicate)
+                : tab === 'dupe' ? kits.filter((k) => k.duplicate) : [];
+  const defs = [
+    { k: 'received', label: 'Received, not started', test: (r) => !r.duplicate && r.status === 'received' },
+    { k: 'notReceived', label: 'Not received', test: (r) => !r.duplicate && r.status === 'notReceived' },
+    { k: 'none', label: 'Already in your logbook', test: (r) => r.duplicate }
+  ];
+  const groups = tab === 'skipped' ? [] : defs
+    .map((g) => ({ ...g, items: visible.filter(g.test) })).filter((g) => g.items.length);
+  const chosen = kits.filter((k) => S.importSel.has(k.key)).length;
+  const allOn = chosen === sum.newKits && sum.newKits > 0;
+
+  const tabs = [['new', 'New ' + sum.newKits], ['all', 'All ' + sum.kits],
+                ['dupe', 'Logged ' + sum.duplicates], ['skipped', 'Skipped ' + sum.skipped]];
+
+  $app.innerHTML = `
+  <div class="screen">
+    <div class="topbar">
+      ${topbar('Review import', { back: '#/', sub: true, right:
+        `<button class="iconbtn" style="width:auto;padding:0 12px;margin-right:-12px;font-size:13px;font-weight:700;color:var(--accent)" data-act="toggleall">${allOn ? 'None' : 'Select all'}</button>` })}
+      <div class="chiprow">${tabs.map(([k, l]) =>
+        `<button class="chip" data-act="itab" data-k="${k}" aria-pressed="${tab === k}">${h(l)}</button>`).join('')}</div>
+    </div>
+
+    <div class="scroll pad" style="padding-bottom:20px">
+      ${tab === 'new' ? `
+        <div class="tiles" style="margin-top:16px">
+          <div class="tile"><div class="big tnum">${sum.orders}</div><div class="cap">orders read</div></div>
+          <div class="tile"><div class="big tnum">${sum.kits}</div><div class="cap">canvases found</div></div>
+          <div class="tile" style="background:var(--st-received)"><div class="big tnum">${sum.received}</div><div class="cap">received, not started</div></div>
+          <div class="tile" style="background:var(--st-notReceived)"><div class="big tnum">${sum.notReceived}</div><div class="cap">not received yet</div></div>
+        </div>
+        ${sum.pricing ? `<div class="notice" style="margin-top:12px">${svg('info', 18)}
+          <span><strong>${sum.pricing.exact + sum.pricing.allocated}</strong> of these get a price worked out from what you actually paid${
+            sum.pricing.list ? `; the other <strong>${sum.pricing.list}</strong> fall back to today's list price because their order also held accessories` : ''}.</span></div>` : ''}
+        ${sum.flagged.map((f) => `<div class="notice warn" style="margin-top:12px">${svg('info', 18)}
+          <span>Order ${h(f.ref)} is marked <strong>${h(f.status.replace(/_/g, ' '))}</strong>, so its ${money(f.total)} total may not be what you paid.</span></div>`).join('')}
+        ${P.warnings.map((w) => `<div class="notice warn" style="margin-top:12px">${svg('info', 18)}<span>${h(w)}</span></div>`).join('')}
+      ` : ''}
+
+      ${tab === 'skipped' ? `
+        <section class="group" data-status="none" style="margin-top:16px">
+          <header><span class="dot" style="background:var(--ink-faint)"></span>
+            <h2>Not canvas kits</h2><span class="n tnum">${P.skipped.length}</span></header>
+          <div class="group-body">${P.skipped.map((s) => `
+            <div class="checkrow" data-locked="true">
+              <span style="flex:1 1 auto;min-width:0">
+                <span style="display:block;font-family:var(--serif);font-weight:600;font-size:15px">${h(s.title)}</span>
+                <span style="display:block;margin-top:2px;font-size:11px;color:var(--ink-mute)" class="tnum">${h(s.orderRef)} · ${h(s.reason)}</span>
+              </span></div>`).join('')}</div>
+        </section>` : ''}
+
+      ${groups.map((g) => `
+        <section class="group" data-status="${g.k}">
+          <header><span class="dot" style="background:${g.k === 'none' ? 'var(--ink-faint)' : stDot(g.k)}"></span>
+            <h2>${h(g.label)}</h2><span class="n tnum">${g.items.length}</span></header>
+          <div class="group-body">${g.items.map((r) => importRow(r)).join('')}</div>
+        </section>`).join('')}
+    </div>
+
+    <div class="actionbar" style="flex-direction:column;gap:8px">
+      <button class="btn primary wide" data-act="commit" ${chosen ? '' : 'disabled'}>${
+        chosen ? `Import ${chosen} project${chosen === 1 ? '' : 's'}` : 'Nothing selected'}</button>
+      <p style="margin:0;font-size:11px;line-height:1.45;text-align:center;color:var(--ink-mute)">
+        Covers download as they save. Every project records how its price was worked out.</p>
+    </div>
+  </div>`;
+}
+
+const importRow = (r) => {
+  const on = S.importSel.has(r.key);
+  const choices = (r.alternatives || []).length;
+  // the badge IS the way to change which canvas this line means
+  const badge = r.duplicate ? ['In logbook', 'var(--sunken)', 'var(--ink-mute)']
+    : r.uncertain ? [`${choices} to pick from`, 'var(--danger-bg)', 'var(--danger)']
+    : choices > 1 ? [`${choices} match`, 'var(--sunken)', 'var(--ink-mid)']
+    : ['Change', 'var(--sunken)', 'var(--ink-mute)'];
+  return `
+  <div class="checkrow" role="checkbox" aria-checked="${on}" data-locked="${r.duplicate}">
+    <button class="rowmain" ${r.duplicate ? 'disabled' : `data-act="pick" data-k="${h(r.key)}"`}>
+      <span class="box">${svg('tick', 13, 3.2).replace('currentColor', '#fff')}</span>
+      ${r.cover ? `<span class="thumb" style="width:44px;height:44px;border-radius:8px">
+          <img src="${h(sized(r.cover, 120))}" alt="" loading="lazy" referrerpolicy="no-referrer"></span>` : ''}
+      <span style="flex:1 1 auto;min-width:0;text-align:left">
+        <span style="display:block;font-family:var(--serif);font-weight:600;font-size:15px;line-height:1.25">${h(r.title)}</span>
+        <span style="display:block;margin-top:2px;font-size:11px;color:var(--ink-mute)" class="tnum">${
+          h(r.status === 'received' ? 'Received' : 'Not received')}${r.artist ? ' · ' + h(r.artist) : ''}${
+          r.drills ? ' · ' + num(r.drills) : ''}</span>
+      </span>
+    </button>
+    ${r.duplicate
+      ? `<span class="badge" style="background:${badge[1]};color:${badge[2]}">${badge[0]}</span>`
+      : `<button class="badge chooser" data-act="choose" data-k="${h(r.key)}"
+                 style="background:${badge[1]};color:${badge[2]}"
+                 aria-label="Choose which canvas this is">${badge[0]}
+          ${svg('chev', 10, 2.6)}</button>`}
+  </div>`;
+};
+
+/** Sheet listing every product a CSV line could mean. */
+function paintChooser() {
+  const r = S.chooserFor;
+  if (!r) { document.querySelector('.sheet-backdrop')?.remove(); document.querySelector('.sheet')?.remove(); return; }
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `
+    <div class="sheet-backdrop" data-act="closechoose"></div>
+    <div class="sheet">
+      <div class="grab"></div>
+      <div class="pad" style="padding-bottom:12px">
+        <h2 style="font-size:20px">Which one did you buy?</h2>
+        <p style="margin:6px 0 0;font-size:13px;color:var(--ink-mute)">
+          Your order just says &ldquo;${h(r.rawTitle)}&rdquo;, and ${r.alternatives.length} products share that name.</p>
+      </div>
+      <div class="pad" style="padding-bottom:10px">
+        <div class="search">
+          ${svg('search', 18)}
+          <input id="altq" placeholder="Or search all shops" autocomplete="off">
+        </div>
+      </div>
+      <div class="scroll pad" style="padding-bottom:calc(20px + var(--safe-b))" id="altlist">
+        ${(r.alternatives || []).map((a, i) => `
+          <button class="checkrow" style="margin-bottom:8px" aria-checked="${a.chosen}"
+                  data-act="pickalt" data-k="${h(r.key)}" data-i="${i}">
+            <span class="box">${svg('tick', 13, 3.2).replace('currentColor', '#fff')}</span>
+            ${a.cover ? `<span class="thumb" style="width:44px;height:44px;border-radius:8px">
+              <img src="${h(sized(a.cover, 120))}" alt="" loading="lazy" referrerpolicy="no-referrer"></span>` : ''}
+            <span style="flex:1 1 auto;min-width:0">
+              <span style="display:block;font-family:var(--serif);font-weight:600;font-size:15px">${h(a.title || r.title)}</span>
+              <span style="display:block;margin-top:2px;font-size:11px;color:var(--ink-mute)" class="tnum">${
+                h(a.artist || 'no artist listed')}${a.drills ? ' · ' + num(a.drills) + ' drills' : ''}</span>
+            </span>
+            <span class="badge tnum" style="background:var(--sunken);color:var(--ink-mid)">${money(a.price, displayCurrency(a.shop, a.currency, S.prefs.currency))}</span>
+          </button>`).join('')}
+      </div>
+    </div>`;
+  document.body.appendChild(wrap.firstElementChild);
+  document.body.appendChild(wrap.firstElementChild);
+
+  const q = document.getElementById('altq');
+  if (!q) return;
+  let t;
+  q.oninput = () => {
+    clearTimeout(t);
+    t = setTimeout(async () => {
+      const term = q.value.trim();
+      const list = document.getElementById('altlist');
+      if (term.length < 2) { S.chooserFor = r; paintChooserList(r.alternatives || []); return; }
+      list.innerHTML = `<p style="font-size:13px;color:var(--ink-mute)">Searching…</p>`;
+      const hits = await api('/catalogue/search?q=' + encodeURIComponent(term) + '&limit=25').catch(() => []);
+      S.chooserHits = hits.map(c => ({ handle: c.handle, title: c.title, artist: c.artist,
+        price: c.price, currency: c.currency, cover: c.image, drills: c.drills, colors: c.colors,
+        shape: c.shape, coverage: c.coverage, width_in: c.width_in, height_in: c.height_in,
+        special: c.special, shop: c.shop, chosen: false }));
+      paintChooserList(S.chooserHits, true);
+    }, 260);
+  };
+}
+
+function paintChooserList(items, fromSearch) {
+  const list = document.getElementById('altlist');
+  if (!list) return;
+  const r = S.chooserFor;
+  list.innerHTML = items.length ? items.map((a, i) => `
+    <button class="checkrow" style="margin-bottom:8px" aria-checked="${!!a.chosen}"
+            data-act="pickalt" data-k="${h(r.key)}" data-i="${i}" data-src="${fromSearch ? 'search' : 'alt'}">
+      <span class="box">${svg('tick', 13, 3.2).replace('currentColor', '#fff')}</span>
+      ${a.cover ? `<span class="thumb" style="width:44px;height:44px;border-radius:8px">
+        <img src="${h(sized(a.cover, 120))}" alt="" loading="lazy" referrerpolicy="no-referrer"></span>` : ''}
+      <span style="flex:1 1 auto;min-width:0">
+        <span style="display:block;font-family:var(--serif);font-weight:600;font-size:15px">${h(a.title || r.title)}</span>
+        <span style="display:block;margin-top:2px;font-size:11px;color:var(--ink-mute)" class="tnum">${
+          h(a.artist || 'no artist listed')}${a.drills ? ' · ' + num(a.drills) + ' drills' : ''}</span>
+      </span>
+      <span class="badge tnum" style="background:var(--sunken);color:var(--ink-mid)">${money(a.price, displayCurrency(a.shop, a.currency, S.prefs.currency))}</span>
+    </button>`).join('')
+    : `<p style="font-size:13px;color:var(--ink-mute)">Nothing found.</p>`;
+}
+
+/* ============================================================ #/browse */
+route(/^#\/browse$/, async () => {
+  const shops = await api('/shops');
+  if (!S.facets) S.facets = await api('/catalogue/facets').catch(() => null);
+  paintBrowse(shops);
+  // returning from a project keeps what you had: filters, results and place
+  if (S.browse.loaded && S.browse.items.length) {
+    paintBrowseBody();
+    requestAnimationFrame(() => {
+      const sc = $app.querySelector('.scroll');
+      if (sc) sc.scrollTop = S.browse.scroll || 0;
+    });
+  } else {
+    loadBrowse(true);
+  }
+});
+
+const SIZE_BUCKETS = [
+  { k: 'sml', label: 'Up to 40cm', minCm: null, maxCm: 40 },
+  { k: 'med', label: '40–60cm',    minCm: 40,   maxCm: 60 },
+  { k: 'lrg', label: '60–80cm',    minCm: 60,   maxCm: 80 },
+  { k: 'xl',  label: '80cm+',      minCm: 80,   maxCm: null }
+];
+const SORTS = [
+  { k: 'relevance', label: 'Best match' }, { k: 'name', label: 'A–Z' },
+  { k: 'price', label: 'Cheapest' }, { k: 'priceDesc', label: 'Dearest' },
+  { k: 'size', label: 'Biggest' }, { k: 'drills', label: 'Most drills' }
+];
+const browseActive = () => {
+  const B = S.browse;
+  return (B.shape ? 1 : 0) + (B.size ? 1 : 0) + (B.maxPrice ? 1 : 0)
+       + (B.inStock ? 1 : 0) + (B.sort !== 'relevance' ? 1 : 0);
+};
+
+let browseShops = [];
+function paintBrowse(shops) {
+  if (shops) browseShops = shops;
+  const B = S.browse;
+  const chips = [{ id: null, name: 'All shops', kits: browseShops.reduce((n, s) => n + s.kits, 0) }]
+    .concat(browseShops.filter(s => s.kits));
+
+  $app.innerHTML = `
+  <div class="screen">
+    <div class="topbar">
+      ${topbar('Add from catalogue', { back: '#/', sub: true })}
+      <div class="search">
+        ${svg('search', 18)}
+        <input id="bq" value="${h(B.q)}" placeholder="Search ${chips[0].kits.toLocaleString()} kits by name or artist" autocomplete="off">
+      </div>
+      <div class="chiprow">${chips.map((c) => `
+        <button class="chip" data-act="bshop" data-k="${c.id || ''}"${c.id ? ` data-shop="${h(c.id)}"` : ''}
+                aria-pressed="${B.shop === (c.id || null)}">
+          <span>${h(c.name)}</span><span class="n tnum">${c.kits.toLocaleString()}</span></button>`).join('')}
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <button class="chip" data-act="bfilters" aria-pressed="${B.open || browseActive() > 0}" style="flex:0 0 auto">
+          ${svg('filter', 15)}<span>Filters</span>${browseActive() ? `<span class="n tnum">${browseActive()}</span>` : ''}
+        </button>
+        <span style="font-size:12px;color:var(--ink-mute);margin-left:auto" id="browsecount"></span>
+      </div>
+      ${B.open ? browseFilters() : ''}
+    </div>
+    <div class="scroll pad" id="browsebody" style="padding-bottom:24px"></div>
+  </div>`;
+
+  bindPrice();
+  const q = document.getElementById('bq');
+  let t;
+  q.oninput = () => {
+    clearTimeout(t);
+    t = setTimeout(() => { S.browse.q = q.value; loadBrowse(true); }, 260);
+  };
+  paintBrowseBody();
+}
+
+function bindPrice() {
+  const el = document.getElementById('bprice');
+  if (!el) return;
+  el.oninput = () => {
+    const v = Number(el.value) || 0;
+    S.browse.maxPrice = v > 0 ? v : null;
+    const label = el.previousElementSibling?.lastElementChild;
+    if (label) label.textContent = v > 0 ? money(v) : 'any price';
+  };
+  el.onchange = () => { S.browse.scroll = 0; loadBrowse(true); paintBrowse(); bindPrice(); };
+}
+
+function browseFilters() {
+  const B = S.browse, f = S.facets || { maxPrice: 200 };
+  const row = (label, inner) => `
+    <div style="margin-top:12px">
+      <span class="label" style="margin-bottom:6px">${label}</span>
+      <div class="chiprow" style="margin:0;padding:0;flex-wrap:wrap;gap:6px">${inner}</div>
+    </div>`;
+  const chip = (act, k, label, on) =>
+    `<button class="chip" style="height:36px;padding:0 12px" data-act="${act}" data-k="${k}" aria-pressed="${on}">${h(label)}</button>`;
+  return `
+  <div class="panel" style="padding:12px 14px 16px;margin-top:2px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+      <span class="label" style="margin:0">Filters${browseActive() ? ` · ${browseActive()} on` : ''}</span>
+      <button class="btn ghost" style="height:32px;font-size:12px;font-weight:700;padding:0 12px"
+              data-act="bclear" ${browseActive() ? '' : 'disabled'}>Clear all</button>
+    </div>
+    ${row('Drill shape', ['Round', 'Square'].map((sh) => chip('bshape', sh, sh, B.shape === sh)).join(''))}
+    ${row('Canvas size (longest edge)', SIZE_BUCKETS.map((b) => chip('bsize', b.k, b.label, B.size === b.k)).join(''))}
+    ${row('Sort by', SORTS.map((o) => chip('bsort', o.k, o.label, B.sort === o.k)).join(''))}
+    <div style="margin-top:14px">
+      <div style="display:flex;align-items:baseline;justify-content:space-between">
+        <span class="label" style="margin:0">Up to</span>
+        <span class="tnum" style="font-size:13px;font-weight:700">${
+          B.maxPrice ? money(B.maxPrice) : 'any price'}</span>
+      </div>
+      <input type="range" id="bprice" min="0" max="${f.maxPrice}" step="5" value="${B.maxPrice || 0}">
+    </div>
+    <button class="chip" style="margin-top:6px;height:40px" data-act="bstock" aria-pressed="${B.inStock}">
+      ${svg('tick', 14, 3)}<span>In stock only</span></button>
+  </div>`;
+}
+
+function paintBrowseBody() {
+  const B = S.browse;
+  const body = document.getElementById('browsebody');
+  if (!body) return;
+  if (!B.items.length) {
+    body.innerHTML = B.loading
+      ? `<p style="margin:28px 0;text-align:center;color:var(--ink-mute);font-size:13px">Looking…</p>`
+      : `<div class="empty">${svg('search', 36, 1.4)}<h2>Nothing found</h2>
+         <p>Try a different name, or pick another shop.</p></div>`;
+    return;
+  }
+  body.onscroll = () => { S.browse.scroll = body.scrollTop; };
+  const countEl = document.getElementById('browsecount');
+  if (countEl) countEl.textContent = B.items.length
+    ? `${B.items.length}${B.more ? '+' : ''} kit${B.items.length === 1 ? '' : 's'}` : '';
+  body.innerHTML = `
+    <div class="group-body" style="grid-template-columns:repeat(2,minmax(0,1fr));padding:16px 0 0">
+      ${B.items.map((c, i) => `
+        <button class="card cat-card" style="flex-direction:column" data-act="pickcat" data-i="${i}"${
+          c.shop ? ` data-shop="${h(c.shop)}"` : ''}>
+          <span class="thumb" style="width:100%;height:130px">${
+            c.image ? `<img src="${h(sized(c.image, 400))}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ''}</span>
+          <span class="body">
+            <span class="name">${h(c.title)}</span>
+            <span class="who" style="display:flex;align-items:center;gap:6px">
+              ${c.shop ? `<span class="pip" data-shop="${h(c.shop)}"></span>` : ''}
+              <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${
+                h(c.artist || (shopById(c.shop) || {}).name || '')}</span>
+            </span>
+            <span class="tags">
+              ${c.width_in ? `<span class="tag tnum">${Math.round(c.width_in*2.54)}×${Math.round(c.height_in*2.54)}cm</span>` : ''}
+              ${c.shape ? `<span class="tag">${h(c.shape)}</span>` : ''}
+            </span>
+            <span class="facts tnum">
+              ${c.price != null ? `<span style="font-weight:700;color:var(--ink)">${
+                money(c.price, displayCurrency(c.shop, c.currency, S.prefs.currency))}</span>` : ''}
+              ${c.drills ? `<span>${num(c.drills)} drills</span>` : ''}
+              ${!c.available ? `<span style="color:var(--ink-faint)">sold out</span>` : ''}
+            </span>
+          </span>
+        </button>`).join('')}
+    </div>
+    ${B.more ? `<button class="btn ghost wide" style="margin-top:14px" data-act="bmore">${
+      B.loading ? 'Loading…' : 'Show more'}</button>` : ''}`;
+}
+
+async function loadBrowse(reset) {
+  const B = S.browse;
+  if (B.loading) return;
+  if (reset) { B.items = []; B.offset = 0; B.more = true; }
+  B.loading = true; paintBrowseBody();
+  const params = new URLSearchParams({ limit: '24', offset: String(B.offset) });
+  if (B.shop) params.set('shop', B.shop);
+  if (B.shape) params.set('shape', B.shape);
+  if (B.maxPrice) params.set('maxPrice', String(B.maxPrice));
+  if (B.inStock) params.set('inStock', '1');
+  if (B.sort && B.sort !== 'relevance') params.set('sort', B.sort);
+  const bucket = SIZE_BUCKETS.find((x) => x.k === B.size);
+  if (bucket) {
+    if (bucket.minCm) params.set('minCm', String(bucket.minCm));
+    if (bucket.maxCm) params.set('maxCm', String(bucket.maxCm));
+  }
+  const path = B.q.trim().length >= 2
+    ? `/catalogue/search?q=${encodeURIComponent(B.q.trim())}&${params}`
+    : `/catalogue/browse?${params}`;
+  try {
+    const rows = await api(path);
+    B.items = B.items.concat(rows);
+    B.offset += rows.length;
+    B.more = rows.length >= 24;
+  } catch (e) { toast(e.message); B.more = false; }
+  B.loading = false;
+  B.loaded = true;
+  paintBrowseBody();
+}
+
+/* ========================================================== #/settings */
+route(/^#\/settings$/, async () => {
+  const [state, stats] = await Promise.all([api('/state'), api('/stats')]);
+  const synced = state.catalogue.syncedAt ? dateText(state.catalogue.syncedAt.slice(0, 10)) : null;
+  setTimeout(() => {
+    const r = document.getElementById('restore');
+    if (!r) return;
+    r.onchange = async () => {
+      const f = r.files[0]; if (!f) return;
+      const box = document.getElementById('restorebox');
+      box.innerHTML = `<p style="margin:10px 2px 0;font-size:12px;color:var(--ink-mute)">Restoring…</p>`;
+      try {
+        const res = await api('/restore', { method: 'POST', body: await f.text() });
+        const bits = [`${res.added} added`];
+        if (res.updated) bits.push(`${res.updated} updated (${res.fieldsChanged} fields)`);
+        if (res.skipped) bits.push(`${res.skipped} unchanged`);
+        bits.push(`${res.photos} photos`);
+        if (res.photosFailed) bits.push(`${res.photosFailed} photos could not be read`);
+        bits.push(`${res.covers} covers fetched`);
+        if (res.catalogueEmpty) bits.push('covers need the catalogue synced first');
+        else if (res.coversMissing) bits.push(`${res.coversMissing} without a cover`);
+        box.innerHTML = `<p style="margin:10px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">${h(bits.join(' · '))}</p>`;
+        toast(`${res.added} projects restored`);
+      } catch (e) { box.innerHTML = ''; toast(e.message); }
+    };
+  }, 0);
+  $app.innerHTML = `
+  <div class="screen">
+    <div class="topbar">${topbar('Settings', { back: '#/', sub: true })}</div>
+    <div class="scroll pad stack" style="padding-top:18px;padding-bottom:26px">
+      <div class="tiles">
+        <div class="tile"><div class="big tnum">${num(stats.projects)}</div><div class="cap">projects</div></div>
+        <div class="tile"><div class="big tnum">${num(stats.completed)}</div><div class="cap">completed</div></div>
+        <div class="tile"><div class="big tnum">${num(Math.round(stats.hours))}</div><div class="cap">hours logged</div></div>
+        <div class="tile"><div class="big tnum">${(stats.spendBy && stats.spendBy[0])
+          ? money(stats.spendBy[0].total, stats.spendBy[0].currency) : money(stats.spend)}</div>
+          <div class="cap">spent${(stats.spendBy || []).length > 1
+            ? ' · plus ' + stats.spendBy.slice(1).map(x => money(x.total, x.currency)).join(', ')
+            : ''}</div></div>
+      </div>
+
+      <div>
+        <h3 class="label">Diamonds</h3>
+        <div class="tiles">
+          <div class="tile" style="background:var(--st-completed)">
+            <div class="big tnum">${bigNum(stats.placed)}</div>
+            <div class="cap">placed so far — every finished canvas plus how far you are through the ones on the go</div>
+          </div>
+          <div class="tile" style="background:var(--st-notReceived)">
+            <div class="big tnum">${bigNum(stats.remaining)}</div>
+            <div class="cap">still to place across the rest of the stash</div>
+          </div>
+        </div>
+        <div class="progressline" style="margin-top:10px"><i style="width:${
+          stats.drills ? Math.round(stats.placed / stats.drills * 100) : 0}%"></i></div>
+        <p style="margin:8px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)" class="tnum">
+          ${stats.drills ? Math.round(stats.placed / stats.drills * 100) : 0}% of ${bigNum(stats.drills)} diamonds${
+            stats.estimatedCounts ? ` · ${stats.estimatedCounts} project${stats.estimatedCounts === 1 ? '' : 's'} use a count estimated from canvas size` : ''}</p>
+      </div>
+
+      ${stats.topArtists.length ? `<div>
+        <h3 class="label">Most collected artists</h3>
+        <div class="panel pad-in">${stats.topArtists.map((a) =>
+          `<div class="row"><span class="k" style="color:var(--ink)">${h(a.artist)}</span><span class="v tnum">${a.n}</span></div>`).join('')}</div>
+      </div>` : ''}
+
+      ${(stats.topShops || []).length ? `<div>
+        <h3 class="label">Most bought from</h3>
+        <div class="panel pad-in">${stats.topShops.map((sh) => {
+          const share = stats.projects ? Math.round(sh.n / stats.projects * 100) : 0;
+          const sid = (SHOP_BY_NAME[sh.shop] || {}).id;
+          return `<div class="row">
+            <span class="k" style="color:var(--ink);flex:1 1 auto;min-width:0;display:block">
+              <span style="display:flex;align-items:center;gap:7px">${
+                sid ? `<span class="pip" data-shop="${h(sid)}"></span>` : ''}${h(sh.shop)}</span>
+              <span style="display:block;margin-top:5px;height:4px;border-radius:999px;background:var(--sunken);overflow:hidden">
+                <span style="display:block;height:100%;width:${share}%;background:${
+                  sid ? `var(--shop-${sid})` : 'var(--accent)'}"></span></span>
+            </span>
+            <span class="v tnum" style="white-space:nowrap">${sh.n}
+              <span style="color:var(--ink-mute);font-weight:400">${sh.spend ? ' · ' + money(sh.spend) : ''}</span></span>
+          </div>`;
+        }).join('')}</div>
+      </div>` : ''}
+
+      <div>
+        <h3 class="label">Shop catalogues</h3>
+        <div class="panel pad-in">
+          ${(state.catalogue.shops || []).map((sh) => {
+            const off = (S.prefs.excluded || []).includes(sh.id);
+            return `<div class="row" style="gap:10px">
+              <button data-act="shoptoggle" data-k="${sh.id}" aria-pressed="${!off}"
+                      style="display:flex;align-items:center;gap:9px;flex:1 1 auto;min-width:0;text-align:left">
+                <span class="switch" aria-hidden="true"><i></i></span>
+                <span style="min-width:0">
+                  <span style="display:flex;align-items:center;gap:7px;color:${off ? 'var(--ink-faint)' : 'var(--ink)'};font-size:13px">
+                    <span class="pip" data-shop="${sh.id}"></span>${h(sh.name)}</span>
+                  <span style="display:block;font-size:11px;color:var(--ink-mute)" class="tnum">${
+                    sh.kits ? num(sh.kits) + ' kits' : 'not synced'}${off ? ' · hidden' : ''}</span>
+                </span>
+              </button>
+              <button class="btn ghost" style="height:32px;font-size:12px;padding:0 11px;flex:0 0 auto"
+                      data-act="syncone" data-k="${sh.id}">Sync</button>
+            </div>`;
+          }).join('')}
+          <div class="row">
+            <span class="k" style="font-weight:700;color:var(--ink)">Total</span>
+            <span class="v tnum">${num(state.catalogue.kits)} kits</span>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:10px">
+          <button class="btn ghost" style="height:40px;font-size:13px;padding:0 14px" data-act="sync">${
+            synced ? 'Update all shops' : 'Download catalogues'}</button>
+          <span style="font-size:12px;color:var(--ink-mute)">${synced ? 'Last checked ' + synced : 'About a minute'}</span>
+        </div>
+        <div id="syncbox"></div>
+        <p style="margin:8px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
+          Switch a shop off to keep it out of browse, search and "Update all shops" — its Sync button still
+          works if you want to refresh it anyway.
+          Reads each shop's public product listing so kits can be matched and searched with no connection.
+          Covers are cached the first time a project uses one. Artwork stays the copyright of the artists —
+          this is for your own logbook.</p>
+      </div>
+
+      <div>
+        <h3 class="label">You shop in</h3>
+        <div class="seg">${['GBP', 'USD', 'EUR', 'CAD'].map((c) =>
+          `<button data-act="cur" data-k="${c}" aria-pressed="${S.prefs.currency === c}">${SYMBOL[c]} ${c}</button>`).join('')}</div>
+        <p style="margin:8px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
+          Most of these shops quote the same figure in every market — Diamond Art Club's 62.99 is $62.99
+          in the US and £62.99 here, which their receipts confirm. Mystical Dream Diamonds is different:
+          it prices in Canadian dollars, so its kits are shown as CA$ and converted by your card, not by us.</p>
+      </div>
+
+      <div>
+        <h3 class="label">Appearance</h3>
+        <div class="seg">${THEMES.map(([k, l]) =>
+          `<button data-act="theme" data-k="${k}" aria-pressed="${themeMode() === k}">${l}</button>`).join('')}</div>
+      </div>
+
+      <div>
+        <h3 class="label">Your data</h3>
+        <button class="btn ghost wide" data-act="export">Export logbook as CSV</button>
+        ${isStandalone() ? `
+        <label class="btn ghost wide" style="margin-top:10px">Restore from a backup file
+          <input type="file" accept=".json,application/json" id="restore" hidden></label>
+        <div id="restorebox"></div>` : `
+        <button class="btn ghost wide" style="margin-top:10px" data-act="backup">Download a full backup</button>
+        <div id="backupbox"></div>
+        <p style="margin:8px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
+          Projects and progress photos. Lands in your <strong>Downloads</strong> folder as
+          <code>logbook-backup.json</code>, ready to restore into the standalone app.</p>`}
+        <p style="margin:8px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
+          ${isStandalone()
+            ? 'Everything lives inside this app on your phone. Nothing is sent anywhere.'
+            : 'Everything lives in <code>data/logbook.db</code> on this phone. Copy that file to back it up.'}</p>
+      </div>
+    </div>
+  </div>`;
+});
+
+/* -------------------------------------------------------------- job runner */
+async function runJob(jobId, box, done) {
+  const tick = async () => {
+    const j = await api('/jobs/' + jobId);
+    const pctv = j.total ? Math.round(j.done / j.total * 100) : 0;
+    box.innerHTML = `<div style="margin-top:12px">
+      <div class="progressline"><i style="width:${j.state === 'done' ? 100 : pctv}%"></i></div>
+      <p style="margin:8px 0 0;font-size:12px;color:var(--ink-mute)">${h(j.error || j.message || '')}</p></div>`;
+    if (j.state === 'running') return setTimeout(tick, 500);
+    if (j.state === 'error') return toast(j.error || 'That did not work');
+    done?.(j);
+  };
+  tick();
+}
+
+/* --------------------------------------------------------------- dragging
+   Long-press a card to pick it up, then drop it on another section to change
+   its status. Pointer events rather than HTML5 drag-and-drop, which does not
+   work on touch. Dates follow the new status, same as the edit form. */
+const DRAG = { id: null, from: null, ghost: null, over: null, timer: null, startX: 0, startY: 0, live: false };
+
+function dragCleanup() {
+  clearTimeout(DRAG.timer);
+  DRAG.ghost?.remove();
+  document.querySelectorAll('.group.drop-on').forEach((g) => g.classList.remove('drop-on'));
+  document.querySelector('.card.lifted')?.classList.remove('lifted');
+  Object.assign(DRAG, { id: null, from: null, ghost: null, over: null, timer: null, live: false });
+}
+
+function groupUnder(x, y) {
+  const el = document.elementFromPoint(x, y);
+  return el ? el.closest('.group') : null;
+}
+
+document.addEventListener('pointerdown', (e) => {
+  const card = e.target.closest('.card[data-id]');
+  if (!card || e.button === 2) return;
+  DRAG.startX = e.clientX; DRAG.startY = e.clientY;
+  DRAG.timer = setTimeout(() => {
+    DRAG.id = card.dataset.id;
+    DRAG.from = card.dataset.status;
+    DRAG.live = true;
+    card.classList.add('lifted');
+    const r = card.getBoundingClientRect();
+    const ghost = card.cloneNode(true);
+    ghost.className = 'card drag-ghost';
+    ghost.style.width = r.width + 'px';
+    ghost.style.left = r.left + 'px';
+    ghost.style.top = r.top + 'px';
+    document.body.appendChild(ghost);
+    DRAG.ghost = ghost;
+    if (navigator.vibrate) navigator.vibrate(12);
+  }, 320);
+}, { passive: true });
+
+document.addEventListener('pointermove', (e) => {
+  if (!DRAG.live) {
+    // moved before the long press completed — treat it as a scroll, not a drag
+    if (DRAG.timer && (Math.abs(e.clientX - DRAG.startX) > 8 || Math.abs(e.clientY - DRAG.startY) > 8)) {
+      clearTimeout(DRAG.timer); DRAG.timer = null;
+    }
+    return;
+  }
+  e.preventDefault();
+  DRAG.ghost.style.transform = `translate(${e.clientX - DRAG.startX}px, ${e.clientY - DRAG.startY}px)`;
+  const g = groupUnder(e.clientX, e.clientY);
+  if (g !== DRAG.over) {
+    DRAG.over?.classList.remove('drop-on');
+    DRAG.over = g && g.dataset.status !== DRAG.from ? g : null;
+    DRAG.over?.classList.add('drop-on');
+  }
+}, { passive: false });
+
+document.addEventListener('pointerup', async () => {
+  if (!DRAG.live) { clearTimeout(DRAG.timer); DRAG.timer = null; return; }
+  const target = DRAG.over, id = DRAG.id;
+  dragCleanup();
+  if (!target || !id) return;
+  const status = target.dataset.status;
+  const project = S.projects.find((p) => String(p.id) === String(id));
+  if (!project || project.status === status) return;
+  try {
+    const patch = applyStatus(project, status, today());
+    const saved = await api('/projects/' + id, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch)
+    });
+    Object.assign(project, saved);
+    S.meta = await api('/state');
+    paintLogbook();
+    const moved = Object.keys(patch).filter((k) => k !== 'status' && patch[k]).length;
+    toast(`${project.title} → ${STATUS[status].short}${moved ? ' · dates filled in' : ''}`);
+  } catch (e) { toast(e.message); render(); }
+});
+
+document.addEventListener('pointercancel', dragCleanup);
+
+/* ------------------------------------------------------------- delegation */
+document.addEventListener('click', (e) => { handleClick(e).catch((err) => {
+  console.error(err);
+  toast(err && err.message ? err.message : 'Something went wrong');
+  document.querySelectorAll('.btn[disabled]').forEach((b) => { b.disabled = false; });
+}); });
+
+async function handleClick(e) {
+  const backEl = e.target.closest('[data-back]');
+  if (backEl) { back(backEl.dataset.back); return; }
+  const goEl = e.target.closest('[data-go]');
+  if (goEl) { go(goEl.dataset.go); return; }
+  const el = e.target.closest('[data-act]');
+  if (!el) return;
+  const act = el.dataset.act;
+
+  if (act === 'filter') { S.filter = el.dataset.k; paintLogbook(); }
+  else if (act === 'view') { S.view = el.dataset.k; localStorage.setItem('view', S.view); paintLogbook(); }
+  else if (act === 'clearq') {
+    S.q = '';
+    const f = document.getElementById('q');
+    if (f) { f.value = ''; f.focus(); }
+    paintLogbookBody(); syncClear();
+  }
+  else if (act === 'backup') {
+    const box = document.getElementById('backupbox');
+    const say = (t) => { if (box) box.innerHTML = `<p style="margin:10px 2px 0;font-size:12px;color:var(--ink-mute)">${h(t)}</p>`; };
+    el.disabled = true;
+    try {
+      say('Collecting projects…');
+      const projects = await api('/projects');
+      const photos = [];
+      let n = 0;
+      for (const p of projects) {
+        const full = await api('/projects/' + p.id);
+        for (const ph of (full.photos || [])) {
+          say(`Shrinking photo ${++n}…`);
+          const res = await fetch('/photos/' + encodeURIComponent(ph.file));
+          if (!res.ok) continue;
+          const small = await downscale(new File([await res.blob()], ph.file, { type: 'image/jpeg' }));
+          const buf = new Uint8Array(await small.arrayBuffer());
+          let bin = '';
+          for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+          photos.push({ ...ph, project_id: p.id, data: btoa(bin) });
+        }
+      }
+      const json = JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), projects, photos });
+      const blob = new Blob([json], { type: 'application/json' });
+      say('Writing the file…');
+      const where = await saveToPhone('logbook-backup.json', blob);
+      say(`Saved to ${where} — ${projects.length} projects, ${photos.length} photos, ${(blob.size / 1048576).toFixed(1)} MB`);
+      toast('Backup saved');
+    } catch (e) { say(e.message); }
+    el.disabled = false;
+  }
+  else if (act === 'export') {
+    el.disabled = true;
+    try {
+      const r = await api('/export');
+      // the server route answers with raw CSV, the local one with { __csv }
+      const csv = (r && r.__csv) != null ? r.__csv : (typeof r === 'string' ? r : null);
+      if (csv == null) throw new Error('Nothing to export');
+      const where = await saveToPhone('logbook-export.csv', new Blob([csv], { type: 'text/csv' }));
+      toast('Saved to ' + where);
+    } catch (e) { toast(e.message); }
+    el.disabled = false;
+  }
+  else if (act === 'shoptoggle') {
+    const id = el.dataset.k;
+    const list = new Set(S.prefs.excluded || []);
+    list.has(id) ? list.delete(id) : list.add(id);
+    S.prefs.excluded = [...list];
+    await api('/prefs', { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ excluded: S.prefs.excluded }) });
+    S.browse.loaded = false;                 // its results may no longer apply
+    render();
+  }
+  else if (act === 'syncone') {
+    const box = document.getElementById('syncbox');
+    el.disabled = true;
+    try {
+      const { job } = await api('/catalogue/sync?shop=' + encodeURIComponent(el.dataset.k), { method: 'POST' });
+      runJob(job, box, () => { toast('Updated'); S.browse.loaded = false; render(); });
+    } catch (err) { el.disabled = false; toast(err.message); }
+  }
+  else if (act === 'cur') {
+    S.prefs.currency = el.dataset.k;
+    await api('/prefs', { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ currency: el.dataset.k }) });
+    render();
+  }
+  else if (act === 'theme') {
+    localStorage.setItem('theme', el.dataset.k);
+    applyTheme(el.dataset.k);
+    render();
+  }
+  else if (act === 'choose') {
+    S.chooserFor = S.importPreview.kits.find(k => k.key === el.dataset.k);
+    paintChooser();
+  }
+  else if (act === 'closechoose') { S.chooserFor = null; paintChooser(); }
+  else if (act === 'pickalt') {
+    const kit = S.importPreview.kits.find(k => k.key === el.dataset.k);
+    const fromSearch = el.dataset.src === 'search';
+    const alt = fromSearch ? S.chooserHits[Number(el.dataset.i)] : kit.alternatives[Number(el.dataset.i)];
+    if (fromSearch) {
+      kit.alternatives = [...(kit.alternatives || []).map(a => ({ ...a, chosen: false })), alt];
+      Object.assign(kit, {
+        shape: alt.shape ?? kit.shape, coverage: alt.coverage ?? kit.coverage,
+        width_in: alt.width_in ?? kit.width_in, height_in: alt.height_in ?? kit.height_in,
+        special: alt.special ?? kit.special, shop: alt.shop ?? kit.shop
+      });
+    }
+    kit.alternatives.forEach(a => { a.chosen = a === alt; });
+    Object.assign(kit, {
+      handle: alt.handle, title: alt.title || kit.title, artist: alt.artist, cover: alt.cover,
+      drills: alt.drills ?? null, colors: alt.colors ?? null,
+      listPrice: alt.price, uncertain: false
+    });
+    if (kit.priceSource === 'catalogue' && alt.price != null) kit.price = alt.price;
+    S.importSel.add(kit.key);
+    S.chooserFor = null;
+    paintChooser();
+    paintImportReview();
+    toast('Set to ' + (alt.artist || alt.title || 'that one'));
+  }
+  else if (act === 'bshop') { S.browse.shop = el.dataset.k || null; S.browse.scroll = 0; paintBrowse(); loadBrowse(true); }
+  else if (act === 'bfilters') { S.browse.open = !S.browse.open; paintBrowse(); paintBrowseBody(); bindPrice(); }
+  else if (act === 'bclear') {
+    Object.assign(S.browse, { shape: null, size: null, maxPrice: null, inStock: false, sort: 'relevance', scroll: 0 });
+    paintBrowse(); loadBrowse(true); bindPrice();
+  }
+  else if (act === 'bshape' || act === 'bsize' || act === 'bsort' || act === 'bstock') {
+    const B = S.browse;
+    if (act === 'bshape') B.shape = B.shape === el.dataset.k ? null : el.dataset.k;
+    if (act === 'bsize')  B.size  = B.size  === el.dataset.k ? null : el.dataset.k;
+    if (act === 'bsort')  B.sort  = el.dataset.k;
+    if (act === 'bstock') B.inStock = !B.inStock;
+    B.scroll = 0;
+    paintBrowse(); loadBrowse(true); bindPrice();
+  }
+  else if (act === 'bmore') { await loadBrowse(false); }
+  else if (act === 'pickcat') {
+    const body = document.getElementById('browsebody');
+    if (body) S.browse.scroll = body.scrollTop;
+    S.fromCatalogue = S.browse.items[Number(el.dataset.i)];
+    go('#/new');
+  }
+  else if (act === 'itab') { S.importTab = el.dataset.k; paintImportReview(); }
+  else if (act === 'pick') {
+    const k = el.dataset.k;
+    S.importSel.has(k) ? S.importSel.delete(k) : S.importSel.add(k);
+    paintImportReview();
+  }
+  else if (act === 'toggleall') {
+    const news = S.importPreview.kits.filter((k) => !k.duplicate);
+    S.importSel = S.importSel.size === news.length ? new Set() : new Set(news.map((k) => k.key));
+    paintImportReview();
+  }
+  else if (act === 'sync') {
+    el.disabled = true;
+    const box = document.getElementById('syncbox');
+    try {
+      const { job } = await api('/catalogue/sync', { method: 'POST' });
+      runJob(job, box, () => { toast('Catalogue ready'); render(); });
+    } catch (err) { el.disabled = false; toast(err.message); }
+  }
+  else if (act === 'commit') {
+    const kits = S.importPreview.kits.filter((k) => S.importSel.has(k.key));
+    el.disabled = true;
+    const box = document.createElement('div');
+    el.parentElement.appendChild(box);
+    const { job } = await api('/import/commit', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kits })
+    });
+    runJob(job, box, (j) => {
+      S.importPreview = null; S.importSel = new Set();
+      toast(`${j.result.inserted} project${j.result.inserted === 1 ? '' : 's'} added`);
+      depth = 0;
+      swap('#/');
+    });
+  }
+  else if (act === 'save') {
+    const id = el.dataset.id;
+    const val = (k) => { const n = document.getElementById(k); return n ? n.value.trim() : undefined; };
+    const numOf = (k) => { const v = val(k); if (v === '' || v == null) return null;
+                           const n = parseFloat(v.replace(/[^0-9.\-]/g, '')); return Number.isFinite(n) ? n : null; };
+    const seg = (g) => document.querySelector(`#${g} .opt[aria-pressed="true"]`)?.dataset.k ?? null;
+    if (!val('title')) return toast('A project name is required');
+    const titleEl = document.getElementById('title');
+    const body = {
+      title: val('title'), artist: val('artist') || null, status: seg('status'),
+      shape: seg('shape'), coverage: seg('coverage'), currency: seg('currency'),
+      width_in: numOf('width_in'), height_in: numOf('height_in'),
+      colors: numOf('colors'), drills: numOf('drills'), special: val('special') || null,
+      brand: val('brand') || null, source: val('source') || null,
+      price: numOf('price'), shipping: numOf('shipping'), tax: numOf('tax'),
+      sold_price: numOf('sold_price'), hours: numOf('hours'),
+      date_ordered: val('date_ordered') || null, date_received: val('date_received') || null,
+      date_started: val('date_started') || null, date_completed: val('date_completed') || null
+    };
+    if (titleEl.dataset.handle) body.dac_handle = titleEl.dataset.handle;
+    if (titleEl.dataset.shop) body.shop = titleEl.dataset.shop;
+    // a price you typed yourself is yours, not an estimate
+    const priceEl = document.getElementById('price');
+    const origRaw = priceEl ? priceEl.dataset.orig : '';
+    const origPrice = origRaw === '' || origRaw == null ? null : parseFloat(origRaw);
+    if (body.price !== origPrice) body.price_source = body.price == null ? null : 'you';
+    el.disabled = true;
+    try {
+      const saved = id
+        ? await api('/projects/' + id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+        : await api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      toast('Saved');
+      // editing returns to the project you were looking at; a brand new one
+      // takes the form's place so Back does not reopen the empty form
+      if (id) back('#/p/' + saved.id);
+      else swap('#/p/' + saved.id);
+    } catch (err) { el.disabled = false; toast(err.message); }
+  }
+  else if (act === 'delete') {
+    if (!confirm('Delete this project and its photos? This cannot be undone.')) return;
+    await api('/projects/' + el.dataset.id, { method: 'DELETE' });
+    toast('Project deleted');
+    depth = 0;
+    swap('#/');
+  }
+  else if (act === 'delphoto') {
+    if (!confirm('Remove this photo?')) return;
+    await api('/photos/' + el.dataset.id, { method: 'DELETE' });
+    render();
+  }
+}
+
+window.addEventListener('hashchange', (e) => {
+  // the phone's own Back button pops an entry without going through back()
+  if (e && e.oldURL && e.newURL && e.oldURL.length > e.newURL.length && depth > 0) depth--;
+  return render();          // returned so callers can await a finished render
+});
+api('/prefs').then((p) => { if (p) Object.assign(S.prefs, p); })
+  .catch(() => {})
+  .finally(render);
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});

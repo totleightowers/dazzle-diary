@@ -1,0 +1,13 @@
+{
+  "name": "diamond-painting-logbook",
+  "version": "2.20.0",
+  "private": true,
+  "type": "module",
+  "description": "An offline-first diamond painting logbook that runs entirely on an Android phone",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "check": "for f in $(git ls-files '*.js' '*.mjs'); do node --check \"$f\" || exit 1; done && echo 'all javascript parses'"
+  },
+  "engines": { "node": ">=20" }
+}

@@ -1,0 +1,17 @@
+# Signing keys — never publish these. Losing control of one lets anyone ship an
+# "update" that Android will happily install over yours.
+*.jks
+*.keystore
+
+# Your logbook: projects, progress photos, cached covers
+data/
+
+# Android SDK stub, build output, bundled copy of ../app
+android/sdk/
+android/build/
+android/assets/
+*.apk
+
+node_modules/
+*.log
+NOTES.md
