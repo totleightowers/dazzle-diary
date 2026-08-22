@@ -1,9 +1,8 @@
 #!/bin/bash
 # Build the standalone Logbook APK.
 #
-# Needs: aapt2, d8, apksigner, javac (OpenJDK 17+), zip, node, and an
-# android.jar (API 34) at sdk/android.jar. On Termux:
-#   pkg install openjdk-17 aapt2 d8 apksigner nodejs-lts zip
+# Needs: aapt2, d8, apksigner, javac (JDK 17+), zip, node 20+, and an
+# android.jar (API 34) at sdk/android.jar. See the README for setup.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -39,8 +38,8 @@ d8 --min-api 24 --lib "$SDK_JAR" --output build $(find build/classes -name '*.cl
 echo "6/7  package and align"
 cp build/base.apk build/unsigned.apk
 (cd build && zip -q -X unsigned.apk classes.dex)
-# Termux ships no zipalign, and Android refuses to install an APK whose
-# resources.arsc is not 4-byte aligned, so we do it ourselves.
+# Android refuses to install an APK whose resources.arsc is not 4-byte
+# aligned. Done here so the build needs no zipalign binary on PATH.
 node zipalign.mjs build/unsigned.apk build/aligned.apk
 
 echo "7/7  sign"

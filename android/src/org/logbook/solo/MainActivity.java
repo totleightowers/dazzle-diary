@@ -32,7 +32,7 @@ import java.util.LinkedHashSet;
 import java.util.Map;
 
 /**
- * The whole app. No server, no Termux.
+ * The whole app. No server, no network stack of its own.
  *
  * The page is served from the APK's own assets over a virtual https origin, so
  * it gets a secure context (IndexedDB, service workers) and ordinary relative

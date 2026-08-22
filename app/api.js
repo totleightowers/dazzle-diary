@@ -1,9 +1,9 @@
 /**
  * Where the app's data comes from.
  *
- * Two builds share one client: the Termux build talks to the Node server over
- * HTTP; the standalone build runs the same logic in the page against
- * IndexedDB. Everything above this file is identical in both.
+ * One client, two backends. In the app it runs the same logic in the page
+ * against IndexedDB; against a host that serves the API over HTTP it talks to
+ * that instead. Everything above this file is identical either way.
  */
 const LOCAL = typeof window !== 'undefined' && !!window.LOGBOOK_STANDALONE;
 
