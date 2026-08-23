@@ -350,9 +350,8 @@ function paintLogbook() {
     </div>
 
     <div class="scroll pad" style="padding-bottom:24px">
-      ${needsCatalogue && !empty ? `<div class="notice" style="margin-top:16px">${svg('info', 18)}
-        <span>Sync the Diamond Art Club catalogue in Settings to fetch covers and details.</span></div>` : ''}
-      ${empty ? emptyLogbook(needsCatalogue) : groups.map((g) => `
+      ${needsCatalogue ? firstRunSync() : ''}
+      ${empty ? emptyLogbook() : groups.map((g) => `
         <section class="group" data-status="${g.k}">
           <header><span class="dot" style="background:${stDot(g.k)}"></span>
             <h2>${h(STATUS[g.k].label)}</h2><span class="n tnum">${g.items.length}</span></header>
@@ -411,13 +410,34 @@ function paintLogbookBody() {
   $app.querySelector('.label').textContent = `${shown} project${shown === 1 ? '' : 's'}`;
 }
 
-const emptyLogbook = (needsCatalogue) => `
+/* Nothing works properly until the catalogues are on the phone: no covers, no
+   sizes, no drill counts, and importing an order history has nothing to match
+   against. On a fresh install that is the one thing to do first, so it says so
+   on the front page rather than waiting to be found in Settings. */
+const firstRunSync = () => `
+  <div class="panel pad-in" style="margin-top:16px">
+    <div style="display:flex;gap:11px;align-items:flex-start">
+      ${svg('sync', 20)}
+      <div style="min-width:0">
+        <h2 style="margin:0;font-family:var(--serif);font-size:17px;font-weight:600">Start by downloading the catalogues</h2>
+        <p style="margin:6px 0 0;font-size:13px;line-height:1.5;color:var(--ink-mid)">
+          A one-off download of about a minute. After it, your kits arrive with their cover,
+          artist, canvas size and drill count filled in, and browsing works with no connection.</p>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn primary" style="flex:1 1 auto" data-act="sync">Download catalogues</button>
+      <button class="btn ghost" style="flex:0 0 auto" data-go="#/settings">Choose shops</button>
+    </div>
+    <div id="syncbox"></div>
+  </div>`;
+
+const emptyLogbook = () => `
   <div class="empty">${svg('gem', 44, 1.2)}
     <h2>Your logbook is empty</h2>
-    <p>Import your Diamond Art Club order history and every kit you have bought becomes a project — cover, size, colours and drill count included.</p>
+    <p>Import an order history and every kit you have bought becomes a project — cover, size, colours and drill count included. Or add them one at a time from the catalogues.</p>
     <button class="btn primary wide" style="margin-top:8px" data-go="#/import">${svg('imp', 18)} Import order history</button>
     <button class="btn ghost wide" data-go="#/new">Add one by hand instead</button>
-    ${needsCatalogue ? `<p style="margin-top:6px">You will be asked to sync the catalogue first — that is a one-off 30 second download.</p>` : ''}
   </div>`;
 
 /* =============================================================== #/p/:id */
