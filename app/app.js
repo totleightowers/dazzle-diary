@@ -117,11 +117,14 @@ const svg = (name, size = 20, sw = 1.7) => {
    opens it over the page. Escape, the phone's Back button and a tap anywhere
    all close it — Back because that is what closing a full-screen thing means
    on Android, and it must not also pop the route underneath. */
-function lightbox(src) {
+function lightbox(src, action = null) {
   const el = document.createElement('div');
   el.className = 'lightbox';
   el.innerHTML = `<img src="${src}" alt="">` +
-    `<button class="x" aria-label="Close">${svg('close', 18, 2.4)}</button>`;
+    `<button class="x" aria-label="Close">${svg('close', 18, 2.4)}</button>` +
+    (action ? `<div class="lightbox-bar"><button class="btn primary" data-act="${action.act}"${
+      Object.entries(action.data || {}).map(([k, v]) => ` data-${k}="${h(v)}"`).join('')
+    }>${h(action.label)}</button></div>` : '');
 
   let open = true;
   const close = () => {
@@ -135,7 +138,8 @@ function lightbox(src) {
   const onKey = (e) => { if (e.key === 'Escape') close(); };
   const onPop = () => { open = false; el.remove(); document.removeEventListener('keydown', onKey); };
 
-  el.addEventListener('click', close);
+  el.addEventListener('click', (e) => { if (!e.target.closest('[data-act]')) close(); });
+  el._close = close;
   document.addEventListener('keydown', onKey);
   window.addEventListener('popstate', onPop);
   history.pushState({ lightbox: true }, '');
@@ -531,7 +535,7 @@ route(/^#\/p\/(\d+)$/, async (id) => {
               <div class="shot">
                 <img src="/photos/${encodeURIComponent(ph.file)}" alt="" loading="lazy">
                 <button class="open" data-act="viewphoto" data-file="${encodeURIComponent(ph.file)}"
-                        aria-label="View this photo full size"></button>
+                        data-pid="${p.id}" aria-label="View this photo full size"></button>
                 <button class="x" data-act="delphoto" data-id="${ph.id}" aria-label="Remove photo">${svg('close', 12, 2.6)}</button>
               </div>`).join('')}
             <label class="btn dashed add">
@@ -539,6 +543,9 @@ route(/^#\/p\/(\d+)$/, async (id) => {
               <input type="file" accept="image/*" multiple id="photo" hidden>
             </label>
           </div>
+          ${/^own-/.test(p.cover || '') ? `
+          <button class="btn ghost wide" style="margin-top:10px" data-act="resetcover" data-id="${p.id}">
+            Use the shop\u2019s image as the cover</button>` : ''}
         </div>
 
         <div>
@@ -651,6 +658,23 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
         <input class="fld" id="title" name="title" value="${h(p.title || '')}" placeholder="Start typing to search the catalogue" autocomplete="off"
                data-handle="${h(p.dac_handle || '')}" data-shop="${h(p.shop || '')}">
         <div id="sugg" class="stack" style="gap:6px;margin-top:6px"></div></div>
+
+      <div><span class="label">Catalogue listing</span>
+        <div class="panel pad-in">
+          <div class="row"><span class="k" id="linkstate"></span>
+            <span style="display:flex;gap:8px;flex:0 0 auto">
+              <button type="button" class="btn ghost" style="height:32px;font-size:12px;padding:0 11px"
+                      id="linkbtn">Relink</button>
+              <button type="button" class="btn ghost" style="height:32px;font-size:12px;padding:0 11px"
+                      id="unlinkbtn">Unlink</button>
+            </span></div>
+          <div id="linkbox" hidden style="margin-top:10px">
+            <input class="fld" id="linkq" placeholder="Search the catalogue" autocomplete="off">
+            <div id="linkres" class="stack" style="gap:6px;margin-top:6px"></div>
+          </div>
+        </div>
+        <p style="margin:6px 2px 0;font-size:12px;color:var(--ink-mute)">What the cover, the gallery and the
+          product link are taken from. Relinking does not overwrite anything you have typed.</p></div>
 
       ${f('artist', 'Artist', p.artist)}
 
@@ -794,6 +818,62 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
   ['width_in', 'height_in'].forEach((k) => (document.getElementById(k).oninput = cmHint));
   cmHint();
 
+  /* The listing a project points at, changed on its own. The title box below
+     fills the whole form from a catalogue row; this only moves the pointer, so
+     corrections you have made by hand survive being relinked. */
+  const linkState = document.getElementById('linkstate');
+  const linkBox = document.getElementById('linkbox');
+  const linkRes = document.getElementById('linkres');
+  const linkQ = document.getElementById('linkq');
+  const paintLink = () => {
+    const t = document.getElementById('title');
+    const handle = t.dataset.handle, shopId = t.dataset.shop;
+    const shopName = (shopById(shopId) || {}).name;
+    linkState.textContent = handle
+      ? (shopName ? `${shopName} · ${handle}` : handle)
+      : 'Not linked to a listing';
+    document.getElementById('unlinkbtn').hidden = !handle;
+  };
+  document.getElementById('linkbtn').onclick = () => {
+    linkBox.hidden = !linkBox.hidden;
+    if (!linkBox.hidden) linkQ.focus();
+  };
+  document.getElementById('unlinkbtn').onclick = () => {
+    const t = document.getElementById('title');
+    t.dataset.handle = ''; t.dataset.shop = '';
+    linkRes.innerHTML = ''; linkBox.hidden = true;
+    paintLink();
+    toast('Unlinked — its cover stays until you change it');
+  };
+  let lt;
+  linkQ.oninput = () => {
+    clearTimeout(lt);
+    lt = setTimeout(async () => {
+      const q = linkQ.value.trim();
+      if (q.length < 2) { linkRes.innerHTML = ''; return; }
+      const hits = await api('/catalogue/search?q=' + encodeURIComponent(q)).catch(() => []);
+      linkRes.innerHTML = hits.slice(0, 6).map((c) => `
+        <button type="button" class="checkrow" data-h="${h(c.handle)}" data-s="${h(c.shop || '')}" style="min-height:48px">
+          <span style="flex:1 1 auto;min-width:0">
+            <span style="display:block;font-size:13px;font-weight:600">${h(c.title)}</span>
+            <span style="display:block;font-size:11px;color:var(--ink-mute)">${
+              h((shopById(c.shop) || {}).name || '')}${c.artist ? ' · ' + h(c.artist) : ''}</span>
+          </span></button>`).join('');
+    }, 220);
+  };
+  linkRes.onclick = (e) => {
+    const b = e.target.closest('[data-h]'); if (!b) return;
+    const t = document.getElementById('title');
+    t.dataset.handle = b.dataset.h;
+    t.dataset.shop = b.dataset.s;
+    const sel = document.getElementById('shop');
+    if (sel && b.dataset.s) sel.value = b.dataset.s;
+    linkRes.innerHTML = ''; linkQ.value = ''; linkBox.hidden = true;
+    paintLink();
+    toast('Relinked — save to fetch its pictures');
+  };
+  paintLink();
+
   // catalogue autocomplete: fills everything DAC knows
   const titleEl = document.getElementById('title'), sugg = document.getElementById('sugg');
   let st;
@@ -821,14 +901,17 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
     const set = (id, v) => { const el = document.getElementById(id); if (el && v != null) el.value = v; };
     set('artist', c.artist); set('colors', c.colors); set('drills', c.drills);
     set('special', c.special); set('width_in', c.width_in); set('height_in', c.height_in);
-    set('brand', 'Diamond Art Club'); set('source', 'Diamond Art Club');
+    const shopName = (shopById(c.shop) || {}).name || null;
+    set('brand', shopName); set('source', shopName);
+    const shopSel = document.getElementById('shop');
+    if (shopSel) shopSel.value = c.shop || '';
     for (const [g, val] of [['shape', c.shape], ['coverage', c.coverage]]) {
       document.querySelectorAll(`#${g} .opt`).forEach((o) => o.setAttribute('aria-pressed', o.dataset.k === val));
     }
     document.getElementById('title').dataset.handle = c.handle;
     document.getElementById('title').dataset.shop = c.shop || '';
     set('price', c.price);
-    sugg.innerHTML = ''; cmHint(); recalc();
+    sugg.innerHTML = ''; cmHint(); recalc(); paintLink();
     toast('Filled from the catalogue');
   };
 });
@@ -1732,7 +1815,8 @@ async function handleClick(e) {
       // a percentage outside 0-100 is a typo, not an instruction
       progress: (() => { const n = numOf('progress'); return n == null ? null : Math.min(100, Math.max(0, Math.round(n))); })()
     };
-    if (titleEl.dataset.handle) body.dac_handle = titleEl.dataset.handle;
+    // sent even when empty: unlinking is a change like any other
+    body.dac_handle = titleEl.dataset.handle || null;
     // a diamond count you typed yourself stops being an estimate
     const drillsEl = document.getElementById('drills');
     const drillsWas = drillsEl && drillsEl.dataset.orig !== '' && drillsEl.dataset.orig != null
@@ -1763,7 +1847,22 @@ async function handleClick(e) {
     swap('#/');
   }
   else if (act === 'viewphoto') {
-    lightbox('/photos/' + el.dataset.file);
+    lightbox('/photos/' + el.dataset.file,
+      { act: 'setcover', label: 'Use as cover', data: { id: el.dataset.pid, file: el.dataset.file } });
+  }
+  else if (act === 'setcover') {
+    const box = document.querySelector('.lightbox');
+    await api(`/projects/${el.dataset.id}/cover`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ photo: el.dataset.file }) });
+    if (box && box._close) box._close();
+    toast('Cover updated');
+    render();
+  }
+  else if (act === 'resetcover') {
+    await api(`/projects/${el.dataset.id}/cover`, { method: 'DELETE' });
+    toast('Back to the shop\u2019s image');
+    render();
   }
   else if (act === 'delphoto') {
     if (!confirm('Remove this photo?')) return;

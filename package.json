@@ -1,6 +1,6 @@
 {
   "name": "diamond-painting-logbook",
-  "version": "2.22.0",
+  "version": "2.23.0",
   "private": true,
   "type": "module",
   "description": "An offline-first diamond painting logbook that runs entirely on an Android phone",
