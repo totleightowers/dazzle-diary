@@ -1,6 +1,6 @@
 {
   "name": "dazzle-diary",
-  "version": "2.34.0",
+  "version": "2.35.0",
   "private": true,
   "type": "module",
   "description": "Dazzle Diary — an offline-first diamond painting logbook that runs entirely on an Android phone",

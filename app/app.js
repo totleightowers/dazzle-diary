@@ -795,7 +795,7 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
           colors: c.colors, drills: c.drills, special: c.special,
           brand: shopName, source: shopName, price: c.price,
           currency: displayCurrency(c.shop, c.currency, S.prefs.currency),
-          dac_handle: c.handle, shop: c.shop };
+          dac_handle: c.handle, shop: c.shop, _preview: c.image || null };
     S.fromCatalogue = null;
   }
   const isNew = !id;
@@ -803,12 +803,21 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
     `<div class="${cls}"><label class="label" for="${name}">${h(label)}</label>
      <input class="fld" id="${name}" name="${name}" value="${h(value ?? '')}" ${extra}></div>`;
 
+  /* Picking a kit out of the catalogue used to land on a form with no picture
+     on it, so there was nothing to confirm you had picked the right one. The
+     catalogue's own image is used before the project exists; afterwards it is
+     the cover that was cached for it. */
+  const preview = p._preview
+    ? sized(p._preview, 600)
+    : (p.cover ? '/covers/' + encodeURIComponent(p.cover) : null);
+
   $app.innerHTML = `
   <div class="screen">
     <div class="topbar">
       ${topbar(isNew ? 'New project' : 'Edit project', { back: isNew ? '#/' : '#/p/' + id, sub: true })}
     </div>
     <div class="scroll pad stack" style="padding-top:18px;padding-bottom:26px">
+      ${preview ? `<div class="formshot"><img src="${h(preview)}" alt="" referrerpolicy="no-referrer"></div>` : ''}
       <div><label class="label" for="title">Project name</label>
         <input class="fld" id="title" name="title" value="${h(p.title || '')}" placeholder="Start typing to search the catalogue" autocomplete="off"
                data-handle="${h(p.dac_handle || '')}" data-shop="${h(p.shop || '')}"
