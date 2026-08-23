@@ -1,5 +1,6 @@
 import { api, isStandalone } from './api.js';
-import { statusFromDates, applyStatus } from './core/status.js';
+import { statusFromDates, applyStatus, parseHolds, openHold, heldDays,
+         ALL_STATUSES } from './core/status.js';
 import { productUrl, shopById, displayCurrency, SHOPS } from './core/shops.js';
 const SHOP_BY_NAME = Object.fromEntries(SHOPS.map((s) => [s.name, s]));
 /* Dazzle Diary — the whole client. Vanilla; no build step. */
@@ -74,12 +75,16 @@ const PRICE_SOURCE = {
 };
 
 const STATUS = {
+  wishlist:    { label: 'Wish list', short: 'Wish list' },
   notReceived: { label: 'Not received', short: 'Not received' },
   received:    { label: 'Received, not started', short: 'Received' },
   started:     { label: 'Started', short: 'Started' },
-  completed:   { label: 'Completed', short: 'Completed' }
+  onHold:      { label: 'On hold', short: 'On hold' },
+  completed:   { label: 'Completed', short: 'Completed' },
+  abandoned:   { label: 'Abandoned', short: 'Abandoned' }
 };
-const ORDER = ['started', 'received', 'notReceived', 'completed'];
+// what you are working on first, what you are not going to finish last
+const ORDER = ['started', 'onHold', 'received', 'notReceived', 'wishlist', 'completed', 'abandoned'];
 const stVar = (s) => `var(--st-${s})`, stDot = (s) => `var(--st-${s}-dot)`;
 
 const ICON = {
@@ -301,6 +306,17 @@ route(/^#\/$/, async () => {
   S.projects = projects; S.meta = meta;
   paintLogbook();
 });
+
+/** "9 days", "3 weeks", "2 months" — a hold is read at a glance, not audited. */
+function daysText(from, to, precomputed) {
+  const n = precomputed != null ? precomputed
+    : Math.max(0, Math.round((Date.parse(to + 'T00:00:00Z') - Date.parse(from + 'T00:00:00Z')) / 86400000));
+  if (!Number.isFinite(n)) return '—';
+  if (n < 1) return 'same day';
+  if (n < 14) return `${n} day${n === 1 ? '' : 's'}`;
+  if (n < 60) return `${Math.round(n / 7)} weeks`;
+  return `${Math.round(n / 30.4)} months`;
+}
 
 async function seenHint(k) {
   S.prefs.hints = { ...(S.prefs.hints || {}), [k]: true };
@@ -542,6 +558,26 @@ route(/^#\/p\/(\d+)$/, async (id) => {
              <span class="v tnum" style="${v ? '' : 'color:var(--ink-faint);font-weight:400'}">${h(dateText(v) || 'Not logged')}</span></div>`).join('')}</div>
         </div>
 
+        ${(() => {
+          const holds = parseHolds(p);
+          if (!holds.length) return '';
+          const open = openHold(p);
+          const total = heldDays(p, today());
+          return `<div>
+          <h3 class="label">Put down${holds.length > 1 ? ` · ${holds.length} times` : ''}</h3>
+          <div class="panel pad-in">
+            ${holds.map((hold, i) => `
+              <div class="row"><span class="k">${holds.length > 1 ? `Hold ${i + 1}` : 'Held'}</span>
+                <span class="v tnum">${h(dateText(hold.held) || '—')}${
+                  hold.restarted ? ` → ${h(dateText(hold.restarted))}` : ''}
+                  <span style="color:var(--ink-mute);font-weight:400">· ${
+                    daysText(hold.held, hold.restarted || today())}</span></span></div>`).join('')}
+            ${holds.length > 1 || open ? `<div class="row"><span class="k" style="font-weight:700;color:var(--ink)">
+              ${open ? 'On hold so far' : 'Put down for'}</span>
+              <span class="v tnum">${daysText(null, null, total)}</span></div>` : ''}
+          </div></div>`;
+        })()}
+
         ${p.order_ref ? `<div>
           <h3 class="label">Order</h3>
           <div class="panel pad-in">
@@ -669,7 +705,7 @@ route(/^#\/p\/(\d+)$/, async (id) => {
 });
 
 /* ================================================= #/new and #/p/:id/edit */
-const FORM_STATUS = ORDER;
+const FORM_STATUS = ALL_STATUSES;
 route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
   let p = id ? await api('/projects/' + id) : {
     status: 'notReceived', currency: 'GBP', coverage: 'Full drill', shape: 'Square', brand: '', hours: 0
@@ -698,7 +734,8 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
     <div class="scroll pad stack" style="padding-top:18px;padding-bottom:26px">
       <div><label class="label" for="title">Project name</label>
         <input class="fld" id="title" name="title" value="${h(p.title || '')}" placeholder="Start typing to search the catalogue" autocomplete="off"
-               data-handle="${h(p.dac_handle || '')}" data-shop="${h(p.shop || '')}">
+               data-handle="${h(p.dac_handle || '')}" data-shop="${h(p.shop || '')}"
+               data-holds="${h(p.holds || '')}">
         <div id="sugg" class="stack" style="gap:6px;margin-top:6px"></div></div>
 
       <div><span class="label">Catalogue listing</span>
@@ -755,14 +792,41 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
         ${f('source', 'Obtained from', p.source, '', 'span2')}
       </div>
 
-      <div><span class="label">Dates</span>
-        <div class="grid2">
+      <details class="sect"${(() => {
+        const any = ['date_ordered', 'date_received', 'date_started', 'date_completed'].some((k) => p[k]);
+        return any || parseHolds(p).length ? '' : ' open';
+      })()}>
+        <summary><span class="label" style="margin:0">Dates</span>
+          <span class="sub tnum">${(() => {
+            const set = [['Ordered', p.date_ordered], ['Received', p.date_received],
+                         ['Started', p.date_started], ['Completed', p.date_completed]]
+              .filter(([, v]) => v);
+            const holds = parseHolds(p);
+            const bits = set.length ? [`${set[set.length - 1][0]} ${h(dateText(set[set.length - 1][1]))}`] : ['Nothing logged'];
+            if (holds.length) bits.push(`put down ${holds.length}\u00d7`);
+            return bits.join(' · ');
+          })()}</span></summary>
+        <div class="grid2" style="margin-top:10px">
           ${[['date_ordered', 'Ordered'], ['date_received', 'Received'],
              ['date_started', 'Started'], ['date_completed', 'Completed']].map(([k, l]) => `
             <div><span style="display:block;margin-bottom:5px;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-mute)">${l}</span>
             <input class="fld" type="date" id="${k}" value="${h(p[k] || '')}"></div>`).join('')}
         </div>
-        <p id="datenote" style="margin:8px 2px 0;font-size:12px;line-height:1.45;color:var(--ink-mute)"></p></div>
+        <p id="datenote" style="margin:8px 2px 0;font-size:12px;line-height:1.45;color:var(--ink-mute)"></p>
+        ${(() => {
+          const holds = parseHolds(p);
+          if (!holds.length) return '';
+          return `<div style="margin-top:12px">
+            <span class="label">On hold</span>
+            <div class="panel pad-in">${holds.map((hold, i) => `
+              <div class="row"><span class="k">${holds.length > 1 ? `Hold ${i + 1}` : 'Held'}</span>
+                <span class="v tnum">${h(dateText(hold.held) || '—')}${
+                  hold.restarted ? ` → ${h(dateText(hold.restarted))}` : ' → still on hold'}</span></div>`).join('')}
+            </div>
+            <p style="margin:6px 2px 0;font-size:12px;color:var(--ink-mute)">Kept for you as the status moves
+              in and out of On hold. Nothing to fill in.</p></div>`;
+        })()}
+      </details>
 
       <div><span class="label">Cost</span>
         <div class="panel" style="padding:14px">
@@ -819,9 +883,13 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
       b.setAttribute('aria-pressed', b.dataset.k === status));
   };
   function statusChanged(status) {
-    const changes = applyStatus(readDates(), status, today());
+    const t = document.getElementById('title');
+    // holds live on the form as an attribute: there is no field for them, and
+    // a status change here has to open and close periods exactly as a drag does
+    const changes = applyStatus({ ...readDates(), holds: t.dataset.holds || null }, status, today());
     for (const [k, v] of Object.entries(changes)) {
       if (k === 'status') continue;
+      if (k === 'holds') { t.dataset.holds = v || ''; continue; }
       const el = document.getElementById(k);
       if (el) el.value = v || '';
     }
@@ -1700,8 +1768,11 @@ document.addEventListener('pointerup', async () => {
     Object.assign(project, saved);
     S.meta = await api('/state');
     paintLogbook();
-    const moved = Object.keys(patch).filter((k) => k !== 'status' && patch[k]).length;
-    toast(`${project.title} → ${STATUS[status].short}${moved ? ' · dates filled in' : ''}`);
+    const dateKeys = Object.keys(patch).filter((k) => k.startsWith('date_'));
+    const filled = dateKeys.filter((k) => patch[k]).length;
+    const cleared = dateKeys.filter((k) => !patch[k]).length;
+    const note = filled ? ' · dates filled in' : cleared ? ' · dates cleared' : '';
+    toast(`${project.title} → ${STATUS[status].short}${note}`);
     // whoever just did it does not need to be told how
     if (!S.prefs.hints?.drag) { await seenHint('drag'); paintLogbook(); }
   } catch (e) { toast(e.message); render(); }
@@ -1915,6 +1986,7 @@ async function handleClick(e) {
     };
     // sent even when empty: unlinking is a change like any other
     body.dac_handle = titleEl.dataset.handle || null;
+    body.holds = titleEl.dataset.holds || null;
     // a diamond count you typed yourself stops being an estimate
     const drillsEl = document.getElementById('drills');
     const drillsWas = drillsEl && drillsEl.dataset.orig !== '' && drillsEl.dataset.orig != null
