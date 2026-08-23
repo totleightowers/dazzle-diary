@@ -86,6 +86,7 @@ const ICON = {
   back: '<path d="M15 5l-7 7 7 7"/>', close: '<path d="M6 6l12 12M18 6L6 18"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
   add: '<path d="M12 5v14M5 12h14"/>',
+  sync: '<path d="M20.5 12a8.5 8.5 0 1 1-2.49-6.01"/><path d="M20.5 4.2v4.6h-4.6"/>',
   grid: '<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/>',
   list: '<path d="M4 6.5h16M4 12h16M4 17.5h16"/>',
   edit: '<path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3z"/>',
@@ -110,6 +111,36 @@ const svg = (name, size = 20, sw = 1.7) => {
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor"
      stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round">${ICON[name] || ''}</svg>`;
 };
+
+
+/* A progress photo shown at the size of a fingernail is not much use, so a tap
+   opens it over the page. Escape, the phone's Back button and a tap anywhere
+   all close it — Back because that is what closing a full-screen thing means
+   on Android, and it must not also pop the route underneath. */
+function lightbox(src) {
+  const el = document.createElement('div');
+  el.className = 'lightbox';
+  el.innerHTML = `<img src="${src}" alt="">` +
+    `<button class="x" aria-label="Close">${svg('close', 18, 2.4)}</button>`;
+
+  let open = true;
+  const close = () => {
+    if (!open) return;
+    open = false;
+    el.remove();
+    document.removeEventListener('keydown', onKey);
+    window.removeEventListener('popstate', onPop);
+    if (history.state && history.state.lightbox) history.back();
+  };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  const onPop = () => { open = false; el.remove(); document.removeEventListener('keydown', onKey); };
+
+  el.addEventListener('click', close);
+  document.addEventListener('keydown', onKey);
+  window.addEventListener('popstate', onPop);
+  history.pushState({ lightbox: true }, '');
+  document.body.appendChild(el);
+}
 
 
 /* Phone cameras produce 7–12 MB frames. A progress photo is looked at on a
@@ -499,6 +530,8 @@ route(/^#\/p\/(\d+)$/, async (id) => {
             ${(p.photos || []).map((ph) => `
               <div class="shot">
                 <img src="/photos/${encodeURIComponent(ph.file)}" alt="" loading="lazy">
+                <button class="open" data-act="viewphoto" data-file="${encodeURIComponent(ph.file)}"
+                        aria-label="View this photo full size"></button>
                 <button class="x" data-act="delphoto" data-id="${ph.id}" aria-label="Remove photo">${svg('close', 12, 2.6)}</button>
               </div>`).join('')}
             <label class="btn dashed add">
@@ -1325,8 +1358,8 @@ route(/^#\/settings$/, async () => {
                     sh.kits ? num(sh.kits) + ' kits' : 'not synced'}${off ? ' · hidden' : ''}</span>
                 </span>
               </button>
-              <button class="btn ghost" style="height:32px;font-size:12px;padding:0 11px;flex:0 0 auto"
-                      data-act="syncone" data-k="${sh.id}">Sync</button>
+              <button class="iconbtn syncone" data-act="syncone" data-k="${sh.id}"
+                      title="Sync ${h(sh.name)}" aria-label="Sync ${h(sh.name)}">${svg('sync', 17)}</button>
             </div>`;
           }).join('')}
           <div class="row">
@@ -1341,7 +1374,7 @@ route(/^#\/settings$/, async () => {
         </div>
         <div id="syncbox"></div>
         <p style="margin:8px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
-          Switch a shop off to keep it out of browse, search and "Update all shops" — its Sync button still
+          Switch a shop off to keep it out of browse, search and "Update all shops" — its sync icon still
           works if you want to refresh it anyway.
           Reads each shop's public product listing so kits can be matched and searched with no connection.
           Covers are cached the first time a project uses one. Artwork stays the copyright of the artists —
@@ -1707,6 +1740,9 @@ async function handleClick(e) {
     toast('Project deleted');
     depth = 0;
     swap('#/');
+  }
+  else if (act === 'viewphoto') {
+    lightbox('/photos/' + el.dataset.file);
   }
   else if (act === 'delphoto') {
     if (!confirm('Remove this photo?')) return;
