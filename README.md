@@ -1,7 +1,8 @@
-# Diamond Painting Logbook
+# Dazzle Diary
 
-An Android app for keeping track of a diamond painting stash — what you own,
-what you have finished, how far through you are, and what it all cost.
+**Dazzle Diary** is an Android app for keeping track of a diamond painting
+stash — what you own, what you have finished, how far through you are, and what
+it all cost.
 
 It reads the public product listings of six shops, so a kit you have bought
 arrives with its cover image, artist, canvas size, drill shape, colour count and
@@ -85,12 +86,12 @@ which is exactly 16 per cm².) Estimated counts are always shown with a `≈`.
 
 ## Installing
 
-Download `logbook-solo.apk` from the [releases page][releases] and open it on
+Download `dazzle-diary.apk` from the [releases page][releases] and open it on
 the phone. Android will ask you to allow installing from this source.
 
 Android 7.0 (API 24) or newer.
 
-[releases]: https://github.com/totleightowers/diamond-painting-logbook/releases
+[releases]: https://github.com/totleightowers/dazzle-diary/releases
 
 > Each build must be signed with the same key as the one before it, or Android
 > refuses to install it over the top. If you build your own, keep your keystore.
@@ -127,15 +128,15 @@ With the SDK command-line tools installed and `$ANDROID_HOME` set:
 sdkmanager 'platforms;android-34' 'build-tools;34.0.0'
 export PATH="$ANDROID_HOME/build-tools/34.0.0:$PATH"
 
-git clone https://github.com/totleightowers/diamond-painting-logbook
-cd diamond-painting-logbook
+git clone https://github.com/totleightowers/dazzle-diary
+cd dazzle-diary
 mkdir -p android/sdk
 cp "$ANDROID_HOME/platforms/android-34/android.jar" android/sdk/android.jar
 
 cd android && ./build.sh
 ```
 
-That writes `android/logbook-solo.apk`, and prints its size and signature.
+That writes `android/dazzle-diary.apk`, and prints its size and signature.
 There is nothing to install first — the app has no dependencies, and no build
 step beyond packaging.
 
@@ -147,7 +148,7 @@ The build script takes these from the environment:
 | `KEYSTORE`      | `keystore.jks`     | signing keystore, made on first build |
 | `KEYSTORE_PASS` | `changeit`         | its password                      |
 | `KEY_ALIAS`     | `logbook`          | key alias within it               |
-| `OUT`           | `logbook-solo.apk` | where to write the APK            |
+| `OUT`           | `dazzle-diary.apk` | where to write the APK            |
 
 `android/zipalign.mjs` does the 4-byte alignment `resources.arsc` needs, so the
 build does not depend on a `zipalign` binary being on `PATH`.

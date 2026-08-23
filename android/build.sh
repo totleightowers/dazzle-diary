@@ -10,7 +10,7 @@ SDK_JAR="${SDK_JAR:-sdk/android.jar}"
 KEYSTORE="${KEYSTORE:-keystore.jks}"
 KEYSTORE_PASS="${KEYSTORE_PASS:-changeit}"
 KEY_ALIAS="${KEY_ALIAS:-logbook}"
-OUT="${OUT:-logbook-solo.apk}"
+OUT="${OUT:-dazzle-diary.apk}"
 
 [ -f "$SDK_JAR" ] || { echo "missing $SDK_JAR (API 34 android.jar)" >&2; exit 1; }
 
@@ -47,7 +47,7 @@ if [ ! -f "$KEYSTORE" ]; then
   echo "     generating $KEYSTORE — keep it, updates must use the same key"
   keytool -genkeypair -keystore "$KEYSTORE" -storepass "$KEYSTORE_PASS" \
     -keypass "$KEYSTORE_PASS" -alias "$KEY_ALIAS" -keyalg RSA -keysize 2048 \
-    -validity 10000 -dname "CN=Diamond Painting Logbook, O=Personal, C=GB" >/dev/null 2>&1
+    -validity 10000 -dname "CN=Dazzle Diary, O=Personal, C=GB" >/dev/null 2>&1
 fi
 rm -f "$OUT"
 apksigner sign --ks "$KEYSTORE" --ks-pass "pass:$KEYSTORE_PASS" \

@@ -2,7 +2,7 @@ import { api, isStandalone } from './api.js';
 import { statusFromDates, applyStatus } from './core/status.js';
 import { productUrl, shopById, displayCurrency, SHOPS } from './core/shops.js';
 const SHOP_BY_NAME = Object.fromEntries(SHOPS.map((s) => [s.name, s]));
-/* Diamond Painting Logbook — the whole client. Vanilla; no build step. */
+/* Dazzle Diary — the whole client. Vanilla; no build step. */
 
 const $app = document.getElementById('app');
 window.__logbookReady = true;
@@ -1505,7 +1505,7 @@ route(/^#\/settings$/, async () => {
         <div id="backupbox"></div>
         <p style="margin:8px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
           Projects and progress photos. Lands in your <strong>Downloads</strong> folder as
-          <code>logbook-backup.json</code>, ready to restore into the standalone app.</p>`}
+          <code>dazzle-diary-backup.json</code>, ready to restore into the standalone app.</p>`}
         <p style="margin:8px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
           ${isStandalone()
             ? 'Everything lives inside this app on your phone. Nothing is sent anywhere.'
@@ -1660,7 +1660,7 @@ async function handleClick(e) {
       const json = JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), projects, photos });
       const blob = new Blob([json], { type: 'application/json' });
       say('Writing the file…');
-      const where = await saveToPhone('logbook-backup.json', blob);
+      const where = await saveToPhone('dazzle-diary-backup.json', blob);
       say(`Saved to ${where} — ${projects.length} projects, ${photos.length} photos, ${(blob.size / 1048576).toFixed(1)} MB`);
       toast('Backup saved');
     } catch (e) { say(e.message); }
@@ -1673,7 +1673,7 @@ async function handleClick(e) {
       // the server route answers with raw CSV, the local one with { __csv }
       const csv = (r && r.__csv) != null ? r.__csv : (typeof r === 'string' ? r : null);
       if (csv == null) throw new Error('Nothing to export');
-      const where = await saveToPhone('logbook-export.csv', new Blob([csv], { type: 'text/csv' }));
+      const where = await saveToPhone('dazzle-diary-export.csv', new Blob([csv], { type: 'text/csv' }));
       toast('Saved to ' + where);
     } catch (e) { toast(e.message); }
     el.disabled = false;
