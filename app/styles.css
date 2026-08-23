@@ -206,6 +206,12 @@ img { max-width: 100%; display: block; }
 .card {
   display: flex; gap: 10px; padding: 10px; border-radius: 13px; text-align: left;
   background: var(--surface); border: 1px solid oklch(0.915 0.008 75); width: 100%;
+  /* A long press is how a project is picked up. Without this the WebView takes
+     it as a request to select the title instead, and the drag never starts —
+     which is why it worked only sometimes. */
+  -webkit-user-select: none; user-select: none;
+  -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+  touch-action: pan-y;
 }
 .card:active { border-color: var(--accent); }
 .thumb {
@@ -228,11 +234,19 @@ img { max-width: 100%; display: block; }
 .grid-view .card { flex-direction: column; }
 .grid-view .card .thumb { width: 100%; height: 116px; }
 
-.card.lifted { opacity: .3; }
+/* The card left behind reads as the space it came from: an outline, not a
+   ghost of itself, so it is obvious the thing is in your hand. */
+.card.lifted {
+  opacity: 1; background: transparent; border-style: dashed;
+  border-color: var(--accent); box-shadow: none;
+}
+.card.lifted > * { opacity: .18; filter: grayscale(1); }
+
 .drag-ghost {
   position: fixed; z-index: 70; pointer-events: none; margin: 0;
-  box-shadow: 0 12px 32px rgba(0,0,0,.28); transform-origin: center;
-  scale: 1.04; border-color: var(--accent);
+  box-shadow: 0 18px 40px rgba(0,0,0,.34), 0 2px 0 rgba(255,255,255,.06) inset;
+  transform-origin: center; scale: 1.05; rotate: -1.2deg;
+  border: 2px solid var(--accent); opacity: .96;
 }
 .group.drop-on { outline: 2px dashed var(--accent); outline-offset: -2px; }
 .group.drop-on > header h2 { color: var(--accent); }
@@ -339,8 +353,13 @@ body.dragging .empty-sect .group-body { min-height: 56px; }
              letter-spacing: .05em; text-transform: uppercase; color: var(--ink-mute); }
 
 .stars { display: flex; align-items: center; gap: 4px; }
-.stars button[data-k] { color: var(--line); padding: 2px; }
-.stars button[aria-pressed="true"] { color: oklch(0.74 0.15 78); }
+.stars button[data-k], .stars.shown > span { color: var(--line); padding: 2px; }
+/* chosen stars are filled, not merely coloured in outline */
+.stars button[aria-pressed="true"], .stars.shown > span.on {
+  color: oklch(0.66 0.15 78); --star-fill: oklch(0.78 0.15 78);
+}
+.stars.shown { gap: 1px; margin-top: 6px; }
+.stars.shown > span { padding: 0; display: inline-flex; }
 .stars .clearstars { margin-left: auto; font-size: 12px; color: var(--ink-mute); padding: 4px 8px; }
 
 /* A collapsible group in the edit form: the dates and the hold history are a
@@ -521,21 +540,35 @@ select.fld {
 .progressline { height: 6px; border-radius: 999px; background: var(--sunken); overflow: hidden; }
 .progressline > i { display: block; height: 100%; background: var(--accent); transition: width .25s ease; }
 
-/* On a phone the app is the screen. On a tablet or an unfolded phone, a column
-   that stays 560px wide leaves most of the display black and squeezes seven
-   status chips into a strip that clips the last one — so the column grows and
-   the chips wrap. Cards are laid out by how much room there is rather than by
-   a fixed count, so the same rule works at every width. */
+/* On a phone the app is the screen. Unfolded, or on a tablet, a column that
+   stays phone-width wastes most of the display — but simply making everything
+   wider is not the answer either, because a 1200px line of notes is horrible
+   to read.
+
+   So the shell fills the display, and each screen decides for itself: the
+   logbook and the catalogue are grids of cards and take all of it, growing
+   more columns as there is room; everything else is reading or typing and
+   keeps a comfortable column, centred. */
 @media (min-width: 620px) {
-  #app { max-width: 620px; margin: 0 auto; border-left: 1px solid var(--line);
-         border-right: 1px solid var(--line); background: var(--paper); }
+  #app { width: 100%; max-width: none; margin: 0; border: 0; background: var(--paper); }
   .chiprow { flex-wrap: wrap; overflow: visible; margin: 0; padding: 0; }
+
+  /* reading and typing: a readable measure, centred in whatever space there is */
+  .screen:not(.wide) > .topbar > *,
+  .screen:not(.wide) > .scroll > *,
+  .screen:not(.wide) > .actionbar > * { max-width: 760px; margin-left: auto; margin-right: auto; }
+  .screen:not(.wide) > .scroll > .hero { max-width: none; }
+
+  /* lists of cards: as many columns as fit */
+  .grid-view .group-body,
+  #browsebody .group-body { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)) !important; }
+  .grid-view .card .thumb { height: 160px; }
+
+  .screen.wide > .topbar > *, .screen.wide > .scroll, .screen.wide > .actionbar > * { max-width: 1500px;
+    margin-left: auto; margin-right: auto; }
 }
-@media (min-width: 900px)  { #app { max-width: 800px; } }
-@media (min-width: 1150px) { #app { max-width: 980px; } }
-@media (min-width: 620px) {
-  .grid-view .group-body { grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); }
-  .grid-view .card .thumb { height: 150px; }
+@media (min-width: 1000px) {
+  .grid-view .card .thumb { height: 180px; }
 }
 
 /* ------------------------------------------------------- shop identity
