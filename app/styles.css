@@ -211,8 +211,13 @@ img { max-width: 100%; display: block; }
      which is why it worked only sometimes. */
   -webkit-user-select: none; user-select: none;
   -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+  /* pan-y so a swipe that begins on a card still scrolls the list; the drag
+     stops the scroll itself, from a non-passive touchmove */
   touch-action: pan-y;
 }
+/* A long press on a picture is the WebView's own gesture: it offers to save or
+   share it, and the press never reaches the card. */
+.card img { -webkit-user-drag: none; user-select: none; pointer-events: none; }
 .card:active { border-color: var(--accent); }
 .thumb {
   flex: 0 0 auto; display: block; position: relative; overflow: hidden;
@@ -553,11 +558,15 @@ select.fld {
   #app { width: 100%; max-width: none; margin: 0; border: 0; background: var(--paper); }
   .chiprow { flex-wrap: wrap; overflow: visible; margin: 0; padding: 0; }
 
-  /* reading and typing: a readable measure, centred in whatever space there is */
-  .screen:not(.wide) > .topbar > *,
-  .screen:not(.wide) > .scroll > *,
-  .screen:not(.wide) > .actionbar > * { max-width: 760px; margin-left: auto; margin-right: auto; }
-  .screen:not(.wide) > .scroll > .hero { max-width: none; }
+  /* Reading and typing keep a readable measure, centred. This is opt-in, on
+     .reading, rather than "everything that is not .wide": a screen that forgets
+     its class should spill to full width, which is merely ugly, instead of
+     collapsing to a column in the middle of a large display, which is what it
+     was doing. */
+  .screen.reading > .topbar > *,
+  .screen.reading > .scroll > *,
+  .screen.reading > .actionbar > * { max-width: 760px; margin-left: auto; margin-right: auto; }
+  .screen.reading > .scroll > .hero { max-width: none; }
 
   /* lists of cards: as many columns as fit */
   .grid-view .group-body,
