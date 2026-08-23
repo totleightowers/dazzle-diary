@@ -561,10 +561,12 @@ route(/^#\/p\/(\d+)$/, async (id) => {
       const img = shots.children[i];
       if (wash && img) wash.style.backgroundImage = `url('${img.getAttribute('src')}')`;
     };
-    document.addEventListener('click', (e) => {
+    // onclick, not addEventListener: this runs on every render of a project,
+    // and a listener added to the document each time is never taken off again
+    if (dots) dots.onclick = (e) => {
       const b = e.target.closest('[data-act="shot"]');
-      if (b && shots) shots.scrollTo({ left: shots.clientWidth * Number(b.dataset.i), behavior: 'smooth' });
-    }, { once: false });
+      if (b) shots.scrollTo({ left: shots.clientWidth * Number(b.dataset.i), behavior: 'smooth' });
+    };
   }
 
   const pct = document.getElementById('pct');
@@ -652,6 +654,13 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
 
       ${f('artist', 'Artist', p.artist)}
 
+      <div><label class="label" for="shop">Shop</label>
+        <select class="fld" id="shop" name="shop">
+          ${[{ id: '', name: 'Not from a listed shop' }, ...SHOPS].map((sh) =>
+            `<option value="${sh.id}"${(p.shop || '') === sh.id ? ' selected' : ''}>${h(sh.name)}</option>`).join('')}
+        </select>
+        <p style="margin:6px 2px 0;font-size:12px;color:var(--ink-mute)">Sets the colour it carries through the logbook, and the link to its product page.</p></div>
+
       <div><span class="label">Project status</span>
         <div class="opts" id="status">${FORM_STATUS.map((k) => `
           <button type="button" class="opt" data-k="${k}" aria-pressed="${p.status === k}"
@@ -674,7 +683,7 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
 
       <div class="grid2">
         ${f('colors', 'Colours', p.colors, 'inputmode="numeric"')}
-        ${f('drills', 'Diamonds', p.drills, 'inputmode="numeric"')}
+        ${f('drills', 'Diamonds', p.drills, `inputmode="numeric" data-orig="${h(p.drills ?? '')}"`)}
         ${f('special', 'Special diamonds', p.special, '', 'span2')}
         ${f('brand', 'Brand', p.brand, '', 'span2')}
         ${f('source', 'Obtained from', p.source, '', 'span2')}
@@ -703,12 +712,17 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
         </div></div>
 
       <div class="grid2">
+        ${f('progress', 'Progress (%)', p.progress, 'inputmode="numeric"')}
         ${f('hours', 'Hours spent', p.hours, 'inputmode="decimal"')}
         <div><span class="label">Currency</span>
           <div class="opts" id="currency">${['GBP', 'USD', 'EUR'].map((k) =>
             `<button type="button" class="opt" data-k="${k}" aria-pressed="${(p.currency || 'GBP') === k}" style="padding:0 6px">${k}</button>`).join('')}</div></div>
         ${f('sold_price', 'If sold, at what price', p.sold_price, 'inputmode="decimal"', 'span2')}
       </div>
+
+      <div><label class="label" for="notes">Notes</label>
+        <textarea class="fld" id="notes" name="notes"
+                  placeholder="Colour matches, missing drills, where you got to…">${h(p.notes || '')}</textarea></div>
     </div>
     <div class="actionbar">
       <button class="btn ghost" style="width:110px" data-back="${isNew ? '#/' : '#/p/' + id}">Cancel</button>
@@ -1713,10 +1727,17 @@ async function handleClick(e) {
       price: numOf('price'), shipping: numOf('shipping'), tax: numOf('tax'),
       sold_price: numOf('sold_price'), hours: numOf('hours'),
       date_ordered: val('date_ordered') || null, date_received: val('date_received') || null,
-      date_started: val('date_started') || null, date_completed: val('date_completed') || null
+      date_started: val('date_started') || null, date_completed: val('date_completed') || null,
+      notes: val('notes') || null, shop: val('shop') || null,
+      // a percentage outside 0-100 is a typo, not an instruction
+      progress: (() => { const n = numOf('progress'); return n == null ? null : Math.min(100, Math.max(0, Math.round(n))); })()
     };
     if (titleEl.dataset.handle) body.dac_handle = titleEl.dataset.handle;
-    if (titleEl.dataset.shop) body.shop = titleEl.dataset.shop;
+    // a diamond count you typed yourself stops being an estimate
+    const drillsEl = document.getElementById('drills');
+    const drillsWas = drillsEl && drillsEl.dataset.orig !== '' && drillsEl.dataset.orig != null
+      ? parseFloat(drillsEl.dataset.orig) : null;
+    if (body.drills !== drillsWas) body.drills_estimated = 0;
     // a price you typed yourself is yours, not an estimate
     const priceEl = document.getElementById('price');
     const origRaw = priceEl ? priceEl.dataset.orig : '';
