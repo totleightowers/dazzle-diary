@@ -54,6 +54,9 @@ function catFor(shopId) {
    to another product does not throw it away. */
 export const isOwnCover = (f) => !!f && /^own-/.test(String(f));
 
+const onDisk = (f) => !!f && !!Native()?.exists('covers/' + f);
+const gallery = (row) => { try { return JSON.parse(row.covers || '[]'); } catch { return []; } };
+
 /** Pull a project's cover gallery off its listing. Returns [] if it has none. */
 async function listingCovers(row) {
   if (!row.dac_handle) return [];
@@ -71,15 +74,19 @@ export async function backfillCovers(onProgress) {
   let done = 0;
   for (const row of rows) {
     if (!row.dac_handle) continue;
-    if (row.cover && Native()?.exists('covers/' + row.cover)) continue;
-    const c = cache.rows.find(r => r.shop === (row.shop || 'dac') && r.handle === row.dac_handle);
-    if (!c || !c.image) continue;
-    const urls = Array.isArray(c.images) ? c.images
-      : (() => { try { return JSON.parse(c.images || '[]'); } catch { return []; } })();
-    const g = await cacheGallery(`${row.shop || 'dac'}-${row.dac_handle}`, urls.length ? urls : [c.image]);
+    /* A main cover on disk is not enough: the carousel is driven by `covers`,
+       and a row can have six filenames listed with only the first present —
+       which is what a restore used to leave behind. Check the whole list. */
+    const own = isOwnCover(row.cover) ? [row.cover] : [];
+    const listed = gallery(row).filter(f => !isOwnCover(f));
+    const haveCover = !!row.cover && onDisk(row.cover);
+    const haveAll = listed.length ? listed.every(onDisk) : haveCover;
+    if (haveCover && haveAll) continue;
+    const g = await listingCovers(row);
     if (g.length) {
-      row.cover = g[0];
-      if (g.length > 1) row.covers = JSON.stringify(g);
+      const all = [...own, ...g];
+      row.cover = all[0];
+      row.covers = all.length > 1 ? JSON.stringify(all) : null;
       await idb.put('projects', row); done++; onProgress?.(done);
     }
   }
@@ -573,7 +580,10 @@ export async function localApi(path, opts = {}) {
         if (mine) {
           let touched = false;
           for (const [f, v] of Object.entries(row)) {
-            if (KEEP_MINE.has(f) || f === 'cover') continue;
+            // `cover` and `covers` name files on the machine the backup came
+            // from. Taking them produces a carousel of broken images — six
+            // dots, one picture — so they are re-fetched here instead.
+            if (KEEP_MINE.has(f) || f === 'cover' || f === 'covers') continue;
             if (v == null || v === '') continue;
             if (mine[f] === v) continue;
             mine[f] = v; touched = true; fieldsChanged++;
@@ -584,10 +594,11 @@ export async function localApi(path, opts = {}) {
       }
       const copy = { ...row };
       delete copy.id;
-      // The filename in the backup belongs to the machine it came from; this
-      // app stores covers under its own name. Keeping it produced broken
-      // images, so drop it and re-fetch below.
+      // The filenames in the backup belong to the machine it came from; this
+      // app stores covers under its own name. Keeping them produced broken
+      // images, so drop both and re-fetch below.
       delete copy.cover;
+      delete copy.covers;
       const newId = await idb.put('projects', copy);
       here.set(key, newId);
       idMap.set(row.id, newId);
@@ -612,20 +623,16 @@ export async function localApi(path, opts = {}) {
       } catch { photosFailed++; }
     }
 
-    // covers are not carried in the backup (they would treble its size); fetch
-    // them from the catalogue, which is why it has to be synced first
+    /* Covers are not carried in the backup — they would treble its size — so
+       they come from the catalogue, which is why it has to be synced first.
+       This is backfillCovers rather than a fetch of its own: restore used to
+       pull only the single main image, leaving the carousel listing pictures
+       that had never been downloaded. One implementation, one behaviour. */
     let covers = 0, coversMissing = 0;
+    try { covers = await backfillCovers(); } catch { /* recoverable: the next sync retries */ }
     for (const [, pid] of idMap) {
       const row = await idb.get('projects', pid);
-      if (!row) continue;
-      if (row.cover && Native()?.exists('covers/' + row.cover)) continue;   // already on disk
-      if (!row.dac_handle) { if (!row.cover) coversMissing++; continue; }
-      const c = cache.rows.find(r => r.shop === (row.shop || 'dac') && r.handle === row.dac_handle);
-      if (!c || !c.image) { coversMissing++; continue; }
-      const file = await cacheCover(`${row.shop || 'dac'}-${row.dac_handle}`, c.image);
-      if (file) { row.cover = file; await idb.put('projects', row); covers++; }
-      else { coversMissing++; }
-      if (row.cover && !file) { row.cover = null; await idb.put('projects', row); }
+      if (row && !onDisk(row.cover)) coversMissing++;
     }
 
     return {
