@@ -209,7 +209,7 @@ const S = {
   fromCatalogue: null,
   chooserFor: null,
   chooserHits: [],
-  prefs: { currency: 'GBP', excluded: [] },
+  prefs: { currency: 'GBP', excluded: [], hints: {} },
   browse: { q: '', shop: null, items: [], offset: 0, more: true, loading: false,
              shape: null, size: null, maxPrice: null, inStock: false, sort: 'relevance',
              scroll: 0, open: false, loaded: false },
@@ -302,6 +302,14 @@ route(/^#\/$/, async () => {
   paintLogbook();
 });
 
+async function seenHint(k) {
+  S.prefs.hints = { ...(S.prefs.hints || {}), [k]: true };
+  try {
+    await api('/prefs', { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ hints: { [k]: true } }) });
+  } catch { /* it is a hint; showing it once more is not worth an error */ }
+}
+
 function paintLogbook() {
   const q = S.q.trim().toLowerCase();
   const match = (p) =>
@@ -351,6 +359,7 @@ function paintLogbook() {
 
     <div class="scroll pad" style="padding-bottom:24px">
       ${needsCatalogue ? firstRunSync() : ''}
+      ${!needsCatalogue && !empty && S.projects.length > 1 && !S.prefs.hints?.drag ? dragHint() : ''}
       ${empty ? emptyLogbook() : groups.map((g) => `
         <section class="group" data-status="${g.k}">
           <header><span class="dot" style="background:${stDot(g.k)}"></span>
@@ -414,6 +423,19 @@ function paintLogbookBody() {
    sizes, no drill counts, and importing an order history has nothing to match
    against. On a fresh install that is the one thing to do first, so it says so
    on the front page rather than waiting to be found in Settings. */
+/* Long-press to move a project between sections is the nicest thing the app
+   does and the least visible — there is nothing on screen to suggest it. Say
+   so once, then never again. Dismissing is recorded in prefs rather than in
+   memory, so it does not come back tomorrow. */
+const dragHint = () => `
+  <div class="notice" style="margin-top:16px;align-items:flex-start">
+    ${svg('info', 18)}
+    <span style="flex:1 1 auto">Hold a project for a moment, then drag it into another
+      section to change its status. The dates fill themselves in.</span>
+    <button class="btn ghost" style="height:30px;font-size:12px;padding:0 12px;flex:0 0 auto"
+            data-act="hintdone" data-k="drag">Got it</button>
+  </div>`;
+
 const firstRunSync = () => `
   <div class="panel pad-in" style="margin-top:16px">
     <div style="display:flex;gap:11px;align-items:flex-start">
@@ -1629,6 +1651,8 @@ document.addEventListener('pointerup', async () => {
     paintLogbook();
     const moved = Object.keys(patch).filter((k) => k !== 'status' && patch[k]).length;
     toast(`${project.title} → ${STATUS[status].short}${moved ? ' · dates filled in' : ''}`);
+    // whoever just did it does not need to be told how
+    if (!S.prefs.hints?.drag) { await seenHint('drag'); paintLogbook(); }
   } catch (e) { toast(e.message); render(); }
 });
 
@@ -1868,6 +1892,10 @@ async function handleClick(e) {
     toast('Project deleted');
     depth = 0;
     swap('#/');
+  }
+  else if (act === 'hintdone') {
+    await seenHint(el.dataset.k);
+    paintLogbook();
   }
   else if (act === 'viewphoto') {
     lightbox('/photos/' + el.dataset.file,

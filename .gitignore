@@ -15,3 +15,4 @@ android/assets/
 node_modules/
 *.log
 NOTES.md
+*.idsig
