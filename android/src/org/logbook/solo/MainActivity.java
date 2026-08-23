@@ -82,6 +82,13 @@ public class MainActivity extends Activity {
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
                 return route(r.getUrl());
             }
+            /* A JavascriptInterface belongs to the WebView, not to a page, so
+               anything that ever loaded here could call it. Top-level
+               navigation away from the app is already refused below; this is
+               the second lock, in case a future change opens the first. */
+            @Override public void onPageStarted(WebView v, String url, android.graphics.Bitmap f) {
+                pageTrusted = HOST.equals(Uri.parse(url).getHost());
+            }
             @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
                 Uri u = r.getUrl();
                 if (HOST.equals(u.getHost())) return false;
@@ -159,17 +166,54 @@ public class MainActivity extends Activity {
      */
     private WebResourceResponse proxy(String raw) throws IOException {
         if (raw == null) throw new IOException("no url");
-        String target = URLDecoder.decode(raw, "UTF-8");
-        URL u = new URL(target);
-        if (!"https".equalsIgnoreCase(u.getProtocol())) throw new IOException("https only");
+        URL u = new URL(URLDecoder.decode(raw, "UTF-8"));
 
+        /* Redirects are followed by hand so every hop is checked. Letting
+           HttpURLConnection follow them would mean only the first URL was ever
+           tested, and an allowed host could bounce the request anywhere. */
+        HttpURLConnection c = null;
+        for (int hop = 0; ; hop++) {
+            if (!"https".equalsIgnoreCase(u.getProtocol())) throw new IOException("https only");
+            if (!allowedHost(u.getHost())) throw new IOException("host not allowed: " + u.getHost());
+            if (hop > 5) throw new IOException("too many redirects");
+            c = open(u);
+            int status = c.getResponseCode();
+            if (status != 301 && status != 302 && status != 303 && status != 307 && status != 308) break;
+            String next = c.getHeaderField("Location");
+            c.disconnect();
+            if (next == null) throw new IOException("redirect without a location");
+            u = new URL(u, next);
+        }
+        return respond(c);
+    }
+
+    /* The shops this app knows about, and the CDN they serve pictures from.
+       Kept in step with app/core/shops.js by hand — a shop added there and not
+       here fails loudly with "host not allowed" rather than quietly. */
+    private static final String[] ALLOWED = {
+        "diamondartclub.com", "mysticaldreamdiamonds.com", "pressedandplaced.com",
+        "diamondartuk.co.uk", "fallongems.com", "diamondartstudio.co.uk",
+        "cdn.shopify.com", "myshopify.com", "wp.com"
+    };
+
+    private static boolean allowedHost(String host) {
+        if (host == null) return false;
+        String h = host.toLowerCase(java.util.Locale.ROOT);
+        for (String ok : ALLOWED) if (h.equals(ok) || h.endsWith("." + ok)) return true;
+        return false;
+    }
+
+    private HttpURLConnection open(URL u) throws IOException {
         HttpURLConnection c = (HttpURLConnection) u.openConnection();
-        c.setInstanceFollowRedirects(true);
+        c.setInstanceFollowRedirects(false);
         c.setConnectTimeout(20000);
         c.setReadTimeout(30000);
-        c.setRequestProperty("User-Agent", "DiamondLogbook/2.0 (personal logbook)");
+        c.setRequestProperty("User-Agent", "DazzleDiary/2.0 (personal logbook)");
         c.setRequestProperty("Accept", "application/json, image/*;q=0.9, */*;q=0.8");
+        return c;
+    }
 
+    private WebResourceResponse respond(HttpURLConnection c) throws IOException {
         int code = c.getResponseCode();
         InputStream in = code >= 400 ? c.getErrorStream() : c.getInputStream();
         if (in == null) in = new ByteArrayInputStream(new byte[0]);
@@ -202,10 +246,18 @@ public class MainActivity extends Activity {
 
     /* -------------------------------------------------------------- bridge */
 
+    /** True while the WebView is showing the packaged app and not a remote page. */
+    private volatile boolean pageTrusted = true;
+
     public class Bridge {
+        private void mustBeOurPage() {
+            if (!pageTrusted) throw new SecurityException("not available to this page");
+        }
+
         /** Write a cover or photo. Path is "covers/x.jpg" or "photos/y.jpg". */
         @JavascriptInterface
         public boolean save(String path, String base64) {
+            mustBeOurPage();
             try {
                 File f = safe(path);
                 if (f == null) return false;
@@ -224,6 +276,7 @@ public class MainActivity extends Activity {
          *  API 29). Returns where it went, or null. */
         @JavascriptInterface
         public String saveDownload(String name, String base64, String mime) {
+            mustBeOurPage();
             try {
                 byte[] bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT);
                 if (name == null || name.contains("/") || name.contains("..")) return null;
@@ -259,6 +312,7 @@ public class MainActivity extends Activity {
          *  Light/Dark override, which no static theme can know about. */
         @JavascriptInterface
         public void setBarColor(final boolean dark) {
+            mustBeOurPage();
             runOnUiThread(new Runnable() { @Override public void run() {
                 try {
                     android.view.Window w = getWindow();
@@ -283,6 +337,7 @@ public class MainActivity extends Activity {
          *  page asks us instead. */
         @JavascriptInterface
         public boolean isSystemDark() {
+            mustBeOurPage();
             int mode = getResources().getConfiguration().uiMode
                      & android.content.res.Configuration.UI_MODE_NIGHT_MASK;
             return mode == android.content.res.Configuration.UI_MODE_NIGHT_YES;
@@ -290,12 +345,14 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public boolean exists(String path) {
+            mustBeOurPage();
             File f = safe(path);
             return f != null && f.exists();
         }
 
         @JavascriptInterface
         public boolean remove(String path) {
+            mustBeOurPage();
             File f = safe(path);
             return f != null && f.delete();
         }
