@@ -312,6 +312,15 @@ input[type=range].progress::-moz-range-track {
   background: linear-gradient(to right, var(--accent) 0 var(--fill, 0%), var(--sunken) var(--fill, 0%) 100%);
 }
 
+/* Licence text is quoted verbatim, so it must not be reflowed or truncated;
+   it scrolls inside its own box instead of stretching the page. */
+pre.licence {
+  margin: 10px 0 0; padding: 12px; max-height: 320px; overflow: auto;
+  background: var(--sunken); border-radius: var(--r-field);
+  font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink-mid);
+}
+
 /* ------------------------------------------------------------------ import */
 .checkrow {
   display: flex; align-items: center; gap: 8px; min-height: 60px; padding: 11px;

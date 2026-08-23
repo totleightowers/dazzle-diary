@@ -234,6 +234,7 @@ public class MainActivity extends Activity {
         if (n.endsWith(".html")) return "text/html";
         if (n.endsWith(".js") || n.endsWith(".mjs")) return "text/javascript";
         if (n.endsWith(".css")) return "text/css";
+        if (n.endsWith(".txt")) return "text/plain";
         if (n.endsWith(".json")) return "application/json";
         if (n.endsWith(".webmanifest")) return "application/manifest+json";
         if (n.endsWith(".woff2")) return "font/woff2";
