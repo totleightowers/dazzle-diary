@@ -11,6 +11,7 @@ import * as idb from './idb.js';
 import { SHOPS, shopById, toRow } from '../core/shops.js';
 import { norm } from '../core/match.js';
 import { buildPreview } from '../core/import.js';
+import { parseHolds } from '../core/status.js';
 
 export const PROXY = '/__net/?url=';
 const via = (url) => PROXY + encodeURIComponent(url);
@@ -141,7 +142,7 @@ async function syncOne(shop, job, want) {
 const PROJECT_FIELDS = ['title','artist','status','shape','coverage','width_in','height_in','colors','drills',
   'special','drills_estimated','brand','source','price','price_source','shipping','tax','currency','sold_price','hours','progress',
   'date_ordered','date_received','date_started','date_completed','order_ref','order_total','order_items',
-  'order_flag','dac_handle','shop','cover','covers','notes','holds'];
+  'order_flag','dac_handle','shop','cover','covers','notes','holds','rating'];
 
 const projects = () => idb.all('projects');
 
@@ -149,7 +150,42 @@ async function withPhotos(p) {
   if (!p) return p;
   p.photos = (await idb.byIndex('photos', 'project_id', p.id))
     .map(({ id, file, caption, taken_at }) => ({ id, file, caption, taken_at }));
+  p.sessions = (await idb.byIndex('sessions', 'project_id', p.id))
+    .map(({ id, on, minutes, note }) => ({ id, on, minutes, note }))
+    .sort((a, b) => String(b.on).localeCompare(String(a.on)) || b.id - a.id);
   return p;
+}
+
+/* `hours` is no longer typed in: it is the sum of the sessions, kept on the
+   row so the stats, the CSV and the cards can go on reading one number. */
+async function recountHours(projectId) {
+  const mins = (await idb.byIndex('sessions', 'project_id', projectId))
+    .reduce((n, x) => n + (Number(x.minutes) || 0), 0);
+  const row = await idb.get('projects', projectId);
+  if (!row) return 0;
+  const hours = Math.round(mins / 60 * 100) / 100;
+  if (row.hours !== hours) { row.hours = hours; row.updated_at = nowIso(); await idb.put('projects', row); }
+  return hours;
+}
+
+/* Hours logged before sessions existed are not thrown away: each becomes one
+   session, dated as best we can, so the total survives the change. */
+async function migrateHours() {
+  if (await idb.get('meta', 'sessionsMigrated')) return 0;
+  let made = 0;
+  for (const row of await idb.all('projects')) {
+    const mins = Math.round((Number(row.hours) || 0) * 60);
+    if (mins <= 0) continue;
+    if ((await idb.byIndex('sessions', 'project_id', row.id)).length) continue;
+    await idb.put('sessions', {
+      project_id: row.id, minutes: mins, note: 'Logged before sessions',
+      on: row.date_completed || row.date_started || (row.created_at || nowIso()).slice(0, 10),
+      created_at: nowIso()
+    });
+    made++;
+  }
+  await idb.put('meta', { at: nowIso(), made }, 'sessionsMigrated');
+  return made;
 }
 
 /* Covers and progress photos are written to the app's own storage through the
@@ -204,7 +240,10 @@ async function cacheCover(key, url, width = 600) {
 /* --------------------------------------------------------------- routing */
 const q = (u, k) => u.searchParams.get(k);
 
+let migrated = null;
 export async function localApi(path, opts = {}) {
+  if (!migrated) migrated = migrateHours().catch(() => 0);
+  await migrated;
   const url = new URL(path, 'http://local');
   const p = url.pathname;
   const m = (opts.method || 'GET').toUpperCase();
@@ -548,6 +587,105 @@ export async function localApi(path, opts = {}) {
     return { id: pid, file };
   }
 
+  /* Holds are opened and closed by the status moving, but they are also just
+     facts about the past, and the past sometimes needs correcting by hand. */
+  const holdAdd = p.match(/^\/projects\/(\d+)\/holds$/);
+  if (holdAdd && m === 'POST') {
+    const id = Number(holdAdd[1]);
+    const row = await idb.get('projects', id);
+    if (!row) throw Object.assign(new Error('Not found'), { status: 404 });
+    const b = json();
+    const held = String(b.held || '').slice(0, 10);
+    const restarted = b.restarted ? String(b.restarted).slice(0, 10) : null;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(held))
+      throw Object.assign(new Error('When did you put it down?'), { status: 400 });
+    if (restarted && restarted < held)
+      throw Object.assign(new Error('It cannot be picked up before it was put down.'), { status: 400 });
+    const list = parseHolds(row);
+    if (!restarted && list.some(x => !x.restarted))
+      throw Object.assign(new Error('It is already on hold.'), { status: 400 });
+    list.push({ held, restarted });
+    list.sort((a, b2) => String(a.held).localeCompare(String(b2.held)));
+    row.holds = JSON.stringify(list);
+    if (!restarted) row.status = 'onHold';       // an open period is what being on hold means
+    row.updated_at = nowIso();
+    await idb.put('projects', row);
+    return withPhotos(row);
+  }
+
+  const holdDel = p.match(/^\/projects\/(\d+)\/holds\/(\d+)$/);
+  if (holdDel && m === 'DELETE') {
+    const id = Number(holdDel[1]);
+    const row = await idb.get('projects', id);
+    if (!row) throw Object.assign(new Error('Not found'), { status: 404 });
+    const list = parseHolds(row);
+    const i = Number(holdDel[2]);
+    if (i < 0 || i >= list.length) throw Object.assign(new Error('No such hold.'), { status: 404 });
+    const wasOpen = !list[i].restarted;
+    list.splice(i, 1);
+    row.holds = list.length ? JSON.stringify(list) : null;
+    // deleting the hold it is on leaves it on hold with nothing to show for it
+    if (wasOpen && row.status === 'onHold') row.status = row.date_started ? 'started' : 'received';
+    row.updated_at = nowIso();
+    await idb.put('projects', row);
+    return withPhotos(row);
+  }
+
+  const sess = p.match(/^\/projects\/(\d+)\/sessions$/);
+  if (sess && m === 'POST') {
+    const id = Number(sess[1]);
+    if (!await idb.get('projects', id)) throw Object.assign(new Error('Not found'), { status: 404 });
+    const b = json();
+    const minutes = Math.round(Number(b.minutes) || 0);
+    if (minutes <= 0) throw Object.assign(new Error('How long was the session?'), { status: 400 });
+    if (minutes > 24 * 60) throw Object.assign(new Error('That is more than a day.'), { status: 400 });
+    const sid = await idb.put('sessions', {
+      project_id: id, minutes,
+      on: (b.on || nowIso().slice(0, 10)).slice(0, 10),
+      note: b.note ? String(b.note).slice(0, 200) : null,
+      created_at: nowIso()
+    });
+    await recountHours(id);
+    return { id: sid, hours: (await idb.get('projects', id)).hours };
+  }
+
+  const ds = p.match(/^\/sessions\/(\d+)$/);
+  if (ds && m === 'DELETE') {
+    const row = await idb.get('sessions', Number(ds[1]));
+    if (row) { await idb.del('sessions', row.id); await recountHours(row.project_id); }
+    return { ok: true };
+  }
+
+  /* One timer at a time, kept in meta rather than on the project: it is a thing
+     the app is doing, not a fact about the painting, and it has to survive the
+     app being closed mid-session. */
+  if (p === '/timer') {
+    if (m === 'GET') return (await idb.get('meta', 'timer')) || null;
+    if (m === 'POST') {
+      const b = json();
+      const id = Number(b.project_id);
+      const row = await idb.get('projects', id);
+      if (!row) throw Object.assign(new Error('Not found'), { status: 404 });
+      const timer = { project_id: id, title: row.title, started_at: nowIso() };
+      await idb.put('meta', timer, 'timer');
+      return timer;
+    }
+    if (m === 'DELETE') { await idb.del('meta', 'timer'); return { ok: true }; }
+  }
+
+  if (p === '/timer/stop' && m === 'POST') {
+    const timer = await idb.get('meta', 'timer');
+    if (!timer) throw Object.assign(new Error('No timer is running.'), { status: 400 });
+    await idb.del('meta', 'timer');
+    const minutes = Math.max(1, Math.round((Date.now() - Date.parse(timer.started_at)) / 60000));
+    const sid = await idb.put('sessions', {
+      project_id: timer.project_id, minutes, note: null,
+      on: nowIso().slice(0, 10), created_at: nowIso()
+    });
+    await recountHours(timer.project_id);
+    return { id: sid, minutes, project_id: timer.project_id };
+  }
+
   const dp = p.match(/^\/photos\/(\d+)$/);
   if (dp && m === 'DELETE') {
     const row = await idb.get('photos', Number(dp[1]));
@@ -572,6 +710,7 @@ export async function localApi(path, opts = {}) {
        one, so a project that is already here gets UPDATED rather than skipped.
        Only fields the backup actually has a value for are touched, and your own
        progress, hours and notes are never overwritten. */
+    // `hours` is derived from sessions now, so a backup's copy must not win
     const KEEP_MINE = new Set(['progress', 'hours', 'notes', 'sold_price', 'id', 'created_at']);
     let updated = 0, fieldsChanged = 0;
     for (const row of data.projects) {
@@ -608,6 +747,22 @@ export async function localApi(path, opts = {}) {
       added++;
     }
 
+    /* Sessions: like photos, nothing else can reproduce them. Matched on the
+       day and the length, so restoring the same backup twice does not double
+       the hours. */
+    let sessionsAdded = 0;
+    for (const se of (data.sessions || [])) {
+      const pid = idMap.get(se.project_id);
+      if (!pid || !se.minutes) continue;
+      const here = await idb.byIndex('sessions', 'project_id', pid);
+      if (here.some(x => x.on === se.on && x.minutes === se.minutes)) continue;
+      await idb.put('sessions', { project_id: pid, minutes: Number(se.minutes) || 0,
+                                  on: se.on || null, note: se.note ?? null,
+                                  created_at: se.created_at || nowIso() });
+      sessionsAdded++;
+    }
+    for (const [, pid] of idMap) await recountHours(pid);
+
     // progress photos: the only part of a logbook that cannot be re-downloaded
     let photos = 0, photosFailed = 0;
     const seenPhotos = new Set();
@@ -639,7 +794,7 @@ export async function localApi(path, opts = {}) {
     }
 
     return {
-      added, updated, fieldsChanged,
+      added, updated, fieldsChanged, sessions: sessionsAdded,
       skipped: data.projects.length - added - updated,
       photos, photosFailed,
       covers, coversMissing,

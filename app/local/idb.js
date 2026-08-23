@@ -1,6 +1,6 @@
 /** Minimal promise wrapper over IndexedDB. Enough for one app, nothing more. */
 const DB_NAME = 'logbook';
-const DB_VERSION = 1;
+const DB_VERSION = 2;   // 2 added sessions
 
 let dbp = null;
 export function open() {
@@ -15,6 +15,10 @@ export function open() {
       }
       if (!db.objectStoreNames.contains('photos')) {
         const s = db.createObjectStore('photos', { keyPath: 'id', autoIncrement: true });
+        s.createIndex('project_id', 'project_id');
+      }
+      if (!db.objectStoreNames.contains('sessions')) {
+        const s = db.createObjectStore('sessions', { keyPath: 'id', autoIncrement: true });
         s.createIndex('project_id', 'project_id');
       }
       if (!db.objectStoreNames.contains('catalogue')) {
