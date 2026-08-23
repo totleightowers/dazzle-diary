@@ -1607,6 +1607,7 @@ route(/^#\/settings$/, async () => {
   <div class="screen reading">
     <div class="topbar">${topbar('Settings', { back: '#/', sub: true })}</div>
     <div class="scroll pad stack" style="padding-top:18px;padding-bottom:26px">
+      <p id="buildline" style="margin:0;font-size:11px;color:var(--ink-faint);text-align:center"></p>
       <div class="tiles">
         <div class="tile"><div class="big tnum">${num(stats.projects)}</div>
           <div class="cap">projects${stats.wishlist ? ` · ${num(stats.wishlist)} wished for` : ''}</div></div>
@@ -1739,7 +1740,7 @@ route(/^#\/settings$/, async () => {
             : 'Everything lives in <code>data/logbook.db</code> on this phone. Copy that file to back it up.'}</p>
 
         <button class="btn ghost wide" style="margin-top:18px" data-go="#/licences">Open-source licences</button>
-        <p id="buildline" style="margin:10px 2px 0;font-size:12px;color:var(--ink-faint);text-align:center"></p>
+
       </div>
     </div>
   </div>`;

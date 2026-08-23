@@ -574,8 +574,9 @@ select.fld {
 
   .grid-view .card .thumb { height: 160px; }
 
-  .screen.wide > .topbar > *, .screen.wide > .scroll, .screen.wide > .actionbar > * { max-width: 1500px;
-    margin-left: auto; margin-right: auto; }
+  /* No cap on the card screens. A max-width with auto margins on a flex item is
+     one more thing that can go wrong in a WebView, and the grid already decides
+     how many columns fit — it does not need a ceiling as well. */
 }
 @media (min-width: 1000px) {
   .grid-view .card .thumb { height: 180px; }
