@@ -91,6 +91,7 @@ const ICON = {
   back: '<path d="M15 5l-7 7 7 7"/>', close: '<path d="M6 6l12 12M18 6L6 18"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
   add: '<path d="M12 5v14M5 12h14"/>',
+  star: '<path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z"/>',
   sync: '<path d="M20.5 12a8.5 8.5 0 1 1-2.49-6.01"/><path d="M20.5 4.2v4.6h-4.6"/>',
   grid: '<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/>',
   list: '<path d="M4 6.5h16M4 12h16M4 17.5h16"/>',
@@ -215,6 +216,7 @@ const S = {
   chooserFor: null,
   chooserHits: [],
   prefs: { currency: 'GBP', excluded: [], hints: {} },
+  timer: null,                       // a running session, if there is one
   browse: { q: '', shop: null, items: [], offset: 0, more: true, loading: false,
              shape: null, size: null, maxPrice: null, inStock: false, sort: 'relevance',
              scroll: 0, open: false, loaded: false },
@@ -306,6 +308,32 @@ route(/^#\/$/, async () => {
   S.projects = projects; S.meta = meta;
   paintLogbook();
 });
+
+/* Hold periods and sessions are different things — one is when you were not
+   working, kept in step with the status; the other is when you were, and is
+   typed in. On screen they are the same shape, so they are drawn by one
+   function: a list of spans, each with a length and a way to remove it. */
+function spanList(rows, { total, empty, act, id }) {
+  if (!rows.length) return `<div class="panel pad-in"><div class="row"><span class="k">${h(empty)}</span></div></div>`;
+  return `<div class="panel pad-in">
+    ${rows.map((r) => `<div class="row">
+      <span class="k">${h(r.left)}</span>
+      <span class="v tnum" style="display:flex;align-items:center;gap:10px">${h(r.right)}
+        <button class="iconbtn" style="width:28px;height:28px;color:var(--ink-mute)"
+                data-act="${act}" data-id="${id}" data-k="${h(r.key)}"
+                aria-label="Remove">${svg('trash', 15)}</button></span></div>`).join('')}
+    ${total ? `<div class="row"><span class="k" style="font-weight:700;color:var(--ink)">${h(total[0])}</span>
+      <span class="v tnum">${h(total[1])}</span></div>` : ''}
+  </div>`;
+}
+
+/** "45m", "2h 30m" — the way anyone says how long they sat at a canvas. */
+function minsText(m) {
+  const n = Math.max(0, Math.round(Number(m) || 0));
+  if (n < 60) return `${n}m`;
+  const hrs = Math.floor(n / 60), rest = n % 60;
+  return rest ? `${hrs}h ${rest}m` : `${hrs}h`;
+}
 
 /** "9 days", "3 weeks", "2 months" — a hold is read at a glance, not audited. */
 function daysText(from, to, precomputed) {
@@ -484,6 +512,7 @@ route(/^#\/p\/(\d+)$/, async (id) => {
   const spec = [
     ['Canvas size', sizeText(p) + (p.width_in ? ` · ${p.width_in}" × ${p.height_in}"` : '')],
     ['Drill shape', p.shape], ['Coverage', p.coverage],
+    ['Rating', Number(p.rating) ? '\u2605'.repeat(p.rating) + '\u2606'.repeat(5 - p.rating) : null],
     ['Diamonds', p.drills ? (p.drills_estimated ? '\u2248 ' + num(p.drills) : num(p.drills)) : null], ['Colours', p.colors ? num(p.colors) : null],
     ['Special diamonds', p.special], ['Brand', p.brand], ['Obtained from', p.source]
   ].filter(([, v]) => v);
@@ -560,22 +589,67 @@ route(/^#\/p\/(\d+)$/, async (id) => {
 
         ${(() => {
           const holds = parseHolds(p);
-          if (!holds.length) return '';
           const open = openHold(p);
-          const total = heldDays(p, today());
           return `<div>
           <h3 class="label">Put down${holds.length > 1 ? ` · ${holds.length} times` : ''}</h3>
-          <div class="panel pad-in">
-            ${holds.map((hold, i) => `
-              <div class="row"><span class="k">${holds.length > 1 ? `Hold ${i + 1}` : 'Held'}</span>
-                <span class="v tnum">${h(dateText(hold.held) || '—')}${
-                  hold.restarted ? ` → ${h(dateText(hold.restarted))}` : ''}
-                  <span style="color:var(--ink-mute);font-weight:400">· ${
-                    daysText(hold.held, hold.restarted || today())}</span></span></div>`).join('')}
-            ${holds.length > 1 || open ? `<div class="row"><span class="k" style="font-weight:700;color:var(--ink)">
-              ${open ? 'On hold so far' : 'Put down for'}</span>
-              <span class="v tnum">${daysText(null, null, total)}</span></div>` : ''}
-          </div></div>`;
+          ${spanList(holds.map((hold, i) => ({
+              key: i,
+              left: holds.length > 1 ? `Hold ${i + 1}` : 'Held',
+              right: `${dateText(hold.held) || '—'} → ${hold.restarted ? dateText(hold.restarted)
+                : 'still down'} · ${daysText(hold.held, hold.restarted || today())}`
+            })), {
+              empty: 'Never put down',
+              total: holds.length > 1 || open
+                ? [open ? 'On hold so far' : 'Put down for', daysText(null, null, heldDays(p, today()))]
+                : null,
+              act: 'delhold', id: p.id })}
+          <details class="sect" style="margin-top:8px">
+            <summary><span class="label" style="margin:0">Record a hold</span></summary>
+            <div class="grid2" style="margin-top:8px">
+              <div><span class="minilabel">Put down</span>
+                <input class="fld" type="date" id="holdfrom" value="${today()}"></div>
+              <div><span class="minilabel">Picked up</span>
+                <input class="fld" type="date" id="holdto"></div>
+            </div>
+            <button class="btn ghost wide" style="margin-top:8px" data-act="savehold" data-id="${p.id}">
+              Save this hold</button>
+            <p style="margin:6px 2px 0;font-size:12px;color:var(--ink-mute)">Leave "picked up" blank if it
+              is still down — that puts the project on hold.</p>
+          </details></div>`;
+        })()}
+
+        ${(() => {
+          const list = p.sessions || [];
+          const mins = list.reduce((n, x) => n + (Number(x.minutes) || 0), 0);
+          return `<div>
+          <h3 class="label">Time</h3>
+          ${spanList(list.map((se) => ({
+              key: se.id,
+              left: dateText(se.on) || 'Undated',
+              right: `${minsText(se.minutes)}${se.note ? ' · ' + se.note : ''}`
+            })), {
+              empty: 'No time logged yet',
+              total: list.length ? ['Total', minsText(mins)] : null,
+              act: 'delsession', id: p.id })}
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button class="btn ${S.timer && S.timer.project_id === p.id ? 'danger' : 'ghost'}"
+                    style="flex:1 1 auto" data-act="${S.timer && S.timer.project_id === p.id ? 'stoptimer' : 'starttimer'}"
+                    data-id="${p.id}">${S.timer && S.timer.project_id === p.id
+                      ? `Stop · ${minsText(Math.max(1, Math.round((Date.now() - Date.parse(S.timer.started_at)) / 60000)))}`
+                      : 'Start a session'}</button>
+          </div>
+          <details class="sect" style="margin-top:8px">
+            <summary><span class="label" style="margin:0">Add past time</span></summary>
+            <div class="grid2" style="margin-top:8px">
+              <div><span class="minilabel">On</span>
+                <input class="fld" type="date" id="sesson" value="${today()}"></div>
+              <div><span class="minilabel">Minutes</span>
+                <input class="fld tnum" id="sessmins" inputmode="numeric" placeholder="60"></div>
+            </div>
+            <input class="fld" id="sessnote" placeholder="Note (optional)" style="margin-top:8px">
+            <button class="btn ghost wide" style="margin-top:8px" data-act="savesession" data-id="${p.id}">
+              Add it</button>
+          </details></div>`;
         })()}
 
         ${p.order_ref ? `<div>
@@ -843,12 +917,21 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
 
       <div class="grid2">
         ${f('progress', 'Progress (%)', p.progress, 'inputmode="numeric"')}
-        ${f('hours', 'Hours spent', p.hours, 'inputmode="decimal"')}
+        ${f('hoursShown', 'Time logged', p.hours ? minsText(Math.round(p.hours * 60)) : '—',
+             'disabled style="opacity:.6" title="Added as sessions on the project"')}
         <div><span class="label">Currency</span>
           <div class="opts" id="currency">${['GBP', 'USD', 'EUR'].map((k) =>
             `<button type="button" class="opt" data-k="${k}" aria-pressed="${(p.currency || 'GBP') === k}" style="padding:0 6px">${k}</button>`).join('')}</div></div>
         ${f('sold_price', 'If sold, at what price', p.sold_price, 'inputmode="decimal"', 'span2')}
       </div>
+
+      <div><span class="label">Rating</span>
+        <div class="stars" id="rating" data-v="${Number(p.rating) || 0}">
+          ${[1, 2, 3, 4, 5].map((n) => `
+            <button type="button" data-k="${n}" aria-label="${n} star${n === 1 ? '' : 's'}"
+              aria-pressed="${(Number(p.rating) || 0) >= n}">${svg('star', 26)}</button>`).join('')}
+          <button type="button" class="clearstars" data-k="0" aria-label="No rating">Clear</button>
+        </div></div>
 
       <div><label class="label" for="notes">Notes</label>
         <textarea class="fld" id="notes" name="notes"
@@ -861,6 +944,15 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
   </div>`;
 
   // segmented groups
+  const stars = document.getElementById('rating');
+  if (stars) stars.onclick = (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    const v = Number(b.dataset.k) || 0;
+    stars.dataset.v = String(v);
+    [...stars.querySelectorAll('button[data-k]')].forEach((x) =>
+      x.setAttribute('aria-pressed', Number(x.dataset.k) > 0 && Number(x.dataset.k) <= v));
+  };
+
   for (const g of ['status', 'shape', 'coverage', 'currency']) {
     document.getElementById(g).onclick = (e) => {
       const b = e.target.closest('.opt'); if (!b) return;
@@ -1812,9 +1904,11 @@ async function handleClick(e) {
       say('Collecting projects…');
       const projects = await api('/projects');
       const photos = [];
+      const sessions = [];
       let n = 0;
       for (const p of projects) {
         const full = await api('/projects/' + p.id);
+        for (const se of (full.sessions || [])) sessions.push({ ...se, project_id: p.id });
         for (const ph of (full.photos || [])) {
           say(`Shrinking photo ${++n}…`);
           const res = await fetch('/photos/' + encodeURIComponent(ph.file));
@@ -1826,11 +1920,13 @@ async function handleClick(e) {
           photos.push({ ...ph, project_id: p.id, data: btoa(bin) });
         }
       }
-      const json = JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), projects, photos });
+      const json = JSON.stringify({ version: 2, exportedAt: new Date().toISOString(),
+                                    projects, photos, sessions });
       const blob = new Blob([json], { type: 'application/json' });
       say('Writing the file…');
       const where = await saveToPhone('dazzle-diary-backup.json', blob);
-      say(`Saved to ${where} — ${projects.length} projects, ${photos.length} photos, ${(blob.size / 1048576).toFixed(1)} MB`);
+      say(`Saved to ${where} — ${projects.length} projects, ${photos.length} photos, ${
+        sessions.length} sessions, ${(blob.size / 1048576).toFixed(1)} MB`);
       toast('Backup saved');
     } catch (e) { say(e.message); }
     el.disabled = false;
@@ -1977,7 +2073,8 @@ async function handleClick(e) {
       colors: numOf('colors'), drills: numOf('drills'), special: val('special') || null,
       brand: val('brand') || null, source: val('source') || null,
       price: numOf('price'), shipping: numOf('shipping'), tax: numOf('tax'),
-      sold_price: numOf('sold_price'), hours: numOf('hours'),
+      sold_price: numOf('sold_price'),   // hours comes from the sessions, not a field
+      rating: Number(document.getElementById('rating')?.dataset.v) || null,
       date_ordered: val('date_ordered') || null, date_received: val('date_received') || null,
       date_started: val('date_started') || null, date_completed: val('date_completed') || null,
       notes: val('notes') || null, shop: val('shop') || null,
@@ -2038,6 +2135,51 @@ async function handleClick(e) {
     toast('Back to the shop\u2019s image');
     render();
   }
+  else if (act === 'savehold') {
+    const held = document.getElementById('holdfrom')?.value;
+    const back = document.getElementById('holdto')?.value;
+    if (!held) return toast('Which day did you put it down?');
+    await api(`/projects/${el.dataset.id}/holds`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ held, restarted: back || null }) });
+    toast(back ? 'Hold recorded' : 'On hold');
+    render();
+  }
+  else if (act === 'delhold') {
+    if (!confirm('Remove this hold?')) return;
+    await api(`/projects/${el.dataset.id}/holds/${el.dataset.k}`, { method: 'DELETE' });
+    toast('Hold removed');
+    render();
+  }
+  else if (act === 'savesession') {
+    const mins = Number(document.getElementById('sessmins')?.value);
+    if (!mins) return toast('How many minutes?');
+    await api(`/projects/${el.dataset.id}/sessions`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ minutes: mins, on: document.getElementById('sesson')?.value,
+                             note: document.getElementById('sessnote')?.value || null }) });
+    toast(`Logged ${minsText(mins)}`);
+    render();
+  }
+  else if (act === 'delsession') {
+    if (!confirm('Remove this session?')) return;
+    await api('/sessions/' + el.dataset.k, { method: 'DELETE' });
+    toast('Session removed');
+    render();
+  }
+  else if (act === 'starttimer') {
+    S.timer = await api('/timer', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: Number(el.dataset.id) }) });
+    toast('Timer running');
+    render();
+  }
+  else if (act === 'stoptimer') {
+    const done = await api('/timer/stop', { method: 'POST' });
+    S.timer = null;
+    toast(`Logged ${minsText(done.minutes)}`);
+    render();
+  }
   else if (act === 'delphoto') {
     if (!confirm('Remove this photo?')) return;
     await api('/photos/' + el.dataset.id, { method: 'DELETE' });
@@ -2050,7 +2192,9 @@ window.addEventListener('hashchange', (e) => {
   if (e && e.oldURL && e.newURL && e.oldURL.length > e.newURL.length && depth > 0) depth--;
   return render();          // returned so callers can await a finished render
 });
-api('/prefs').then((p) => { if (p) Object.assign(S.prefs, p); })
-  .catch(() => {})
-  .finally(render);
+Promise.all([
+  api('/prefs').then((p) => { if (p) Object.assign(S.prefs, p); }).catch(() => {}),
+  // a timer left running when the app was closed is still running
+  api('/timer').then((t) => { S.timer = t || null; }).catch(() => {})
+]).finally(render);
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});

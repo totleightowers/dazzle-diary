@@ -324,6 +324,14 @@ input[type=range].progress::-moz-range-track {
   background: linear-gradient(to right, var(--accent) 0 var(--fill, 0%), var(--sunken) var(--fill, 0%) 100%);
 }
 
+.minilabel { display: block; margin-bottom: 5px; font-size: 10px; font-weight: 700;
+             letter-spacing: .05em; text-transform: uppercase; color: var(--ink-mute); }
+
+.stars { display: flex; align-items: center; gap: 4px; }
+.stars button[data-k] { color: var(--line); padding: 2px; }
+.stars button[aria-pressed="true"] { color: oklch(0.74 0.15 78); }
+.stars .clearstars { margin-left: auto; font-size: 12px; color: var(--ink-mute); padding: 4px 8px; }
+
 /* A collapsible group in the edit form: the dates and the hold history are a
    lot of furniture for a form that is mostly about the kit, and they largely
    look after themselves. */
