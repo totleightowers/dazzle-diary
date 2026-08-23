@@ -141,7 +141,7 @@ async function syncOne(shop, job, want) {
 const PROJECT_FIELDS = ['title','artist','status','shape','coverage','width_in','height_in','colors','drills',
   'special','drills_estimated','brand','source','price','price_source','shipping','tax','currency','sold_price','hours','progress',
   'date_ordered','date_received','date_started','date_completed','order_ref','order_total','order_items',
-  'order_flag','dac_handle','shop','cover','covers','notes'];
+  'order_flag','dac_handle','shop','cover','covers','notes','holds'];
 
 const projects = () => idb.all('projects');
 
@@ -652,13 +652,18 @@ export async function localApi(path, opts = {}) {
     const sum = (f) => rows.reduce((n, r) => n + (Number(r[f]) || 0), 0);
     const byArtist = {};
     rows.forEach(r => { if (r.artist) byArtist[r.artist] = (byArtist[r.artist] || 0) + 1; });
-    const placed = Math.round(rows.reduce((n, r) => n + (r.status === 'completed'
+    /* A wish list kit is not owned and an abandoned one will not be finished,
+       so neither belongs in "diamonds still to place" — counting them would
+       make the number grow every time you window-shop. */
+    const owned = rows.filter(r => r.status !== 'wishlist' && r.status !== 'abandoned');
+    const placed = Math.round(owned.reduce((n, r) => n + (r.status === 'completed'
       ? (Number(r.drills) || 0)
       : (Number(r.drills) || 0) * (Number(r.progress) || 0) / 100), 0));
     return {
       projects: rows.length, drills: sum('drills'), hours: sum('hours'), spend: sum('price'),
       completed: rows.filter(r => r.status === 'completed').length,
-      placed, remaining: Math.max(0, sum('drills') - placed),
+      placed,
+      remaining: Math.max(0, owned.reduce((n, r) => n + (Number(r.drills) || 0), 0) - placed),
       estimatedCounts: rows.filter(r => r.drills_estimated).length,
       byStatus: Object.entries(rows.reduce((a, r) => (a[r.status] = (a[r.status] || 0) + 1, a), {}))
                       .map(([status, n]) => ({ status, n })),

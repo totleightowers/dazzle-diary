@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseOrders, normaliseDate } from '../app/core/csv.js';
 import { norm, resolveFragments, disambiguate, cmFromIn } from '../app/core/match.js';
-import { statusFromDates, applyStatus } from '../app/core/status.js';
+import { statusFromDates, applyStatus, parseHolds, openHold, heldDays,
+         ALL_STATUSES } from '../app/core/status.js';
 import { estimateDrills, DRILL_DENSITY } from '../app/core/estimate.js';
 import { SHOPS, shopById, productUrl, displayCurrency, toRow } from '../app/core/shops.js';
 import { buildPreview } from '../app/core/import.js';
@@ -269,4 +270,100 @@ test('projects already logged are marked as duplicates', () => {
   const g = p.kits.find(k => k.title === 'Gamma');
   assert.equal(g.duplicate, true);
   assert.equal(g.duplicateId, 7);
+});
+
+/* ------------------------------------------------------- holds and choices */
+
+test('a chosen status is never overruled by the dates', () => {
+  const held = { status: 'onHold', date_started: '2026-08-01' };
+  assert.equal(statusFromDates(held), 'onHold', 'a held project must not snap back to started');
+  const gone = { status: 'abandoned', date_started: '2026-08-01' };
+  assert.equal(statusFromDates(gone), 'abandoned');
+});
+
+test('a wish list kit leaves the wish list as soon as it has a date', () => {
+  assert.equal(statusFromDates({ status: 'wishlist' }), 'wishlist');
+  assert.equal(statusFromDates({ status: 'wishlist', date_ordered: '2026-08-02' }), 'notReceived');
+});
+
+test('going on hold opens a period, coming off closes it', () => {
+  let p = { status: 'started', date_started: '2026-08-01' };
+  Object.assign(p, applyStatus(p, 'onHold', '2026-08-05'));
+  assert.equal(p.status, 'onHold');
+  assert.deepEqual(parseHolds(p), [{ held: '2026-08-05', restarted: null }]);
+  assert.ok(openHold(p), 'it is on hold now');
+  assert.equal(p.date_started, '2026-08-01', 'the start date survives the hold');
+
+  Object.assign(p, applyStatus(p, 'started', '2026-08-09'));
+  assert.deepEqual(parseHolds(p), [{ held: '2026-08-05', restarted: '2026-08-09' }]);
+  assert.equal(openHold(p), null, 'the period is closed');
+});
+
+test('every in and out is its own period', () => {
+  let p = { status: 'started', date_started: '2026-07-01' };
+  for (const [held, back] of [['2026-07-05', '2026-07-10'], ['2026-07-20', '2026-07-25']]) {
+    Object.assign(p, applyStatus(p, 'onHold', held));
+    Object.assign(p, applyStatus(p, 'started', back));
+  }
+  assert.deepEqual(parseHolds(p), [
+    { held: '2026-07-05', restarted: '2026-07-10' },
+    { held: '2026-07-20', restarted: '2026-07-25' }
+  ]);
+  assert.equal(heldDays(p, '2026-08-01'), 10, 'five days twice');
+});
+
+test('going on hold twice without coming off does not restart the clock', () => {
+  let p = { status: 'started', date_started: '2026-08-01' };
+  Object.assign(p, applyStatus(p, 'onHold', '2026-08-05'));
+  Object.assign(p, applyStatus(p, 'onHold', '2026-08-08'));
+  assert.deepEqual(parseHolds(p), [{ held: '2026-08-05', restarted: null }]);
+});
+
+test('an open hold counts up to today', () => {
+  const p = { status: 'onHold', holds: JSON.stringify([{ held: '2026-08-01', restarted: null }]) };
+  assert.equal(heldDays(p, '2026-08-11'), 10);
+});
+
+test('finishing or abandoning from a hold still closes the period', () => {
+  for (const end of ['completed', 'abandoned']) {
+    let p = { status: 'started', date_started: '2026-08-01' };
+    Object.assign(p, applyStatus(p, 'onHold', '2026-08-05'));
+    Object.assign(p, applyStatus(p, end, '2026-08-12'));
+    assert.equal(openHold(p), null, `${end} must close the hold`);
+    assert.deepEqual(parseHolds(p), [{ held: '2026-08-05', restarted: '2026-08-12' }]);
+  }
+});
+
+test('abandoning keeps the dates it earned', () => {
+  let p = { status: 'started', date_ordered: '2026-07-01', date_received: '2026-07-08',
+            date_started: '2026-07-10' };
+  Object.assign(p, applyStatus(p, 'abandoned', '2026-08-01'));
+  assert.equal(p.date_started, '2026-07-10');
+  assert.equal(p.date_completed, undefined, 'abandoned is not finished');
+});
+
+test('back to the wish list clears everything, holds included', () => {
+  let p = { status: 'started', date_ordered: '2026-07-01', date_received: '2026-07-08',
+            date_started: '2026-07-10' };
+  Object.assign(p, applyStatus(p, 'onHold', '2026-07-20'));
+  Object.assign(p, applyStatus(p, 'wishlist', '2026-08-01'));
+  assert.equal(p.date_ordered, null);
+  assert.equal(p.date_started, null);
+  assert.deepEqual(parseHolds(p), [], 'a kit you do not own has not been put down');
+});
+
+test('rewinding to before it was started throws the holds away', () => {
+  let p = { status: 'started', date_ordered: '2026-07-01', date_received: '2026-07-08',
+            date_started: '2026-07-10' };
+  Object.assign(p, applyStatus(p, 'onHold', '2026-07-20'));
+  Object.assign(p, applyStatus(p, 'received', '2026-08-01'));
+  assert.equal(p.date_started, null);
+  assert.deepEqual(parseHolds(p), [], 'a hold on something unstarted means nothing');
+});
+
+test('every status still reads back as itself', () => {
+  for (const status of ALL_STATUSES) {
+    const after = { status: 'notReceived', ...applyStatus({ status: 'notReceived' }, status, '2026-08-22') };
+    assert.equal(statusFromDates(after), status, `${status} must read back as itself`);
+  }
 });
