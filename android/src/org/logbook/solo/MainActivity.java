@@ -2,9 +2,11 @@ package org.logbook.solo;
 
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
+import android.content.ContentValues;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
+import android.provider.MediaStore;
 import android.os.Bundle;
 import android.util.Base64;
 import android.view.View;
@@ -51,6 +53,7 @@ public class MainActivity extends Activity {
 
     private WebView web;
     private ValueCallback<Uri[]> pendingFiles;
+    private Uri cameraOut;              // where a capture in progress will land
     private File store;
 
     @Override protected void onCreate(Bundle state) {
@@ -109,10 +112,13 @@ public class MainActivity extends Activity {
                 String[] extra = extraMimes(params);
                 if (extra.length > 1) pick.putExtra(Intent.EXTRA_MIME_TYPES, extra);
                 if (many) pick.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                Intent chooser = Intent.createChooser(pick, many ? "Add photos" : "Add a photo");
+                Intent camera = cameraIntent(params);
+                if (camera != null) chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[]{ camera });
                 try {
-                    startActivityForResult(Intent.createChooser(pick, many ? "Choose files" : "Choose a file"), FILE_CHOOSER);
+                    startActivityForResult(chooser, FILE_CHOOSER);
                     return true;
-                } catch (ActivityNotFoundException e) { pendingFiles = null; return false; }
+                } catch (ActivityNotFoundException e) { pendingFiles = null; cameraOut = null; return false; }
             }
         });
 
@@ -403,10 +409,44 @@ public class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int req, int result, Intent data) {
         if (req == FILE_CHOOSER) {
-            if (pendingFiles != null) { pendingFiles.onReceiveValue(urisFrom(result, data)); pendingFiles = null; }
+            Uri[] out = urisFrom(result, data);
+            /* The camera writes to the file we handed it and comes back with no
+               data at all, so an empty result plus a pending output means the
+               photo was taken. A cancelled capture leaves an empty row behind,
+               which is tidied up here rather than left in the gallery. */
+            if (out == null && cameraOut != null) {
+                if (result == RESULT_OK) out = new Uri[]{ cameraOut };
+                else try { getContentResolver().delete(cameraOut, null, null); } catch (Exception ignored) {}
+            }
+            cameraOut = null;
+            if (pendingFiles != null) { pendingFiles.onReceiveValue(out); pendingFiles = null; }
             return;
         }
         super.onActivityResult(req, result, data);
+    }
+
+    /* Offered alongside the file picker so a progress photo can be taken there
+       and then. MediaStore rather than a FileProvider: this app has no
+       dependencies, and FileProvider lives in a support library. */
+    private Intent cameraIntent(WebChromeClient.FileChooserParams params) {
+        String want = mimeFor(params);
+        if (want != null && !want.startsWith("image/") && !want.equals("*/*")) return null;
+        Intent take = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+        if (take.resolveActivity(getPackageManager()) == null) return null;
+        try {
+            ContentValues v = new ContentValues();
+            v.put(MediaStore.Images.Media.DISPLAY_NAME, "dazzle-diary-" + System.currentTimeMillis() + ".jpg");
+            v.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
+            cameraOut = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, v);
+            if (cameraOut == null) return null;
+            take.putExtra(MediaStore.EXTRA_OUTPUT, cameraOut);
+            take.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            return take;
+        } catch (Exception e) {
+            // no camera, or no room to write: the picker on its own still works
+            cameraOut = null;
+            return null;
+        }
     }
 
     private Uri[] urisFrom(int result, Intent data) {
