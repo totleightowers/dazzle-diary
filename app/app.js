@@ -1555,9 +1555,60 @@ route(/^#\/settings$/, async () => {
           ${isStandalone()
             ? 'Everything lives inside this app on your phone. Nothing is sent anywhere.'
             : 'Everything lives in <code>data/logbook.db</code> on this phone. Copy that file to back it up.'}</p>
+
+        <button class="btn ghost wide" style="margin-top:18px" data-go="#/licences">Open-source licences</button>
       </div>
     </div>
   </div>`;
+});
+
+/* ========================================================= #/licences
+   The two typefaces are under the SIL Open Font License, which allows them to
+   be embedded provided the notice and licence travel with them. Each font's
+   own licence file is shipped verbatim and shown here, rather than one shared
+   copy — nothing then rests on a judgement that the two are interchangeable. */
+const FONTS = [
+  { name: 'Karla', file: 'karla-OFL.txt',
+    copyright: 'Copyright 2019 The Karla Project Authors',
+    url: 'https://github.com/googlefonts/karla' },
+  { name: 'Newsreader', file: 'newsreader-OFL.txt',
+    copyright: 'Copyright 2020 The Newsreader Project Authors',
+    url: 'http://github.com/productiontype/Newsreader' }
+];
+
+route(/^#\/licences$/, async () => {
+  $app.innerHTML = `
+  <div class="screen">
+    <div class="topbar">${topbar('Open-source licences', { back: '#/settings', sub: true })}</div>
+    <div class="scroll pad stack" style="padding-top:18px;padding-bottom:26px">
+      <p style="margin:0;font-size:13px;line-height:1.55;color:var(--ink-mid)">
+        Dazzle Diary has no dependencies, but it sets its type in two open fonts.
+        Both are under the SIL Open Font License 1.1, reproduced in full below.</p>
+      ${FONTS.map((f) => `
+        <div>
+          <h3 class="label">${h(f.name)}</h3>
+          <div class="panel pad-in">
+            <p style="margin:0;font-size:13px;line-height:1.5">${h(f.copyright)}</p>
+            <p style="margin:4px 0 0;font-size:12px;color:var(--ink-mute);word-break:break-all">${h(f.url)}</p>
+            <p style="margin:8px 0 0;font-size:12px;color:var(--ink-mute)">
+              Licensed under the SIL Open Font License, Version 1.1.</p>
+            <details style="margin-top:10px">
+              <summary style="font-size:13px;font-weight:700;cursor:pointer">Full licence text</summary>
+              <pre class="licence" id="ofl-${h(f.file)}">Loading…</pre>
+            </details>
+          </div>
+        </div>`).join('')}
+    </div>
+  </div>`;
+
+  for (const f of FONTS) {
+    const box = document.getElementById('ofl-' + f.file);
+    if (!box) continue;
+    try {
+      const res = await fetch('/fonts/' + f.file);
+      box.textContent = res.ok ? await res.text() : 'The licence file is missing from this build.';
+    } catch { box.textContent = 'The licence file could not be read.'; }
+  }
 });
 
 /* -------------------------------------------------------------- job runner */

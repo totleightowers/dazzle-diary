@@ -219,3 +219,8 @@ the shops. Don't redistribute it.
 ## Licence
 
 MIT — see [LICENSE](LICENSE).
+
+The app embeds two typefaces, Karla and Newsreader, both under the SIL Open
+Font License 1.1. Their notices and the full licence text are in
+[THIRD_PARTY_LICENCES.md](THIRD_PARTY_LICENCES.md), bundled with the app, and
+shown under **Settings → Open-source licences**.
