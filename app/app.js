@@ -299,7 +299,7 @@ async function render() {
     const m = hash.match(re);
     if (m) {
       try { await fn(...m.slice(1)); }
-      catch (e) { $app.innerHTML = `<div class="screen"><div class="scroll pad"><div class="empty">
+      catch (e) { $app.innerHTML = `<div class="screen reading"><div class="scroll pad"><div class="empty">
         <h2>Something went wrong</h2><p>${h(e.message)}</p>
         <button class="btn ghost" data-go="#/">Back to the logbook</button></div></div></div>`; }
       window.scrollTo(0, 0);
@@ -532,7 +532,7 @@ route(/^#\/p\/(\d+)$/, async (id) => {
   const total = costs.reduce((n, [, v]) => n + Number(v || 0), 0);
 
   $app.innerHTML = `
-  <div class="screen">
+  <div class="screen reading">
     <div class="scroll">
       ${(() => {
         const shots = (() => {
@@ -821,7 +821,7 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
     : (p.cover ? '/covers/' + encodeURIComponent(p.cover) : null);
 
   $app.innerHTML = `
-  <div class="screen">
+  <div class="screen reading">
     <div class="topbar">
       ${topbar(isNew ? 'New project' : 'Edit project', { back: isNew ? '#/' : '#/p/' + id, sub: true })}
     </div>
@@ -1149,7 +1149,7 @@ route(/^#\/import$/, async () => {
 
 function paintNeedsCatalogue() {
   $app.innerHTML = `
-  <div class="screen">
+  <div class="screen reading">
     <div class="topbar">${topbar('Import orders', { back: '#/', sub: true })}</div>
     <div class="scroll pad stack" style="padding-top:20px">
       <div class="notice">${svg('info', 18)}<span>Before your orders can be matched, the app needs a copy of the
@@ -1163,7 +1163,7 @@ function paintNeedsCatalogue() {
 
 function paintImportPick() {
   $app.innerHTML = `
-  <div class="screen">
+  <div class="screen reading">
     <div class="topbar">${topbar('Import orders', { back: '#/', sub: true })}</div>
     <div class="scroll pad stack" style="padding-top:20px;padding-bottom:26px">
       <label class="dropzone" id="drop">
@@ -1220,7 +1220,7 @@ function paintImportReview() {
                 ['dupe', 'Logged ' + sum.duplicates], ['skipped', 'Skipped ' + sum.skipped]];
 
   $app.innerHTML = `
-  <div class="screen">
+  <div class="screen reading">
     <div class="topbar">
       ${topbar('Review import', { back: '#/', sub: true, right:
         `<button class="iconbtn" style="width:auto;padding:0 12px;margin-right:-12px;font-size:13px;font-weight:700;color:var(--accent)" data-act="toggleall">${allOn ? 'None' : 'Select all'}</button>` })}
@@ -1604,7 +1604,7 @@ route(/^#\/settings$/, async () => {
     };
   }, 0);
   $app.innerHTML = `
-  <div class="screen">
+  <div class="screen reading">
     <div class="topbar">${topbar('Settings', { back: '#/', sub: true })}</div>
     <div class="scroll pad stack" style="padding-top:18px;padding-bottom:26px">
       <div class="tiles">
@@ -1776,7 +1776,7 @@ const FONTS = [
 
 route(/^#\/licences$/, async () => {
   $app.innerHTML = `
-  <div class="screen">
+  <div class="screen reading">
     <div class="topbar">${topbar('Open-source licences', { back: '#/settings', sub: true })}</div>
     <div class="scroll pad stack" style="padding-top:18px;padding-bottom:26px">
       <p style="margin:0;font-size:13px;line-height:1.55;color:var(--ink-mid)">
@@ -1828,15 +1828,19 @@ async function runJob(jobId, box, done) {
    Long-press a card to pick it up, then drop it on another section to change
    its status. Pointer events rather than HTML5 drag-and-drop, which does not
    work on touch. Dates follow the new status, same as the edit form. */
-const DRAG = { id: null, from: null, ghost: null, over: null, timer: null, startX: 0, startY: 0, live: false };
+const DRAG = { id: null, from: null, ghost: null, over: null, timer: null,
+               startX: 0, startY: 0, live: false, pointerId: null, card: null };
 
 function dragCleanup() {
   clearTimeout(DRAG.timer);
+  try { if (DRAG.card && DRAG.pointerId != null) DRAG.card.releasePointerCapture(DRAG.pointerId); }
+  catch { /* it was never captured, or the pointer is already gone */ }
   DRAG.ghost?.remove();
   document.querySelectorAll('.group.drop-on').forEach((g) => g.classList.remove('drop-on'));
   document.querySelector('.card.lifted')?.classList.remove('lifted');
   document.body.classList.remove('dragging');
-  Object.assign(DRAG, { id: null, from: null, ghost: null, over: null, timer: null, live: false });
+  Object.assign(DRAG, { id: null, from: null, ghost: null, over: null, timer: null,
+                        live: false, pointerId: null, card: null });
 }
 
 function groupUnder(x, y) {
@@ -1848,6 +1852,7 @@ document.addEventListener('pointerdown', (e) => {
   const card = e.target.closest('.card[data-id]');
   if (!card || e.button === 2) return;
   DRAG.startX = e.clientX; DRAG.startY = e.clientY;
+  DRAG.pointerId = e.pointerId; DRAG.card = card;
   DRAG.timer = setTimeout(() => {
     DRAG.id = card.dataset.id;
     DRAG.from = card.dataset.status;
@@ -1864,6 +1869,9 @@ document.addEventListener('pointerdown', (e) => {
     ghost.style.top = r.top + 'px';
     document.body.appendChild(ghost);
     DRAG.ghost = ghost;
+    /* Keep every later event for this finger, even once it leaves the card or
+       the card is re-rendered underneath it. */
+    try { card.setPointerCapture(DRAG.pointerId); } catch { /* mouse, or gone */ }
     if (navigator.vibrate) navigator.vibrate(12);
   }, 320);
 }, { passive: true });
@@ -1876,7 +1884,6 @@ document.addEventListener('pointermove', (e) => {
     }
     return;
   }
-  e.preventDefault();
   DRAG.ghost.style.transform = `translate(${e.clientX - DRAG.startX}px, ${e.clientY - DRAG.startY}px)`;
   const g = groupUnder(e.clientX, e.clientY);
   if (g !== DRAG.over) {
@@ -1910,6 +1917,20 @@ document.addEventListener('pointerup', async () => {
     // whoever just did it does not need to be told how
     if (!S.prefs.hints?.drag) { await seenHint('drag'); paintLogbook(); }
   } catch (e) { toast(e.message); render(); }
+});
+
+/* The one that mattered: preventDefault() on pointermove does NOT stop the
+   page panning — only the touch event can, and only from a non-passive
+   listener. Without this the WebView takes the first movement as a scroll,
+   cancels the pointer, and the drag dies on the spot. */
+document.addEventListener('touchmove', (e) => {
+  if (DRAG.live) e.preventDefault();
+}, { passive: false });
+
+/* A long press on a card would otherwise raise the selection handles or the
+   image menu, which is what "it selects instead of dragging" was. */
+document.addEventListener('contextmenu', (e) => {
+  if (DRAG.live || e.target.closest('.card[data-id]')) e.preventDefault();
 });
 
 document.addEventListener('pointercancel', dragCleanup);
