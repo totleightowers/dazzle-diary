@@ -298,6 +298,20 @@ input[type=range]::-moz-range-track { height: 6px; border-radius: 999px; backgro
 input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border-radius: 999px;
   background: #fff; border: 2px solid var(--ink); }
 
+/* The slider is the progress bar. A separate bar above it showed the same
+   number twice, and only one of the two could be dragged. --fill is set inline
+   and updated as it moves. */
+input[type=range].progress { height: 34px; }
+input[type=range].progress::-webkit-slider-runnable-track {
+  height: 10px; border-radius: 999px;
+  background: linear-gradient(to right, var(--accent) 0 var(--fill, 0%), var(--sunken) var(--fill, 0%) 100%);
+}
+input[type=range].progress::-webkit-slider-thumb { margin-top: -8px; }
+input[type=range].progress::-moz-range-track {
+  height: 10px; border-radius: 999px;
+  background: linear-gradient(to right, var(--accent) 0 var(--fill, 0%), var(--sunken) var(--fill, 0%) 100%);
+}
+
 /* ------------------------------------------------------------------ import */
 .checkrow {
   display: flex; align-items: center; gap: 8px; min-height: 60px; padding: 11px;
