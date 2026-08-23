@@ -239,7 +239,7 @@ export async function localApi(path, opts = {}) {
 
   if (p === '/prefs' && m === 'GET') {
     const pr = (await idb.get('meta', 'prefs')) || {};
-    return { currency: pr.currency || 'GBP', excluded: pr.excluded || [] };
+    return { currency: pr.currency || 'GBP', excluded: pr.excluded || [], hints: pr.hints || {} };
   }
 
   if (p === '/prefs' && m === 'PATCH') {
@@ -247,8 +247,11 @@ export async function localApi(path, opts = {}) {
     const b = json();
     if (b.currency) prefs.currency = String(b.currency).slice(0, 3).toUpperCase();
     if (Array.isArray(b.excluded)) prefs.excluded = b.excluded;
+    // a hint is shown until it has been read; the flag has to outlive the session
+    if (b.hints && typeof b.hints === 'object')
+      prefs.hints = { ...(prefs.hints || {}), ...b.hints };
     await idb.put('meta', prefs, 'prefs');
-    return { currency: prefs.currency || 'GBP', excluded: prefs.excluded || [] };
+    return { currency: prefs.currency || 'GBP', excluded: prefs.excluded || [], hints: prefs.hints || {} };
   }
 
   if (p === '/catalogue/sync' && m === 'POST') {
