@@ -18,6 +18,12 @@ echo "1/7  bundle the web app"
 rm -rf assets/web build && mkdir -p assets/web build/compiled build/classes build/gen
 cp -r ../app/. assets/web/
 rm -f assets/web/*.apk
+# stamp the build so the app can say which one it is: "the new bits are not
+# there" and "you are running an older build" look identical from the outside
+VERSION=$(sed -n 's/.*android:versionName="\([^"]*\)".*/\1/p' AndroidManifest.xml)
+CODE=$(sed -n 's/.*android:versionCode="\([^"]*\)".*/\1/p' AndroidManifest.xml)
+printf '{"version":"%s","code":%s,"built":"%s"}\n' \
+  "$VERSION" "$CODE" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > assets/web/version.json
 
 echo "2/7  compile resources"
 aapt2 compile --dir res -o build/compiled/res.zip

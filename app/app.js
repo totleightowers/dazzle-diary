@@ -111,6 +111,13 @@ const ICON = {
   link: '<path d="M10.5 13.5a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.7 1.7"/><path d="M13.5 10.5a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.7-1.7"/>',
   gem: '<path d="M6 3h12l4 6-10 12L2 9l4-6z"/><path d="M2 9h20M9 3l-3 6 6 12M15 3l3 6-6 12"/>'
 };
+/* Every icon is drawn as an outline, which is right for all of them except a
+   star: an unfilled star does not read as "chosen". This one takes its fill
+   from the colour it is given, so CSS decides. */
+const star = (size = 24) =>
+  `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="var(--star-fill, none)"
+     stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">${ICON.star}</svg>`;
+
 const svg = (name, size = 20, sw = 1.7) => {
   // an unknown name used to render a silently empty box — a blank gap in the UI
   if (!ICON[name]) console.warn('missing icon:', name);
@@ -378,7 +385,7 @@ function paintLogbook() {
   const empty = !S.projects.length;
 
   $app.innerHTML = `
-  <div class="screen ${S.view}-view">
+  <div class="screen wide ${S.view}-view">
     <div class="topbar plain">
       ${topbar('My Logbook', { right: `
         <button class="iconbtn" data-go="#/settings" aria-label="Settings">${svg('cog')}</button>
@@ -515,7 +522,6 @@ route(/^#\/p\/(\d+)$/, async (id) => {
   const spec = [
     ['Canvas size', sizeText(p) + (p.width_in ? ` · ${p.width_in}" × ${p.height_in}"` : '')],
     ['Drill shape', p.shape], ['Coverage', p.coverage],
-    ['Rating', Number(p.rating) ? '\u2605'.repeat(p.rating) + '\u2606'.repeat(5 - p.rating) : null],
     ['Diamonds', p.drills ? (p.drills_estimated ? '\u2248 ' + num(p.drills) : num(p.drills)) : null], ['Colours', p.colors ? num(p.colors) : null],
     ['Special diamonds', p.special], ['Brand', p.brand], ['Obtained from', p.source]
   ].filter(([, v]) => v);
@@ -551,6 +557,9 @@ route(/^#\/p\/(\d+)$/, async (id) => {
       <div class="pad" style="padding-top:18px">
         <span class="statuspill" style="background:${stVar(p.status)}">
           <span class="dot" style="background:${stDot(p.status)}"></span>${h(STATUS[p.status].label)}</span>
+        ${Number(p.rating) ? `<span class="stars shown" aria-label="${p.rating} out of 5">${
+          [1, 2, 3, 4, 5].map((n) => `<span${n <= p.rating ? ' class="on"' : ''}>${star(19)}</span>`).join('')
+        }</span>` : ''}
         <h1 style="font-size:27px;line-height:1.15;margin:10px 0 2px">${h(p.title)}</h1>
         ${p.artist ? `<p style="margin:0;color:var(--ink-mute);font-size:14px">By ${h(p.artist)}${p.brand ? ' · ' + h(p.brand) : ''}</p>` : ''}
         ${(() => {
@@ -941,7 +950,7 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
         <div class="stars" id="rating" data-v="${Number(p.rating) || 0}">
           ${[1, 2, 3, 4, 5].map((n) => `
             <button type="button" data-k="${n}" aria-label="${n} star${n === 1 ? '' : 's'}"
-              aria-pressed="${(Number(p.rating) || 0) >= n}">${svg('star', 26)}</button>`).join('')}
+              aria-pressed="${(Number(p.rating) || 0) >= n}">${star(26)}</button>`).join('')}
           <button type="button" class="clearstars" data-k="0" aria-label="No rating">Clear</button>
         </div></div>
 
@@ -1415,7 +1424,7 @@ function paintBrowse(shops) {
     .concat(browseShops.filter(s => s.kits));
 
   $app.innerHTML = `
-  <div class="screen">
+  <div class="screen wide">
     <div class="topbar">
       ${topbar('Add from catalogue', { back: '#/', sub: true })}
       <div class="search">
@@ -1730,10 +1739,26 @@ route(/^#\/settings$/, async () => {
             : 'Everything lives in <code>data/logbook.db</code> on this phone. Copy that file to back it up.'}</p>
 
         <button class="btn ghost wide" style="margin-top:18px" data-go="#/licences">Open-source licences</button>
+        <p id="buildline" style="margin:10px 2px 0;font-size:12px;color:var(--ink-faint);text-align:center"></p>
       </div>
     </div>
   </div>`;
+
+  showBuild();
 });
+
+/* Which build is this? Without it, "the new thing is missing" and "you are
+   running last week's APK" look exactly the same from the outside. */
+async function showBuild() {
+  const el = document.getElementById('buildline');
+  if (!el) return;
+  try {
+    const res = await fetch('/version.json');
+    if (!res.ok) return;
+    const v = await res.json();
+    el.textContent = `Dazzle Diary ${v.version} (${v.code}) · built ${String(v.built).slice(0, 10)}`;
+  } catch { /* the served build has no stamp; say nothing rather than guess */ }
+}
 
 /* ========================================================= #/licences
    The two typefaces are under the SIL Open Font License, which allows them to
@@ -1828,6 +1853,8 @@ document.addEventListener('pointerdown', (e) => {
     DRAG.from = card.dataset.status;
     DRAG.live = true;
     document.body.classList.add('dragging');   // reveals the empty sections
+    // a selection may already have started before the press was long enough
+    try { window.getSelection()?.removeAllRanges(); } catch { /* older webview */ }
     card.classList.add('lifted');
     const r = card.getBoundingClientRect();
     const ghost = card.cloneNode(true);
