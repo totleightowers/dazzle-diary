@@ -437,6 +437,11 @@ select.fld {
   display: flex; align-items: center; justify-content: center;
   background: rgba(255, 255, 255, .17);
 }
+.lightbox-bar {
+  position: absolute; left: 0; right: 0;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 18px);
+  display: flex; justify-content: center; padding: 0 16px;
+}
 @keyframes lightbox-in { from { opacity: 0 } to { opacity: 1 } }
 @media (prefers-reduced-motion: reduce) { .lightbox { animation: none } }
 .photos .add { aspect-ratio: 1; height: auto; width: 100%; flex-direction: column; gap: 5px;

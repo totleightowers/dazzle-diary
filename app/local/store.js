@@ -49,6 +49,21 @@ function catFor(shopId) {
   };
 }
 
+/* A cover taken from your own photo is named so the rest of the app can tell
+   it from one fetched off a listing: backfill leaves it alone, and relinking
+   to another product does not throw it away. */
+export const isOwnCover = (f) => !!f && /^own-/.test(String(f));
+
+/** Pull a project's cover gallery off its listing. Returns [] if it has none. */
+async function listingCovers(row) {
+  if (!row.dac_handle) return [];
+  const c = cache.rows.find(r => r.shop === (row.shop || 'dac') && r.handle === row.dac_handle);
+  if (!c || !c.image) return [];
+  const urls = Array.isArray(c.images) ? c.images
+    : (() => { try { return JSON.parse(c.images || '[]'); } catch { return []; } })();
+  return cacheGallery(`${row.shop || 'dac'}-${row.dac_handle}`, urls.length ? urls : [c.image]);
+}
+
 /** Fetch covers for any project still missing one. Safe to call repeatedly. */
 export async function backfillCovers(onProgress) {
   await catalogue();
@@ -436,7 +451,22 @@ export async function localApi(path, opts = {}) {
     if (m === 'GET') return withPhotos(row);
     if (m === 'PATCH') {
       const body = json();
+      // pointing a project at a different listing makes the old pictures wrong;
+      // a cover you chose yourself is yours and survives the relink
+      const relinked = 'dac_handle' in body && (body.dac_handle || null) !== (row.dac_handle || null);
       for (const f of PROJECT_FIELDS) if (f in body) row[f] = body[f];
+      if (relinked && !isOwnCover(row.cover)) { row.cover = null; row.covers = null; }
+      if (relinked) {
+        try {
+          await catalogue();
+          const g = await listingCovers(row);
+          if (g.length) {
+            const own = isOwnCover(row.cover) ? [row.cover] : [];
+            row.cover = own[0] || g[0];
+            row.covers = JSON.stringify([...own, ...g]);
+          }
+        } catch { /* covers are cosmetic; never fail a save over them */ }
+      }
       row.updated_at = nowIso();
       await idb.put('projects', row);
       return withPhotos(row);
@@ -448,6 +478,50 @@ export async function localApi(path, opts = {}) {
       }
       await idb.del('projects', id);
       return { ok: true };
+    }
+  }
+
+  const cv = p.match(/^\/projects\/(\d+)\/cover$/);
+  if (cv) {
+    const id = Number(cv[1]);
+    const row = await idb.get('projects', id);
+    if (!row) throw Object.assign(new Error('Not found'), { status: 404 });
+    const previous = row.cover;
+    const gallery = (() => { try { return JSON.parse(row.covers || '[]'); } catch { return []; } })();
+
+    if (m === 'POST') {
+      const file = json().photo;
+      const mine = await idb.byIndex('photos', 'project_id', id);
+      if (!file || !mine.some(x => x.file === file))
+        throw Object.assign(new Error('That photo is not on this project.'), { status: 400 });
+      const res = await fetch('/photos/' + encodeURIComponent(file));
+      if (!res.ok) throw Object.assign(new Error('Could not read that photo.'), { status: 500 });
+      const ext = (String(file).match(/\.[a-z0-9]+$/i) || ['.jpg'])[0];
+      const name = `own-${id}-${Date.now()}-${Math.floor(Math.random() * 1e6)}${ext}`;
+      if (!await saveFile('covers/' + name, await res.arrayBuffer()))
+        throw Object.assign(new Error('Could not save that cover.'), { status: 500 });
+      // the listing's pictures stay in the carousel behind your own
+      const rest = gallery.filter(f => !isOwnCover(f));
+      row.cover = name;
+      row.covers = JSON.stringify([name, ...rest]);
+      if (isOwnCover(previous) && previous !== name) Native()?.remove('covers/' + previous);
+      row.updated_at = nowIso();
+      await idb.put('projects', row);
+      return withPhotos(row);
+    }
+
+    if (m === 'DELETE') {
+      for (const f of gallery.filter(isOwnCover)) Native()?.remove('covers/' + f);
+      if (isOwnCover(previous)) Native()?.remove('covers/' + previous);
+      row.cover = null; row.covers = null;
+      try {
+        await catalogue();
+        const g = await listingCovers(row);
+        if (g.length) { row.cover = g[0]; row.covers = g.length > 1 ? JSON.stringify(g) : null; }
+      } catch { /* leaving it blank is recoverable; the next sync backfills it */ }
+      row.updated_at = nowIso();
+      await idb.put('projects', row);
+      return withPhotos(row);
     }
   }
 
