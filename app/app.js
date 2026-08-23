@@ -505,8 +505,8 @@ route(/^#\/p\/(\d+)$/, async (id) => {
             <span class="tnum" style="font-size:13px;color:var(--ink-mute)" id="placed">${
               p.drills ? num(Math.round(p.drills * (p.progress || 0) / 100)) + ' of ' + num(p.drills) + ' placed' : 'placed'}</span>
           </div>
-          <div class="progressline" style="margin-top:14px;height:10px"><i id="pctbar" style="width:${p.progress || 0}%"></i></div>
-          <input type="range" min="0" max="100" value="${p.progress || 0}" id="pct" style="margin-top:6px">
+          <input type="range" min="0" max="100" value="${p.progress || 0}" id="pct" class="progress"
+                 aria-label="Progress" style="--fill:${p.progress || 0}%;margin-top:14px">
           <p style="margin:2px 0 0;font-size:12px;color:var(--ink-mute)">Drag to log where you are today. Saved automatically.</p>
         </div>` : ''}
 
@@ -602,7 +602,7 @@ route(/^#\/p\/(\d+)$/, async (id) => {
     pct.oninput = (e) => {
       const v = Number(e.target.value);
       document.getElementById('pctv').textContent = v + '%';
-      document.getElementById('pctbar').style.width = v + '%';
+      e.target.style.setProperty('--fill', v + '%');
       if (p.drills) document.getElementById('placed').textContent =
         num(Math.round(p.drills * v / 100)) + ' of ' + num(p.drills) + ' placed';
       clearTimeout(t);
