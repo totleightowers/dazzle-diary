@@ -1516,16 +1516,19 @@ route(/^#\/settings$/, async () => {
 
       <div>
         <h3 class="label">Your data</h3>
-        <button class="btn ghost wide" data-act="export">Export logbook as CSV</button>
+        <button class="btn primary wide" data-act="backup">Create a full backup</button>
+        <div id="backupbox"></div>
+        <p style="margin:8px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
+          Projects and progress photos, in one file. Lands in your <strong>Downloads</strong> folder as
+          <code>dazzle-diary-backup.json</code>. It is the only copy of your logbook that exists
+          anywhere else, so take one now and then.</p>
         ${isStandalone() ? `
         <label class="btn ghost wide" style="margin-top:10px">Restore from a backup file
           <input type="file" accept=".json,application/json" id="restore" hidden></label>
-        <div id="restorebox"></div>` : `
-        <button class="btn ghost wide" style="margin-top:10px" data-act="backup">Download a full backup</button>
-        <div id="backupbox"></div>
+        <div id="restorebox"></div>` : ''}
+        <button class="btn ghost wide" style="margin-top:10px" data-act="export">Export logbook as CSV</button>
         <p style="margin:8px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
-          Projects and progress photos. Lands in your <strong>Downloads</strong> folder as
-          <code>dazzle-diary-backup.json</code>, ready to restore into the standalone app.</p>`}
+          A spreadsheet of the projects — no photos, so it is not a backup.</p>
         <p style="margin:8px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
           ${isStandalone()
             ? 'Everything lives inside this app on your phone. Nothing is sent anywhere.'
