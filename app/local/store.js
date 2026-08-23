@@ -804,18 +804,22 @@ export async function localApi(path, opts = {}) {
 
   if (p === '/stats') {
     const rows = await projects();
-    const sum = (f) => rows.reduce((n, r) => n + (Number(r[f]) || 0), 0);
     const byArtist = {};
-    rows.forEach(r => { if (r.artist) byArtist[r.artist] = (byArtist[r.artist] || 0) + 1; });
-    /* A wish list kit is not owned and an abandoned one will not be finished,
-       so neither belongs in "diamonds still to place" — counting them would
-       make the number grow every time you window-shop. */
-    const owned = rows.filter(r => r.status !== 'wishlist' && r.status !== 'abandoned');
+    /* A wish list kit has not been bought, so nothing about it is a fact yet:
+       not its price, not its diamonds, not the shop you would have bought it
+       from. It stays out of every total. An abandoned one is different — you
+       did pay for it, and you did own those diamonds — so it counts towards
+       what you have spent, and only out of what is left to place. */
+    const bought = rows.filter(r => r.status !== 'wishlist');
+    const owned = bought.filter(r => r.status !== 'abandoned');
     const placed = Math.round(owned.reduce((n, r) => n + (r.status === 'completed'
       ? (Number(r.drills) || 0)
       : (Number(r.drills) || 0) * (Number(r.progress) || 0) / 100), 0));
+    const sum = (f, list = bought) => list.reduce((n, r) => n + (Number(r[f]) || 0), 0);
+    bought.forEach(r => { if (r.artist) byArtist[r.artist] = (byArtist[r.artist] || 0) + 1; });
     return {
-      projects: rows.length, drills: sum('drills'), hours: sum('hours'), spend: sum('price'),
+      projects: rows.length, wishlist: rows.length - bought.length,
+      drills: sum('drills'), hours: sum('hours'), spend: sum('price'),
       completed: rows.filter(r => r.status === 'completed').length,
       placed,
       remaining: Math.max(0, owned.reduce((n, r) => n + (Number(r.drills) || 0), 0) - placed),
@@ -824,14 +828,14 @@ export async function localApi(path, opts = {}) {
                       .map(([status, n]) => ({ status, n })),
       topArtists: Object.entries(byArtist).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
                         .slice(0, 8).map(([artist, n]) => ({ artist, n })),
-      topShops: Object.values(rows.reduce((a, r) => {
+      topShops: Object.values(bought.reduce((a, r) => {
         const k = r.brand || r.source || r.shop || 'Unknown';
         a[k] = a[k] || { shop: k, n: 0, spend: 0 };
         a[k].n++; a[k].spend += Number(r.price) || 0;
         return a;
       }, {})).map(v => ({ ...v, spend: Math.round(v.spend * 100) / 100 }))
         .sort((a, b) => b.n - a.n || b.spend - a.spend).slice(0, 8),
-      spendBy: Object.entries(rows.filter(r => r.price != null).reduce((a, r) => {
+      spendBy: Object.entries(bought.filter(r => r.price != null).reduce((a, r) => {
         const c = r.currency || 'GBP';
         a[c] = a[c] || { currency: c, total: 0, n: 0 };
         a[c].total += Number(r.price) || 0; a[c].n++;
