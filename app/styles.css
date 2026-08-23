@@ -324,6 +324,11 @@ input[type=range].progress::-moz-range-track {
   background: linear-gradient(to right, var(--accent) 0 var(--fill, 0%), var(--sunken) var(--fill, 0%) 100%);
 }
 
+/* An empty section is only worth showing when there is something to drop in it */
+.empty-sect { display: none; }
+body.dragging .empty-sect { display: block; }
+body.dragging .empty-sect .group-body { min-height: 56px; }
+
 .minilabel { display: block; margin-bottom: 5px; font-size: 10px; font-weight: 700;
              letter-spacing: .05em; text-transform: uppercase; color: var(--ink-mute); }
 

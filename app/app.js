@@ -362,6 +362,9 @@ function paintLogbook() {
 
   // keep empty sections visible when everything is shown, so there is always
   // somewhere to drop a card
+  /* Seven sections, most of them empty most of the time, is a lot of nothing to
+     scroll past. They are rendered all the same and hidden in CSS, so a drag
+     still has somewhere to drop — the body gets a class while one is live. */
   const showEmpty = S.filter === 'all' && !S.q.trim();
   const groups = ORDER
     .map((k) => ({ k, items: S.projects.filter((p) => p.status === k).filter(match) }))
@@ -405,7 +408,7 @@ function paintLogbook() {
       ${needsCatalogue ? firstRunSync() : ''}
       ${!needsCatalogue && !empty && S.projects.length > 1 && !S.prefs.hints?.drag ? dragHint() : ''}
       ${empty ? emptyLogbook() : groups.map((g) => `
-        <section class="group" data-status="${g.k}">
+        <section class="group${g.items.length ? '' : ' empty-sect'}" data-status="${g.k}">
           <header><span class="dot" style="background:${stDot(g.k)}"></span>
             <h2>${h(STATUS[g.k].label)}</h2><span class="n tnum">${g.items.length}</span></header>
           <div class="group-body">${g.items.map(card).join('')}</div>
@@ -1236,7 +1239,7 @@ function paintImportReview() {
         </section>` : ''}
 
       ${groups.map((g) => `
-        <section class="group" data-status="${g.k}">
+        <section class="group${g.items.length ? '' : ' empty-sect'}" data-status="${g.k}">
           <header><span class="dot" style="background:${g.k === 'none' ? 'var(--ink-faint)' : stDot(g.k)}"></span>
             <h2>${h(g.label)}</h2><span class="n tnum">${g.items.length}</span></header>
           <div class="group-body">${g.items.map((r) => importRow(r)).join('')}</div>
@@ -1587,7 +1590,8 @@ route(/^#\/settings$/, async () => {
     <div class="topbar">${topbar('Settings', { back: '#/', sub: true })}</div>
     <div class="scroll pad stack" style="padding-top:18px;padding-bottom:26px">
       <div class="tiles">
-        <div class="tile"><div class="big tnum">${num(stats.projects)}</div><div class="cap">projects</div></div>
+        <div class="tile"><div class="big tnum">${num(stats.projects)}</div>
+          <div class="cap">projects${stats.wishlist ? ` · ${num(stats.wishlist)} wished for` : ''}</div></div>
         <div class="tile"><div class="big tnum">${num(stats.completed)}</div><div class="cap">completed</div></div>
         <div class="tile"><div class="big tnum">${num(Math.round(stats.hours))}</div><div class="cap">hours logged</div></div>
         <div class="tile"><div class="big tnum">${(stats.spendBy && stats.spendBy[0])
@@ -1797,6 +1801,7 @@ function dragCleanup() {
   DRAG.ghost?.remove();
   document.querySelectorAll('.group.drop-on').forEach((g) => g.classList.remove('drop-on'));
   document.querySelector('.card.lifted')?.classList.remove('lifted');
+  document.body.classList.remove('dragging');
   Object.assign(DRAG, { id: null, from: null, ghost: null, over: null, timer: null, live: false });
 }
 
@@ -1813,6 +1818,7 @@ document.addEventListener('pointerdown', (e) => {
     DRAG.id = card.dataset.id;
     DRAG.from = card.dataset.status;
     DRAG.live = true;
+    document.body.classList.add('dragging');   // reveals the empty sections
     card.classList.add('lifted');
     const r = card.getBoundingClientRect();
     const ghost = card.cloneNode(true);
