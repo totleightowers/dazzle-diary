@@ -1517,7 +1517,7 @@ function paintBrowseBody() {
   if (countEl) countEl.textContent = B.items.length
     ? `${B.items.length}${B.more ? '+' : ''} kit${B.items.length === 1 ? '' : 's'}` : '';
   body.innerHTML = `
-    <div class="group-body" style="grid-template-columns:repeat(2,minmax(0,1fr));padding:16px 0 0">
+    <div class="group-body" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr));padding:16px 0 0">
       ${B.items.map((c, i) => `
         <button class="card cat-card" style="flex-direction:column" data-act="pickcat" data-i="${i}"${
           c.shop ? ` data-shop="${h(c.shop)}"` : ''}>
@@ -1756,7 +1756,17 @@ async function showBuild() {
     const res = await fetch('/version.json');
     if (!res.ok) return;
     const v = await res.json();
-    el.textContent = `Dazzle Diary ${v.version} (${v.code}) · built ${String(v.built).slice(0, 10)}`;
+    /* The width the app actually has, and whether the wide rules are in force.
+       Three attempts at this layout were reasoned from pixels in a screenshot
+       and all three were wrong; one line here settles it. */
+    const w = Math.round(window.innerWidth || 0);
+    const dpr = window.devicePixelRatio || 1;
+    const wide = window.matchMedia && window.matchMedia('(min-width: 620px)').matches;
+    const shell = Math.round(document.getElementById('app')?.getBoundingClientRect().width || 0);
+    const group = Math.round(document.querySelector('.group')?.getBoundingClientRect().width || 0);
+    el.textContent = `Dazzle Diary ${v.version} (${v.code}) · built ${String(v.built).slice(0, 10)}`
+      + ` · ${w}px @${dpr}x · shell ${shell} · wide rules ${wide ? 'on' : 'OFF'}`
+      + (group ? ` · section ${group}` : '');
   } catch { /* the served build has no stamp; say nothing rather than guess */ }
 }
 
