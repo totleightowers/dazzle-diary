@@ -351,6 +351,14 @@ export async function localApi(path, opts = {}) {
     };
   }
 
+  /* One catalogue row, for a project that has no cached cover: the picture can
+     still be shown straight from the shop while the cache catches up. */
+  if (p === '/catalogue/product' && m === 'GET') {
+    const shop = q(url, 'shop'), handle = q(url, 'handle');
+    if (!shop || !handle) return null;
+    return (cache && cache.rows || []).find(r => r.shop === shop && r.handle === handle) || null;
+  }
+
   if (p === '/catalogue/search' || p === '/catalogue/browse') {
     const shop = q(url, 'shop');
     const limit = Math.min(60, Number(q(url, 'limit')) || 30);

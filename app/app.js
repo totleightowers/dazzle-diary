@@ -519,6 +519,15 @@ const emptyLogbook = () => `
 /* =============================================================== #/p/:id */
 route(/^#\/p\/(\d+)$/, async (id) => {
   const p = await api('/projects/' + id);
+  /* A cover is cached the first time a project uses one, and that can fail —
+     no connection, a shop that has moved its pictures. Rather than show a
+     blank hero, borrow the listing's own image until the cache catches up. */
+  if (!p.cover && p.dac_handle && p.shop) {
+    try {
+      const row = await api(`/catalogue/product?shop=${encodeURIComponent(p.shop)}&handle=${encodeURIComponent(p.dac_handle)}`);
+      if (row && row.image) p._remote = row.image;
+    } catch { /* offline: the hero simply stays empty */ }
+  }
   const spec = [
     ['Canvas size', sizeText(p) + (p.width_in ? ` · ${p.width_in}" × ${p.height_in}"` : '')],
     ['Drill shape', p.shape], ['Coverage', p.coverage],
@@ -539,11 +548,13 @@ route(/^#\/p\/(\d+)$/, async (id) => {
           try { const a = JSON.parse(p.covers || '[]'); if (a.length) return a; } catch {}
           return p.cover ? [p.cover] : [];
         })();
+        const src = (f) => f.startsWith('http') ? sized(f, 900) : '/covers/' + encodeURIComponent(f);
+        if (!shots.length && p._remote) shots.push(p._remote);
         return `<div class="hero" style="background:${stVar(p.status)}">
-        ${shots.length ? `<span class="wash" id="herowash" style="background-image:url('/covers/${
-          encodeURIComponent(shots[0])}')"></span>
+        ${shots.length ? `<span class="wash" id="herowash" style="background-image:url('${
+          h(src(shots[0]))}')"></span>
         <div class="shots" id="shots">${shots.map((f) =>
-          `<img src="/covers/${encodeURIComponent(f)}" alt="" loading="lazy">`).join('')}</div>` : ''}
+          `<img src="${h(src(f))}" alt="" loading="lazy" referrerpolicy="no-referrer">`).join('')}</div>` : ''}
         <div class="overlay"></div>
         <div class="controls">
           <button class="iconbtn" data-back="#/" aria-label="Back">${svg('back', 20, 2)}</button>
@@ -887,10 +898,7 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
         ${f('source', 'Obtained from', p.source, '', 'span2')}
       </div>
 
-      <details class="sect"${(() => {
-        const any = ['date_ordered', 'date_received', 'date_started', 'date_completed'].some((k) => p[k]);
-        return any || parseHolds(p).length ? '' : ' open';
-      })()}>
+      <details class="sect" open>
         <summary><span class="label" style="margin:0">Dates</span>
           <span class="sub tnum">${(() => {
             const set = [['Ordered', p.date_ordered], ['Received', p.date_received],
