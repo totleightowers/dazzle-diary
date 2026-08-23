@@ -235,7 +235,11 @@ img { max-width: 100%; display: block; }
 .list-view .group-body { grid-template-columns: minmax(0, 1fr); }
 .list-view .card { flex-direction: row; }
 .list-view .card .thumb { width: 78px; height: 78px; }
-.grid-view .group-body { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* Columns follow the width that is actually available, at every size: two on a
+   phone, seven unfolded, without a media query having to match first. Every
+   previous attempt keyed this off a breakpoint, and when the breakpoint did not
+   match the way I assumed, the grid stayed at two columns on a large screen. */
+.grid-view .group-body { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
 .grid-view .card { flex-direction: column; }
 .grid-view .card .thumb { width: 100%; height: 116px; }
 
@@ -568,9 +572,6 @@ select.fld {
   .screen.reading > .actionbar > * { max-width: 760px; margin-left: auto; margin-right: auto; }
   .screen.reading > .scroll > .hero { max-width: none; }
 
-  /* lists of cards: as many columns as fit */
-  .grid-view .group-body,
-  #browsebody .group-body { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)) !important; }
   .grid-view .card .thumb { height: 160px; }
 
   .screen.wide > .topbar > *, .screen.wide > .scroll, .screen.wide > .actionbar > * { max-width: 1500px;
