@@ -1,9 +1,9 @@
 {
-  "name": "diamond-painting-logbook",
-  "version": "2.23.0",
+  "name": "dazzle-diary",
+  "version": "2.24.0",
   "private": true,
   "type": "module",
-  "description": "An offline-first diamond painting logbook that runs entirely on an Android phone",
+  "description": "Dazzle Diary — an offline-first diamond painting logbook that runs entirely on an Android phone",
   "license": "MIT",
   "scripts": {
     "test": "node --test test/*.test.mjs",
