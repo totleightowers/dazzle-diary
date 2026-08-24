@@ -439,6 +439,7 @@ function paintLogbook() {
       </div>
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
         <span style="font-size:13px;font-weight:600;color:var(--ink-mid)">
+          <span id="layoutline" style="font-weight:400;color:var(--ink-faint);font-size:11px"></span>
           ${shown} project${shown === 1 ? '' : 's'}${
             S.filter !== 'all' ? ` <span style="color:var(--ink-mute);font-weight:400">· ${
               h(STATUS[S.filter].short.toLowerCase())}</span>` : ''}</span>
@@ -474,6 +475,7 @@ function paintLogbook() {
     input.oninput = (e) => { S.q = e.target.value; paintLogbookBody(); syncClear(); };
   }
   syncClear();
+  showLayout();
 }
 
 // keep the clear button in step with the field without repainting the input itself
@@ -509,6 +511,7 @@ function paintLogbookBody() {
     : `<div class="empty">${svg('gem', 40, 1.3)}<h2>Nothing matches that</h2>
        <p>Try a different title or artist, or clear the filters.</p></div>`;
   $list.querySelector('.label').textContent = `${shown} project${shown === 1 ? '' : 's'}`;
+  showLayout();
 }
 
 /* Nothing works properly until the catalogues are on the phone: no covers, no
@@ -1805,6 +1808,18 @@ route(/^#\/settings$/, async () => {
 
 /* Which build is this? Without it, "the new thing is missing" and "you are
    running last week's APK" look exactly the same from the outside. */
+/* The same numbers as the Settings line, but on the logbook, because that is
+   the screen that gets photographed when the layout is wrong. */
+function showLayout() {
+  const el = document.getElementById('layoutline');
+  if (!el) return;
+  const w = Math.round(window.innerWidth || 0);
+  const dpr = window.devicePixelRatio || 1;
+  const two = twoPane();
+  const shell = Math.round($app.getBoundingClientRect ? $app.getBoundingClientRect().width : 0);
+  el.textContent = `${w}px @${dpr}x · ${two ? '2-pane' : '1-pane'} · shell ${shell} · `;
+}
+
 async function showBuild() {
   const el = document.getElementById('buildline');
   if (!el) return;
