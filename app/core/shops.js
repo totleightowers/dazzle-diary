@@ -234,6 +234,11 @@ export const SHOPS = [
   }
 ];
 
+/* One list, used by the editor and by Settings. They disagreed: the editor
+   offered three currencies and Settings four, so opening a CAD project and
+   saving any field at all submitted a null currency and lost it. */
+export const CURRENCIES = ['GBP', 'USD', 'EUR', 'CAD', 'AUD', 'NZD'];
+
 export const shopById = (id) => SHOPS.find(s => s.id === id) || null;
 export const shopHue = (id) => (shopById(id) || {}).hue ?? null;
 

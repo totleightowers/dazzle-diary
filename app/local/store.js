@@ -496,6 +496,10 @@ export async function localApi(path, opts = {}) {
     const ts = nowIso();
     const row = { created_at: ts, updated_at: ts, hours: 0, progress: 0 };
     for (const f of PROJECT_FIELDS) if (body[f] !== undefined) row[f] = body[f];
+    if (Number(row.progress) >= 100 && row.status !== 'completed' && row.status !== 'abandoned') {
+      row.status = 'completed';
+      if (!row.date_completed) row.date_completed = ts.slice(0, 10);
+    }
     const id = await idb.put('projects', row);
     return withPhotos(await idb.get('projects', id));
   }
@@ -523,6 +527,14 @@ export async function localApi(path, opts = {}) {
             row.covers = JSON.stringify([...own, ...g]);
           }
         } catch { /* covers are cosmetic; never fail a save over them */ }
+      }
+      /* Finishing a canvas means the same thing wherever it is said. The slider
+         on the project page enforced it and the form did not, so the form could
+         leave a project at 100% and still Started with no completion date. The
+         rule belongs here, where every route passes through. */
+      if (Number(row.progress) >= 100 && row.status !== 'completed' && row.status !== 'abandoned') {
+        row.status = 'completed';
+        if (!row.date_completed) row.date_completed = nowIso().slice(0, 10);
       }
       row.updated_at = nowIso();
       await idb.put('projects', row);

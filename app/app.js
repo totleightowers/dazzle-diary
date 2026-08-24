@@ -1,7 +1,7 @@
 import { api, isStandalone } from './api.js';
 import { statusFromDates, applyStatus, parseHolds, openHold, heldDays,
          ALL_STATUSES } from './core/status.js';
-import { productUrl, shopById, displayCurrency, SHOPS } from './core/shops.js';
+import { productUrl, shopById, displayCurrency, SHOPS, CURRENCIES } from './core/shops.js';
 const SHOP_BY_NAME = Object.fromEntries(SHOPS.map((s) => [s.name, s]));
 /* Dazzle Diary — the whole client. Vanilla; no build step. */
 
@@ -996,7 +996,10 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
         ${f('hoursShown', 'Time logged', p.hours ? minsText(Math.round(p.hours * 60)) : '—',
              'disabled style="opacity:.6" title="Added as sessions on the project"')}
         <div><span class="label">Currency</span>
-          <div class="opts" id="currency">${['GBP', 'USD', 'EUR'].map((k) =>
+          <div class="opts" id="currency" data-was="${h(p.currency || '')}">${
+          /* whatever this project is priced in is always offered, even if it is
+             not one we normally list, so saving can never silently drop it */
+          [...new Set([...CURRENCIES, ...(p.currency ? [p.currency] : [])])].map((k) =>
             `<button type="button" class="opt" data-k="${k}" aria-pressed="${(p.currency || 'GBP') === k}" style="padding:0 6px">${k}</button>`).join('')}</div></div>
         ${f('sold_price', 'If sold, at what price', p.sold_price, 'inputmode="decimal"', 'span2')}
       </div>
@@ -1760,7 +1763,7 @@ route(/^#\/settings$/, async () => {
 
       <div>
         <h3 class="label">You shop in</h3>
-        <div class="seg">${['GBP', 'USD', 'EUR', 'CAD'].map((c) =>
+        <div class="seg">${CURRENCIES.map((c) =>
           `<button data-act="cur" data-k="${c}" aria-pressed="${S.prefs.currency === c}">${SYMBOL[c]} ${c}</button>`).join('')}</div>
         <p style="margin:8px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
           Most of these shops quote the same figure in every market — Diamond Art Club's 62.99 is $62.99
@@ -2187,7 +2190,8 @@ async function handleClick(e) {
     const titleEl = document.getElementById('title');
     const body = {
       title: val('title'), artist: val('artist') || null, status: seg('status'),
-      shape: seg('shape'), coverage: seg('coverage'), currency: seg('currency'),
+      shape: seg('shape'), coverage: seg('coverage'),
+      currency: seg('currency') || document.getElementById('currency')?.dataset.was || null,
       width_in: numOf('width_in'), height_in: numOf('height_in'),
       colors: numOf('colors'), drills: numOf('drills'), special: val('special') || null,
       brand: val('brand') || null, source: val('source') || null,
