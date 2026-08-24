@@ -88,7 +88,7 @@ export function parseHtml(html) {
 
 /* ---------------------------------------------------------------- matching */
 
-const SIMPLE = /^(?<tag>[a-zA-Z][\w-]*)?(?<rest>(?:[#.][\w-]+|\[[^\]]+\]|:not\([^)]*\)|::?[\w-]+(?:\([^)]*\))?)*)$/;
+const SIMPLE = /^(?<tag>[a-zA-Z][\w-]*)?(?<rest>(?:[#.][\w-]+|\[[^\]]+\]|:not\([^)]*\)|::?(?!not\()[\w-]+(?:\([^)]*\))?)*)$/;
 
 function matchesSimple(el, sel) {
   const m = SIMPLE.exec(sel);
