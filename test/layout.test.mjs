@@ -26,6 +26,22 @@ for (const w of [1028, 1180]) {
      fm && fm['grid-template-columns'] && /auto-fit/.test(fm['grid-template-columns'].val),
      fm && fm['grid-template-columns'] ? fm['grid-template-columns'].val : 'none');
 }
+/* Auto side margins on a flex item shrink it to its content instead of filling
+   it to the cap, which had every section of Settings at a different width. */
+for (const w of [1028, 1236]) {
+  const sections = `<div id="app" class="two-pane"><main id="main"><div class="screen reading">
+    <div class="scroll pad stack"><div class="tiles"></div><div><div class="panel"></div></div></div>
+  </div></main></div>`;
+  for (const sel of ['.tiles', '.scroll.stack > div']) {
+    const c = at(sections, sel, w);
+    ok(`${sel} takes the whole measure at ${w}px`,
+       c && c.width && c.width.val === '100%', c && c.width ? c.width.val : 'no width set');
+    ok(`${sel} is still capped at ${w}px`,
+       c && c['max-width'] && /1080px/.test(c['max-width'].val),
+       c && c['max-width'] ? c['max-width'].val : 'uncapped');
+  }
+}
+
 // and on a phone neither does
 const narrow = at(form, '.scroll.stack', 390);
 ok('the form is a plain stack on a phone', narrow && !narrow['grid-template-columns'],
