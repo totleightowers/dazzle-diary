@@ -549,6 +549,21 @@ select.fld {
 .progressline { height: 6px; border-radius: 999px; background: var(--sunken); overflow: hidden; }
 .progressline > i { display: block; height: 100%; background: var(--accent); transition: width .25s ease; }
 
+/* ------------------------------------------------------------ tablet mode
+   Two panes: the logbook on the left, whatever is open on the right. Each pane
+   is its own column with its own scroll, so opening a project does not lose
+   your place in the list. */
+#app.two-pane { flex-direction: row; }
+#app.two-pane > #side {
+  width: clamp(320px, 34%, 460px); flex: 0 0 auto; min-width: 0; min-height: 0;
+  display: flex; flex-direction: column; border-right: 1px solid var(--line);
+}
+#app.two-pane > #main {
+  flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column;
+}
+#app.two-pane > #side .actionbar { padding-left: 12px; padding-right: 12px; }
+#app.two-pane > #side .card .name { font-size: 14px; }
+
 /* On a phone the app is the screen. Unfolded, or on a tablet, a column that
    stays phone-width wastes most of the display — but simply making everything
    wider is not the answer either, because a 1200px line of notes is horrible
@@ -569,7 +584,7 @@ select.fld {
      was doing. */
   .screen.reading > .topbar > *,
   .screen.reading > .scroll > *,
-  .screen.reading > .actionbar > * { max-width: 760px; margin-left: auto; margin-right: auto; }
+  .screen.reading > .actionbar > * { max-width: min(1080px, 100%); margin-left: auto; margin-right: auto; }
   .screen.reading > .scroll > .hero { max-width: none; }
 
   .grid-view .card .thumb { height: 160px; }
@@ -580,6 +595,19 @@ select.fld {
 }
 @media (min-width: 1000px) {
   .grid-view .card .thumb { height: 180px; }
+
+  /* A form on a wide screen was a phone-shaped ribbon of fields with the rest
+     of the display empty. The groups flow into columns instead — each one is a
+     labelled block, so they read the same side by side as stacked. */
+  .screen.reading > .scroll.stack {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+    gap: 16px 20px; align-items: start;
+  }
+  .screen.reading > .scroll.stack > * { max-width: none; }
+  /* the things that want a whole row to themselves */
+  .screen.reading > .scroll.stack > .formshot,
+  .screen.reading > .scroll.stack > .tiles,
+  .screen.reading > .scroll.stack > details.sect { grid-column: 1 / -1; }
 }
 
 /* ------------------------------------------------------- shop identity
