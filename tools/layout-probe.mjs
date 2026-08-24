@@ -90,13 +90,13 @@ export function parseHtml(html) {
 
 /* ---------------------------------------------------------------- matching */
 
-const SIMPLE = /^(?<tag>[a-zA-Z][\w-]*)?(?<rest>(?:[#.][\w-]+|\[[^\]]+\]|:not\([^)]*\)|::?(?!not\()[\w-]+(?:\([^)]*\))?)*)$/;
+const SIMPLE = /^(?<tag>[a-zA-Z][\w-]*|\*)?(?<rest>(?:[#.][\w-]+|\[[^\]]+\]|:not\([^)]*\)|::?(?!not\()[\w-]+(?:\([^)]*\))?)*)$/;
 
 function matchesSimple(el, sel) {
   const m = SIMPLE.exec(sel);
   if (!m) return false;
   const { tag, rest } = m.groups;
-  if (tag && tag !== '*' && el.tag !== tag) return false;
+  if (tag && tag !== '*' && el.tag !== tag) return false;   // '*' matches anything
   for (const part of rest.matchAll(/[#.][\w-]+|\[[^\]]+\]|:not\([^)]*\)|::?[\w-]+(?:\([^)]*\))?/g)) {
     const p = part[0];
     if (p.startsWith('.')) { if (!el.classes.includes(p.slice(1))) return false; }

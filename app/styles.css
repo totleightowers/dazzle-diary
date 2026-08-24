@@ -590,9 +590,23 @@ select.fld {
      its class should spill to full width, which is merely ugly, instead of
      collapsing to a column in the middle of a large display, which is what it
      was doing. */
-  .screen.reading > .topbar > *,
-  .screen.reading > .scroll > *,
   .screen.reading > .actionbar > * { max-width: min(1080px, 100%); margin-left: auto; margin-right: auto; }
+
+  /* .topbar is a flex column too, so its title row was shrinking to the width
+     of the words and centring — which is why the back arrow sat beside the
+     title instead of at the edge of the measure. */
+  .screen.reading > .topbar > * {
+    width: 100%; max-width: min(1080px, 100%); margin-left: auto; margin-right: auto;
+  }
+
+  /* The sections of a screen are flex items in a column, and auto side margins
+     on a flex item do not fill it out to its max-width — they shrink it to its
+     own content and centre that. Which is why Settings had every block at a
+     different width: the tiles as wide as two tiles, the artist list as wide as
+     the longest name. width: 100% makes each one take the measure. */
+  .screen.reading > .scroll > * {
+    width: 100%; max-width: min(1080px, 100%); margin-left: auto; margin-right: auto;
+  }
   .screen.reading > .scroll > .hero { max-width: none; }
 
   .grid-view .card .thumb { height: 160px; }
