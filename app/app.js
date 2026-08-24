@@ -315,6 +315,20 @@ const back = (fallback = '#/') => {
 
 async function render() {
   const hash = location.hash || '#/';
+
+  /* Leaving the form — by the back arrow, Cancel, or the phone's own Back —
+     asks first if anything was typed. Saying "keep editing" puts the form back
+     with what was typed still in it, which is the only version of this that is
+     any use. */
+  if (editing && hash !== editing.hash) {
+    if (formIsDirty() && !confirm('Discard your changes?')) {
+      restoreForm = readForm();
+      location.hash = editing.hash;
+      return;
+    }
+    editing = null;
+  }
+
   const two = setupPanes();
 
   /* On a tablet the logbook is always there on the left, whatever is open on
@@ -390,6 +404,63 @@ function daysText(from, to, precomputed) {
   if (n < 60) return `${Math.round(n / 7)} weeks`;
   return `${Math.round(n / 30.4)} months`;
 }
+
+/* Leaving a long form by accident loses everything typed into it, so the form
+   remembers what it looked like when it opened and compares before it goes.
+   Every value the save would send is included, or a change to one of them
+   would slip past unnoticed. */
+const FORM_FIELDS = ['title', 'artist', 'special', 'brand', 'source', 'width_in', 'height_in',
+  'colors', 'drills', 'price', 'shipping', 'tax', 'sold_price', 'progress', 'notes', 'shop',
+  'date_ordered', 'date_received', 'date_started', 'date_completed'];
+const FORM_SEGS = ['status', 'shape', 'coverage', 'currency'];
+
+function readForm() {
+  const out = {};
+  for (const id of FORM_FIELDS) {
+    const el = document.getElementById(id);
+    if (el) out[id] = String(el.value ?? '');
+  }
+  for (const g of FORM_SEGS) {
+    const b = document.querySelector(`#${g} .opt[aria-pressed="true"]`);
+    out[g] = b ? b.dataset.k : '';
+  }
+  out.rating = document.getElementById('rating')?.dataset.v ?? '';
+  const t = document.getElementById('title');
+  out.__handle = t?.dataset.handle ?? '';
+  out.__holds = t?.dataset.holds ?? '';
+  return out;
+}
+
+function applyForm(vals) {
+  if (!vals) return;
+  for (const id of FORM_FIELDS) {
+    const el = document.getElementById(id);
+    if (el && vals[id] !== undefined) el.value = vals[id];
+  }
+  for (const g of FORM_SEGS) {
+    document.querySelectorAll(`#${g} .opt`).forEach((o) =>
+      o.setAttribute('aria-pressed', o.dataset.k === vals[g]));
+  }
+  const stars = document.getElementById('rating');
+  if (stars && vals.rating !== undefined) {
+    stars.dataset.v = vals.rating;
+    stars.querySelectorAll('button[data-k]').forEach((x) =>
+      x.setAttribute('aria-pressed', Number(x.dataset.k) > 0 && Number(x.dataset.k) <= Number(vals.rating || 0)));
+  }
+  const t = document.getElementById('title');
+  if (t) { t.dataset.handle = vals.__handle ?? ''; t.dataset.holds = vals.__holds ?? ''; }
+}
+
+/* The form being edited, if any: where it lives, what it looked like when it
+   opened, and anything typed into it that has to survive "keep editing". */
+let editing = null;
+let restoreForm = null;
+
+const formIsDirty = () => {
+  if (!editing) return false;
+  const now = readForm();
+  return Object.keys(now).some((k) => now[k] !== editing.opened[k]);
+};
 
 async function seenHint(k) {
   S.prefs.hints = { ...(S.prefs.hints || {}), [k]: true };
@@ -1155,6 +1226,10 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
   };
   paintLink();
 
+  // anything typed before a "keep editing" comes back before the snapshot is taken
+  if (restoreForm) { applyForm(restoreForm); restoreForm = null; noteDates(); cmHint(); recalc(); }
+  editing = { hash: location.hash, opened: readForm() };
+
   // catalogue autocomplete: fills everything DAC knows
   const titleEl = document.getElementById('title'), sugg = document.getElementById('sugg');
   let st;
@@ -1175,24 +1250,52 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
       sugg._hits = hits;
     }, 220);
   };
+  /* Picking a suggestion and relinking look like the same thing — "this project
+     is that kit" — but one fills a dozen fields from the catalogue and the
+     other only moves the pointer. Anything already typed is worth more than the
+     catalogue's version of it, so it says what it is about to replace, and
+     declining links without overwriting. */
   sugg.onclick = (e) => {
     const b = e.target.closest('[data-act="usecat"]'); if (!b) return;
     const c = (sugg._hits || []).find((x) => x.handle === b.dataset.h); if (!c) return;
-    titleEl.value = c.title;
-    const set = (id, v) => { const el = document.getElementById(id); if (el && v != null) el.value = v; };
-    set('artist', c.artist); set('colors', c.colors); set('drills', c.drills);
-    set('special', c.special); set('width_in', c.width_in); set('height_in', c.height_in);
     const shopName = (shopById(c.shop) || {}).name || null;
-    set('brand', shopName); set('source', shopName);
-    const shopSel = document.getElementById('shop');
-    if (shopSel) shopSel.value = c.shop || '';
+
+    const fields = [
+      ['title', 'name', c.title], ['artist', 'artist', c.artist],
+      ['colors', 'colours', c.colors], ['drills', 'diamonds', c.drills],
+      ['special', 'special diamonds', c.special],
+      ['width_in', 'width', c.width_in], ['height_in', 'height', c.height_in],
+      ['brand', 'brand', shopName], ['source', 'obtained from', shopName],
+      ['price', 'price', c.price]
+    ];
+    const clash = fields.filter(([id, , val]) => {
+      const el = document.getElementById(id);
+      const have = String(el?.value ?? '').trim();
+      return have && val != null && have !== String(val);
+    }).map(([, label]) => label);
+
+    const link = () => {
+      titleEl.dataset.handle = c.handle;
+      titleEl.dataset.shop = c.shop || '';
+      const shopSel = document.getElementById('shop');
+      if (shopSel && c.shop) shopSel.value = c.shop;
+      sugg.innerHTML = ''; paintLink();
+    };
+
+    if (clash.length && !confirm(
+        `Fill this in from the catalogue?\n\nIt replaces what you have for: ${clash.join(', ')}.`)) {
+      link();
+      toast('Linked — your details kept');
+      return;
+    }
+
+    const set = (id, v) => { const el = document.getElementById(id); if (el && v != null) el.value = v; };
+    for (const [id, , val] of fields) set(id, val);
     for (const [g, val] of [['shape', c.shape], ['coverage', c.coverage]]) {
       document.querySelectorAll(`#${g} .opt`).forEach((o) => o.setAttribute('aria-pressed', o.dataset.k === val));
     }
-    document.getElementById('title').dataset.handle = c.handle;
-    document.getElementById('title').dataset.shop = c.shop || '';
-    set('price', c.price);
-    sugg.innerHTML = ''; cmHint(); recalc(); paintLink();
+    link();
+    cmHint(); recalc();
     toast('Filled from the catalogue');
   };
 });
@@ -2222,6 +2325,7 @@ async function handleClick(e) {
       const saved = id
         ? await api('/projects/' + id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
         : await api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      editing = null;               // saved, so leaving is not losing anything
       toast('Saved');
       // editing returns to the project you were looking at; a brand new one
       // takes the form's place so Back does not reopen the empty form
@@ -2230,6 +2334,7 @@ async function handleClick(e) {
     } catch (err) { el.disabled = false; toast(err.message); }
   }
   else if (act === 'delete') {
+    editing = null;
     if (!confirm('Delete this project and its photos? This cannot be undone.')) return;
     await api('/projects/' + el.dataset.id, { method: 'DELETE' });
     toast('Project deleted');
