@@ -239,7 +239,15 @@ img { max-width: 100%; display: block; }
    phone, seven unfolded, without a media query having to match first. Every
    previous attempt keyed this off a breakpoint, and when the breakpoint did not
    match the way I assumed, the grid stayed at two columns on a large screen. */
-.grid-view .group-body { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.grid-view .group-body {
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+}
+@media (min-width: 620px) {
+  .grid-view .group-body {
+    grid-template-columns: repeat(auto-fill, minmax(190px, 260px));
+    justify-content: start;
+  }
+}
 .grid-view .card { flex-direction: column; }
 .grid-view .card .thumb { width: 100%; height: 116px; }
 

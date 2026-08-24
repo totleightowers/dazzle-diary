@@ -11,3 +11,22 @@ python3 tools/mkicon.py
 It writes `app/icon.svg`, the three web icons, and the five launcher densities
 (legacy, adaptive background, adaptive foreground). Edit `ROWS`, `PLACED` and
 `SPARKLE` at the top to change the design.
+
+## Seeing the layout without a browser
+
+`layout-probe.mjs` resolves the cascade at a given viewport width. It is not a
+renderer: it answers "at this width, which rules win for this element, and what
+do the properties that decide the layout come out as?" — which is the question
+that otherwise gets guessed at from screenshots.
+
+```sh
+node tools/layout-probe.mjs 1028
+```
+
+`preview.mjs` serves `app/` over HTTP so the same code can be opened in an
+ordinary browser at any width. If it lays out correctly there and wrongly in
+the app, the problem is the WebView rather than the CSS.
+
+```sh
+node tools/preview.mjs     # http://localhost:8788
+```
