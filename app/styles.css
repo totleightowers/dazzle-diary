@@ -605,17 +605,20 @@ select.fld {
   .grid-view .card .thumb { height: 180px; }
 
   /* A form on a wide screen was a phone-shaped ribbon of fields with the rest
-     of the display empty. The groups flow into columns instead — each one is a
-     labelled block, so they read the same side by side as stacked. */
-  .screen.reading > .scroll.stack {
+     of the display empty. Its groups flow into columns instead — each one is a
+     labelled block, so they read the same side by side as stacked.
+
+     Only the form. Settings is a sequence of sections that belong in an order,
+     and dealing them into columns scattered them: a heading in one column, its
+     panel in another, nothing lining up. */
+  .screen.reading.form > .scroll.stack {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
     gap: 16px 20px; align-items: start;
   }
-  .screen.reading > .scroll.stack > * { max-width: none; }
+  .screen.reading.form > .scroll.stack > * { max-width: none; }
   /* the things that want a whole row to themselves */
-  .screen.reading > .scroll.stack > .formshot,
-  .screen.reading > .scroll.stack > .tiles,
-  .screen.reading > .scroll.stack > details.sect { grid-column: 1 / -1; }
+  .screen.reading.form > .scroll.stack > .formshot,
+  .screen.reading.form > .scroll.stack > details.sect { grid-column: 1 / -1; }
 }
 
 /* ------------------------------------------------------- shop identity
