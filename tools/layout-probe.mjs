@@ -24,14 +24,16 @@ const CSS = readFileSync(new URL('../app/styles.css', import.meta.url), 'utf8');
 function parseCss(css) {
   const out = [];
   const src = css.replace(/\/\*[\s\S]*?\*\//g, '');
-  let i = 0;
-  const readBlock = (from) => {                 // returns [body, endIndex]
+  /* Scans the text it is given, not the whole stylesheet. Reading from the
+     outer string while parsing the inside of an @media block silently dropped
+     every rule in it — which made the tool answer confidently and wrongly. */
+  const readBlock = (text, from) => {           // returns [body, endIndex]
     let depth = 0, j = from;
-    for (; j < src.length; j++) {
-      if (src[j] === '{') depth++;
-      else if (src[j] === '}') { depth--; if (!depth) break; }
+    for (; j < text.length; j++) {
+      if (text[j] === '{') depth++;
+      else if (text[j] === '}') { depth--; if (!depth) break; }
     }
-    return [src.slice(from + 1, j), j + 1];
+    return [text.slice(from + 1, j), j + 1];
   };
   const rules = (text, minWidth) => {
     let k = 0;
@@ -39,7 +41,7 @@ function parseCss(css) {
       const brace = text.indexOf('{', k);
       if (brace < 0) break;
       const selector = text.slice(k, brace).trim();
-      const [body, end] = readBlock(brace);
+      const [body, end] = readBlock(text, brace);
       if (selector.startsWith('@media')) {
         const m = selector.match(/min-width:\s*(\d+)px/);
         rules(body, m ? Math.max(minWidth, Number(m[1])) : Infinity);
