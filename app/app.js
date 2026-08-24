@@ -6,6 +6,26 @@ const SHOP_BY_NAME = Object.fromEntries(SHOPS.map((s) => [s.name, s]));
 /* Dazzle Diary — the whole client. Vanilla; no build step. */
 
 const $app = document.getElementById('app');
+
+/* Tablet mode is two panes, not a wider column: the logbook stays on the left
+   while a project, a form or the settings open beside it. Everything still
+   renders through the same routes — they just paint into $out, which is the
+   whole shell on a phone and the right-hand pane on a tablet. $list is where
+   the logbook goes, which on a tablet is the left pane and never moves. */
+const TWO_PANE = '(min-width: 900px)';
+const twoPane = () => !!(window.matchMedia && window.matchMedia(TWO_PANE).matches);
+let $list = $app, $out = $app;
+
+function setupPanes() {
+  const two = twoPane();
+  const already = !!document.getElementById('side');
+  if (two && !already) $app.innerHTML = '<aside id="side"></aside><main id="main"></main>';
+  if (!two && already) $app.innerHTML = '';
+  if (two) $app.classList.add('two-pane'); else $app.classList.remove('two-pane');
+  $list = two ? document.getElementById('side') : $app;
+  $out = two ? document.getElementById('main') : $app;
+  return two;
+}
 window.__logbookReady = true;
 
 /* --------------------------------------------------------------- theme */
@@ -295,11 +315,28 @@ const back = (fallback = '#/') => {
 
 async function render() {
   const hash = location.hash || '#/';
+  const two = setupPanes();
+
+  /* On a tablet the logbook is always there on the left, whatever is open on
+     the right — that is the whole point of the mode. */
+  if (two) {
+    try { await loadLogbook(); } catch { /* the right pane still works */ }
+    if (hash === '#/' || hash === '') {
+      $out.innerHTML = `<div class="screen reading"><div class="scroll pad"><div class="empty">
+        ${svg('gem', 40, 1.3)}<h2>Pick a project</h2>
+        <p>Or add one from the catalogue.</p>
+        <button class="btn primary" data-go="#/browse">${svg('search', 18)} Add from catalogue</button>
+      </div></div></div>`;
+      window.scrollTo(0, 0);
+      return;
+    }
+  }
+
   for (const [re, fn] of routes) {
     const m = hash.match(re);
     if (m) {
       try { await fn(...m.slice(1)); }
-      catch (e) { $app.innerHTML = `<div class="screen reading"><div class="scroll pad"><div class="empty">
+      catch (e) { $out.innerHTML = `<div class="screen reading"><div class="scroll pad"><div class="empty">
         <h2>Something went wrong</h2><p>${h(e.message)}</p>
         <button class="btn ghost" data-go="#/">Back to the logbook</button></div></div></div>`; }
       window.scrollTo(0, 0);
@@ -310,11 +347,12 @@ async function render() {
 }
 
 /* ==================================================================== #/ */
-route(/^#\/$/, async () => {
+async function loadLogbook() {
   const [projects, meta] = await Promise.all([api('/projects'), api('/state')]);
   S.projects = projects; S.meta = meta;
   paintLogbook();
-});
+}
+route(/^#\/$/, loadLogbook);
 
 /* Hold periods and sessions are different things — one is when you were not
    working, kept in step with the status; the other is when you were, and is
@@ -384,7 +422,7 @@ function paintLogbook() {
   const needsCatalogue = !S.meta?.catalogue?.kits;
   const empty = !S.projects.length;
 
-  $app.innerHTML = `
+  $list.innerHTML = `
   <div class="screen wide ${S.view}-view">
     <div class="topbar plain">
       ${topbar('My Logbook', { right: `
@@ -440,7 +478,7 @@ function paintLogbook() {
 
 // keep the clear button in step with the field without repainting the input itself
 function syncClear() {
-  const wrap = $app.querySelector('.search');
+  const wrap = $list.querySelector('.search');
   if (!wrap) return;
   const has = !!S.q;
   const btn = wrap.querySelector('[data-act="clearq"]');
@@ -461,7 +499,7 @@ function paintLogbookBody() {
   const groups = ORDER.map((k) => ({ k, items: S.projects.filter((p) => p.status === k).filter(match) }))
                       .filter((g) => g.items.length);
   const shown = groups.reduce((n, g) => n + g.items.length, 0);
-  const scroll = $app.querySelector('.scroll');
+  const scroll = $list.querySelector('.scroll');
   scroll.innerHTML = groups.length ? groups.map((g) => `
     <section class="group" data-status="${g.k}">
       <header><span class="dot" style="background:${stDot(g.k)}"></span>
@@ -470,7 +508,7 @@ function paintLogbookBody() {
     </section>`).join('')
     : `<div class="empty">${svg('gem', 40, 1.3)}<h2>Nothing matches that</h2>
        <p>Try a different title or artist, or clear the filters.</p></div>`;
-  $app.querySelector('.label').textContent = `${shown} project${shown === 1 ? '' : 's'}`;
+  $list.querySelector('.label').textContent = `${shown} project${shown === 1 ? '' : 's'}`;
 }
 
 /* Nothing works properly until the catalogues are on the phone: no covers, no
@@ -540,7 +578,7 @@ route(/^#\/p\/(\d+)$/, async (id) => {
   const costs = [['Price', p.price], ['Shipping', p.shipping], ['Tax', p.tax]].filter(([, v]) => v != null);
   const total = costs.reduce((n, [, v]) => n + Number(v || 0), 0);
 
-  $app.innerHTML = `
+  $out.innerHTML = `
   <div class="screen reading">
     <div class="scroll">
       ${(() => {
@@ -827,11 +865,20 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
      on it, so there was nothing to confirm you had picked the right one. The
      catalogue's own image is used before the project exists; afterwards it is
      the cover that was cached for it. */
+  /* The picture came only from a browse pick before, so arriving any other way
+     — a title suggestion, a relink, editing later — showed a form with no
+     picture on it. Take it from whatever listing the project is linked to. */
+  if (!p._preview && !p.cover && p.dac_handle && p.shop) {
+    try {
+      const row = await api(`/catalogue/product?shop=${encodeURIComponent(p.shop)}&handle=${encodeURIComponent(p.dac_handle)}`);
+      if (row && row.image) p._preview = row.image;
+    } catch { /* offline: the form simply has no picture */ }
+  }
   const preview = p._preview
     ? sized(p._preview, 600)
     : (p.cover ? '/covers/' + encodeURIComponent(p.cover) : null);
 
-  $app.innerHTML = `
+  $out.innerHTML = `
   <div class="screen reading">
     <div class="topbar">
       ${topbar(isNew ? 'New project' : 'Edit project', { back: isNew ? '#/' : '#/p/' + id, sub: true })}
@@ -1156,7 +1203,7 @@ route(/^#\/import$/, async () => {
 });
 
 function paintNeedsCatalogue() {
-  $app.innerHTML = `
+  $out.innerHTML = `
   <div class="screen reading">
     <div class="topbar">${topbar('Import orders', { back: '#/', sub: true })}</div>
     <div class="scroll pad stack" style="padding-top:20px">
@@ -1170,7 +1217,7 @@ function paintNeedsCatalogue() {
 }
 
 function paintImportPick() {
-  $app.innerHTML = `
+  $out.innerHTML = `
   <div class="screen reading">
     <div class="topbar">${topbar('Import orders', { back: '#/', sub: true })}</div>
     <div class="scroll pad stack" style="padding-top:20px;padding-bottom:26px">
@@ -1227,7 +1274,7 @@ function paintImportReview() {
   const tabs = [['new', 'New ' + sum.newKits], ['all', 'All ' + sum.kits],
                 ['dupe', 'Logged ' + sum.duplicates], ['skipped', 'Skipped ' + sum.skipped]];
 
-  $app.innerHTML = `
+  $out.innerHTML = `
   <div class="screen reading">
     <div class="topbar">
       ${topbar('Review import', { back: '#/', sub: true, right:
@@ -1399,7 +1446,7 @@ route(/^#\/browse$/, async () => {
   if (S.browse.loaded && S.browse.items.length) {
     paintBrowseBody();
     requestAnimationFrame(() => {
-      const sc = $app.querySelector('.scroll');
+      const sc = $out.querySelector('.scroll');
       if (sc) sc.scrollTop = S.browse.scroll || 0;
     });
   } else {
@@ -1431,7 +1478,7 @@ function paintBrowse(shops) {
   const chips = [{ id: null, name: 'All shops', kits: browseShops.reduce((n, s) => n + s.kits, 0) }]
     .concat(browseShops.filter(s => s.kits));
 
-  $app.innerHTML = `
+  $out.innerHTML = `
   <div class="screen wide">
     <div class="topbar">
       ${topbar('Add from catalogue', { back: '#/', sub: true })}
@@ -1611,7 +1658,7 @@ route(/^#\/settings$/, async () => {
       } catch (e) { box.innerHTML = ''; toast(e.message); }
     };
   }, 0);
-  $app.innerHTML = `
+  $out.innerHTML = `
   <div class="screen reading">
     <div class="topbar">${topbar('Settings', { back: '#/', sub: true })}</div>
     <div class="scroll pad stack" style="padding-top:18px;padding-bottom:26px">
@@ -1794,7 +1841,7 @@ const FONTS = [
 ];
 
 route(/^#\/licences$/, async () => {
-  $app.innerHTML = `
+  $out.innerHTML = `
   <div class="screen reading">
     <div class="topbar">${topbar('Open-source licences', { back: '#/settings', sub: true })}</div>
     <div class="scroll pad stack" style="padding-top:18px;padding-bottom:26px">
@@ -2267,6 +2314,13 @@ async function handleClick(e) {
     await api('/photos/' + el.dataset.id, { method: 'DELETE' });
     render();
   }
+}
+
+if (window.matchMedia) {
+  const mq = window.matchMedia(TWO_PANE);
+  const onChange = () => render();
+  if (mq.addEventListener) mq.addEventListener('change', onChange);
+  else if (mq.addListener) mq.addListener(onChange);
 }
 
 window.addEventListener('hashchange', (e) => {
