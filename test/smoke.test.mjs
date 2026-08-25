@@ -142,15 +142,21 @@ test('a double tap zooms the viewer and a second one restores it', async () => {
   assert.ok(m.find('.lb-strip'), 'zooming closed the viewer');
 });
 
-test('pulling the logbook down updates the catalogues', async () => {
+test('pulling the catalogue down updates it', async () => {
   const m = await mount();
   await m.seed({ title: 'Moon Eater', status: 'started' });
-  await m.go('#/');
-  const scroll = m.find('.scroll');
+  await m.go('#/browse');
+  await m.settle();
+  const scroll = m.find('#browsebody');
   const text = () => m.find('#pulltext')?.textContent || '';
   const touch = (type, y) => scroll.dispatchEvent({ type, touches: y == null ? [] : [{ clientY: y }] });
 
   assert.ok(m.find('#pull'), 'there is nowhere for the pull to show');
+  // and it is not on the logbook, where refreshing a catalogue means nothing
+  await m.go('#/');
+  assert.equal(m.find('#pull'), null, 'the logbook still offers to refresh catalogues');
+  await m.go('#/browse');
+  await m.settle();
   scroll.scrollTop = 0;
   touch('touchstart', 100);
   touch('touchmove', 160);
@@ -235,4 +241,82 @@ test('the project leads with managing it, not with editing the record', async ()
   assert.match(edit.textContent, /Details/);
   await m.go(`#/p/${p.id}/edit`);
   assert.match(m.text(), /Project details/, 'the form still calls itself Edit project');
+});
+
+test('a kit not in hand is not offered a session', async () => {
+  const m = await mount();
+  for (const [status, expected] of [['wishlist', false], ['notReceived', false],
+                                    ['received', true], ['started', true]]) {
+    const p = await m.seed({ title: status, status,
+                             date_received: status === 'received' ? '2026-08-01' : null,
+                             date_started: status === 'started' ? '2026-08-01' : null });
+    await m.go('#/p/' + p.id);
+    assert.equal(!!m.find('[data-act="starttimer"]'), expected,
+                 `${status} ${expected ? 'should' : 'should not'} offer to time a session`);
+  }
+});
+
+test('logging time starts a project that had not been started', async () => {
+  const m = await mount();
+  const p = await m.seed({ title: 'Waiting', status: 'received', date_received: '2026-08-01' });
+  await m.api(`/projects/${p.id}/sessions`, { method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ minutes: 45, on: '2026-08-20' }) });
+  const after = await m.api('/projects/' + p.id);
+  assert.equal(after.status, 'started');
+  assert.ok(after.date_started, 'it was started without a date');
+
+  // but a finished or held project keeps what you said about it
+  for (const status of ['completed', 'abandoned', 'onHold']) {
+    const q = await m.seed({ title: status, status, date_started: '2026-07-01' });
+    await m.api(`/projects/${q.id}/sessions`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ minutes: 10, on: '2026-08-20' }) });
+    assert.equal((await m.api('/projects/' + q.id)).status, status,
+                 `logging time changed a ${status} project`);
+  }
+});
+
+test('a kit picked from the catalogue shows its pictures and a way to the shop', async () => {
+  const m = await mount();
+  await m.sync();
+  await m.go('#/browse');
+  await m.tap('[data-act="pickcat"]');
+
+  assert.ok(m.all('#formshots img').length > 1, 'the form shows only one of the shop pictures');
+  assert.equal(m.find('#formshots img').getAttribute('data-act'), 'opengallery',
+               'the pictures on the form do not open');
+  const link = m.find('.shoplink');
+  assert.ok(link, 'no way to see the kit at the shop before adding it');
+  assert.match(link.getAttribute('href'), /diamondartclub\.com\/products\//);
+
+  await m.tap('#formshots img');
+  assert.ok(m.find('.lb-strip'), 'tapping a picture on the form opened nothing');
+  assert.equal(m.all('.lb-slide').length, m.all('#formshots img').length || 1);
+});
+
+test('a picture can be pinched, panned and pinched back', async () => {
+  const m = await mount();
+  await m.sync();
+  const p = await m.seed({ title: 'Moon Eater', status: 'started', shop: 'dac', dac_handle: 'moon-eater' });
+  await m.go('#/p/' + p.id);
+  await m.tap('.shots img');
+  const box = m.find('.lightbox'), slide = m.find('.lb-slide');
+  const two = (d) => [{ clientX: 200 - d / 2, clientY: 400 }, { clientX: 200 + d / 2, clientY: 400 }];
+
+  box.dispatchEvent({ type: 'touchstart', touches: two(100) });
+  box.dispatchEvent({ type: 'touchmove', touches: two(300), preventDefault() {} });
+  assert.ok(Number(slide.dataset.scale) > 2, 'pinching out did not enlarge it');
+  box.dispatchEvent({ type: 'touchend', touches: [] });
+
+  box.dispatchEvent({ type: 'touchstart', touches: [{ clientX: 200, clientY: 400 }] });
+  box.dispatchEvent({ type: 'touchmove', touches: [{ clientX: 260, clientY: 430 }], preventDefault() {} });
+  assert.equal(slide.dataset.ox, '60', 'a zoomed picture cannot be moved');
+  box.dispatchEvent({ type: 'touchend', touches: [] });
+
+  box.dispatchEvent({ type: 'touchstart', touches: two(300) });
+  box.dispatchEvent({ type: 'touchmove', touches: two(60), preventDefault() {} });
+  box.dispatchEvent({ type: 'touchend', touches: [] });
+  assert.equal(slide.dataset.scale, '1', 'pinching back in did not restore it');
+  assert.ok(!slide.classList.contains('zoomed'));
 });

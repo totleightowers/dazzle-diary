@@ -168,6 +168,23 @@ async function recountHours(projectId) {
   return hours;
 }
 
+/* Time logged against a project is the plainest possible statement that it has
+   been started, so the status follows — from the wish list, the post, or a
+   shelf. A project already on hold, finished or abandoned is left alone: those
+   are things you have said about it, and an hour's work does not unsay them. */
+async function startedByWorkingOnIt(projectId) {
+  const row = await idb.get('projects', projectId);
+  if (!row) return;
+  if (!['wishlist', 'notReceived', 'received'].includes(row.status)) return;
+  const today = nowIso().slice(0, 10);
+  row.status = 'started';
+  if (!row.date_started) row.date_started = today;
+  if (!row.date_received) row.date_received = today;
+  if (!row.date_ordered) row.date_ordered = today;
+  row.updated_at = nowIso();
+  await idb.put('projects', row);
+}
+
 /* Hours logged before sessions existed are not thrown away: each becomes one
    session, dated as best we can, so the total survives the change. */
 async function migrateHours() {
@@ -666,6 +683,7 @@ export async function localApi(path, opts = {}) {
       created_at: nowIso()
     });
     await recountHours(id);
+    await startedByWorkingOnIt(id);
     return { id: sid, hours: (await idb.get('projects', id)).hours };
   }
 
@@ -703,6 +721,7 @@ export async function localApi(path, opts = {}) {
       on: nowIso().slice(0, 10), created_at: nowIso()
     });
     await recountHours(timer.project_id);
+    await startedByWorkingOnIt(timer.project_id);
     return { id: sid, minutes, project_id: timer.project_id };
   }
 
