@@ -868,7 +868,8 @@ route(/^#\/p\/(\d+)$/, async (id) => {
         <div class="overlay"></div>
         <div class="controls">
           <button class="iconbtn" data-back="#/" aria-label="Back">${svg('back', 20, 2)}</button>
-          <button class="btn primary" style="height:44px;flex:0 0 auto" data-go="#/p/${p.id}/edit">${svg('edit', 16)} Edit</button>
+          <button class="btn hero-btn" style="height:44px;flex:0 0 auto"
+                  data-go="#/p/${p.id}/edit">${svg('edit', 16)} Details</button>
         </div>
         ${shots.length > 1 ? `<div class="dots" id="dots">${shots.map((_, i) =>
           `<button data-act="shot" data-i="${i}" aria-current="${i === 0}" aria-label="Photo ${i + 1}"><i></i></button>`).join('')}</div>` : ''}
@@ -923,6 +924,19 @@ route(/^#\/p\/(\d+)$/, async (id) => {
           <div class="panel pad-in">${dates.map(([k, v]) =>
             `<div class="row"><span class="k">${h(k)}</span>
              <span class="v tnum" style="${v ? '' : 'color:var(--ink-faint);font-weight:400'}">${h(dateText(v) || 'Not logged')}</span></div>`).join('')}</div>
+          <details class="sect" style="margin-top:8px">
+            <summary><span class="label" style="margin:0">Correct a date</span></summary>
+            <div class="grid2" style="margin-top:8px">
+              ${[['date_ordered', 'Ordered'], ['date_received', 'Received'],
+                 ['date_started', 'Started'], ['date_completed', 'Completed']].map(([k, l]) => `
+                <div><span class="minilabel">${l}</span>
+                <input class="fld" type="date" id="tl_${k}" value="${h(p[k] || '')}"></div>`).join('')}
+            </div>
+            <button class="btn ghost wide" style="margin-top:8px" data-act="savedates" data-id="${p.id}">
+              Save these dates</button>
+            <p style="margin:6px 2px 0;font-size:12px;color:var(--ink-mute)">The status follows the dates,
+              the same as it does everywhere else.</p>
+          </details>
         </div>
 
         ${(() => {
@@ -1012,6 +1026,21 @@ route(/^#\/p\/(\d+)$/, async (id) => {
               : `<div class="row"><span class="k">Not recorded yet</span>
                  <span class="v"><a href="#/p/${p.id}/edit">Add</a></span></div>`}
           </div>
+          <details class="sect" style="margin-top:8px">
+            <summary><span class="label" style="margin:0">Correct the cost</span></summary>
+            <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:8px">
+              ${[['price', 'Price'], ['shipping', 'Shipping'], ['tax', 'Tax']].map(([k, l]) => `
+                <div><span class="minilabel">${l}</span>
+                <input class="fld tnum" id="cost_${k}" inputmode="decimal" value="${h(p[k] ?? '')}"></div>`).join('')}
+            </div>
+            <div style="margin-top:10px"><span class="minilabel">Currency</span>
+              <div class="opts" id="cost_currency">${
+                [...new Set([...CURRENCIES, ...(p.currency ? [p.currency] : [])])].map((c) => `
+                <button type="button" class="opt" data-k="${c}" style="padding:0 8px"
+                        aria-pressed="${(p.currency || 'GBP') === c}">${c}</button>`).join('')}</div></div>
+            <button class="btn ghost wide" style="margin-top:8px" data-act="savecost" data-id="${p.id}">
+              Save the cost</button>
+          </details>
           ${p.price_source && PRICE_SOURCE[p.price_source] && PRICE_SOURCE[p.price_source][1]
             ? `<p style="margin:8px 2px 0;font-size:11px;line-height:1.45;color:var(--ink-mute)">Price is ${
                 h(PRICE_SOURCE[p.price_source][0])} — ${h(PRICE_SOURCE[p.price_source][1])}. Edit it to set what you actually paid.</p>`
@@ -1065,6 +1094,13 @@ route(/^#\/p\/(\d+)$/, async (id) => {
       if (b) shots.scrollTo({ left: shots.clientWidth * Number(b.dataset.i), behavior: 'smooth' });
     };
   }
+
+  // the currency chips in the inline cost editor behave like every other group
+  const cur = document.getElementById('cost_currency');
+  if (cur) cur.onclick = (e) => {
+    const b = e.target.closest('.opt'); if (!b) return;
+    [...cur.children].forEach((c) => c.setAttribute('aria-pressed', c === b));
+  };
 
   const pct = document.getElementById('pct');
   if (pct) {
@@ -1161,7 +1197,7 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
   $out.innerHTML = `
   <div class="screen reading form">
     <div class="topbar">
-      ${topbar(isNew ? 'New project' : 'Edit project', { back: isNew ? '#/' : '#/p/' + id, sub: true })}
+      ${topbar(isNew ? 'New project' : 'Project details', { back: isNew ? '#/' : '#/p/' + id, sub: true })}
     </div>
     <div class="scroll pad stack" style="padding-top:18px;padding-bottom:26px">
       <div class="formshot" id="formshot"${preview ? '' : ' hidden'}>
@@ -2633,6 +2669,36 @@ async function handleClick(e) {
   else if (act === 'opengallery') {
     const g = S.gallery;
     if (g && g.items.length) lightbox(g.items, Number(el.dataset.i) || 0);
+  }
+  else if (act === 'savedates') {
+    const dates = {};
+    for (const k of ['date_ordered', 'date_received', 'date_started', 'date_completed'])
+      dates[k] = document.getElementById('tl_' + k)?.value || null;
+    const project = await api('/projects/' + el.dataset.id);
+    // the same rule the form and the drag use, so a date means one thing
+    const status = statusFromDates({ ...project, ...dates });
+    await api('/projects/' + el.dataset.id, { method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...dates, status }) });
+    toast(status === project.status ? 'Dates saved' : `Dates saved · now ${statusOf(status).short}`);
+    render();
+  }
+  else if (act === 'savecost') {
+    const num = (id) => {
+      const v = (document.getElementById(id)?.value || '').trim();
+      if (!v) return null;
+      const n = parseFloat(v.replace(/[^0-9.\-]/g, ''));
+      return Number.isFinite(n) ? n : null;
+    };
+    const chosen = document.querySelector('#cost_currency .opt[aria-pressed="true"]')?.dataset.k;
+    const body = { price: num('cost_price'), shipping: num('cost_shipping'), tax: num('cost_tax') };
+    if (chosen) body.currency = chosen;
+    // a price you typed is yours, not the catalogue's guess
+    const before = await api('/projects/' + el.dataset.id);
+    if (body.price !== (before.price ?? null)) body.price_source = body.price == null ? null : 'you';
+    await api('/projects/' + el.dataset.id, { method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    toast('Cost saved');
+    render();
   }
   else if (act === 'sharephoto') {
     const ok = window.LogbookNative?.sharePhoto('photos/' + el.dataset.file, el.dataset.title || '');

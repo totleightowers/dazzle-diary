@@ -379,6 +379,16 @@ body.dragging .empty-sect .group-body { min-height: 56px; }
 }
 @media (prefers-reduced-motion: reduce) { .pull { transition: none; } }
 
+/* The hero used to lead with a big primary Edit, which said the real work
+   happened elsewhere. It does not any more: status, rating, progress, notes,
+   time, holds, cost and dates are all changed on the project itself. This is
+   the way to the underlying record, so it reads as secondary. */
+.hero .hero-btn {
+  background: rgba(0, 0, 0, .42); color: #fff; border: 1px solid rgba(255, 255, 255, .28);
+  backdrop-filter: blur(6px);
+}
+.hero .hero-btn:active { background: rgba(0, 0, 0, .58); }
+
 .minilabel { display: block; margin-bottom: 5px; font-size: 10px; font-weight: 700;
              letter-spacing: .05em; text-transform: uppercase; color: var(--ink-mute); }
 

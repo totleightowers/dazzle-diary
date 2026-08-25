@@ -17,6 +17,12 @@ Supported shops: **Diamond Art Club**, **Mystical Dream Diamonds**,
 
 ### Your stash
 
+Everything about a project is changed on the project itself: tap the status to
+move it on, tap the stars to rate it, drag the slider for progress, log a
+session, record a hold, correct the cost or a date. **Project details** is
+there for the underlying record — the kit's measurements, its catalogue
+listing, the fields you rarely touch.
+
 - Projects grouped into **Not received → Received → Started → Completed**, with
   a cover thumbnail, artist, size, drill shape and diamond count on every card.
 - **Drag a project between groups** to change its status.

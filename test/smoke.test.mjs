@@ -199,3 +199,40 @@ test('no share button on a phone that cannot share', async () => {
   assert.equal(m.find('[data-act="sharephoto"]'), null,
                'it offered to share on a build with no way to do it');
 });
+
+test('cost and dates are corrected where they are read', async () => {
+  const m = await mount();
+  const p = await m.seed({ title: 'Moon Eater', status: 'received',
+                           date_ordered: '2026-07-01', date_received: '2026-07-08',
+                           price: 169, currency: 'USD' });
+  await m.go('#/p/' + p.id);
+
+  m.find('#cost_price').value = '54.99';
+  m.find('#cost_shipping').value = '4.50';
+  m.find('#cost_currency .opt[data-k="GBP"]').dispatchEvent({ type: 'click' });
+  await m.tap('[data-act="savecost"]');
+  let row = await m.api('/projects/' + p.id);
+  assert.equal(row.price, 54.99);
+  assert.equal(row.shipping, 4.5);
+  assert.equal(row.currency, 'GBP', 'the currency chips did nothing');
+  assert.equal(row.price_source, 'you', 'a price typed by hand is still credited to the catalogue');
+
+  await m.go('#/p/' + p.id);
+  m.find('#tl_date_started').value = '2026-08-20';
+  await m.tap('[data-act="savedates"]');
+  row = await m.api('/projects/' + p.id);
+  assert.equal(row.date_started, '2026-08-20');
+  assert.equal(row.status, 'started', 'the status did not follow the dates');
+});
+
+test('the project leads with managing it, not with editing the record', async () => {
+  const m = await mount();
+  const p = await m.seed({ title: 'Moon Eater', status: 'started', date_started: '2026-08-01' });
+  await m.go('#/p/' + p.id);
+  const edit = m.find('[data-go$="/edit"]');
+  assert.ok(edit, 'there is no way to the record at all');
+  assert.ok(!edit.classList.contains('primary'), 'the record editor is still the loudest thing on the page');
+  assert.match(edit.textContent, /Details/);
+  await m.go(`#/p/${p.id}/edit`);
+  assert.match(m.text(), /Project details/, 'the form still calls itself Edit project');
+});

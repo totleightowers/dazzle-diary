@@ -224,9 +224,18 @@ function matchesSimple(el, sel) {
     if (p.startsWith('.')) { if (!el.classes.includes(p.slice(1))) return false; }
     else if (p.startsWith('#')) { if (el.id !== p.slice(1)) return false; }
     else if (p.startsWith('[')) {
-      const a = p.slice(1, -1).match(/^([\w:-]+)(?:\s*=\s*"?([^"\]]*)"?)?$/);
+      // the operators a real DOM has: =, ^=, $=, *=, ~=
+      const a = p.slice(1, -1).match(/^([\w:-]+)(?:\s*([~^$*]?=)\s*"?([^"\]]*)"?)?$/);
       if (!a || !(a[1] in el.attrs)) return false;
-      if (a[2] !== undefined && el.attrs[a[1]] !== a[2]) return false;
+      if (a[2] === undefined) continue;
+      const have = el.attrs[a[1]], want = a[3];
+      const ok = a[2] === '=' ? have === want
+               : a[2] === '^=' ? have.startsWith(want)
+               : a[2] === '$=' ? have.endsWith(want)
+               : a[2] === '*=' ? have.includes(want)
+               : a[2] === '~=' ? have.split(/\s+/).includes(want)
+               : false;
+      if (!ok) return false;
     }
     else if (p.startsWith(':not(')) { if (matchesSimple(el, p.slice(5, -1))) return false; }
     else if (p === ':empty') { if (el.children.some(c => c.tag !== '#text' || c.text.trim())) return false; }
