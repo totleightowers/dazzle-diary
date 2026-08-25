@@ -1,0 +1,8 @@
+#!/bin/sh
+# Belt and braces: the remote rejects this too, but failing here is quieter
+# than a rejected push half way through a release.
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  case "$remote_ref" in
+    refs/heads/main) echo "refusing to push to main — open a pull request instead" >&2; exit 1 ;;
+  esac
+done
