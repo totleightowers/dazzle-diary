@@ -1,0 +1,10 @@
+#!/bin/sh
+# main is written to by merging a pull request, never by committing to it.
+# The remote refuses a direct push, but by then the work is already on the
+# wrong branch and has to be moved; this catches it a step earlier.
+branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+if [ "$branch" = "main" ]; then
+  echo "refusing to commit on main — start a branch:" >&2
+  echo "  git checkout -b <name>" >&2
+  exit 1
+fi

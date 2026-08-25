@@ -105,7 +105,13 @@ const STATUS = {
 };
 // what you are working on first, what you are not going to finish last
 const ORDER = ['started', 'onHold', 'received', 'notReceived', 'wishlist', 'completed', 'abandoned'];
-const stVar = (s) => `var(--st-${s})`, stDot = (s) => `var(--st-${s}-dot)`;
+/* A status that is not one of the seven — an import that went wrong, a restore
+   from an older file — used to take the whole project page down with
+   "cannot read properties of undefined". A missing status is worth showing
+   badly, not worth a blank screen. */
+const statusOf = (k) => STATUS[k] || { label: k ? String(k) : 'No status', short: k ? String(k) : 'No status' };
+const stVar = (s) => `var(--st-${STATUS[s] ? s : 'notReceived'})`;
+const stDot = (s) => `var(--st-${STATUS[s] ? s : 'notReceived'}-dot)`;
 
 const ICON = {
   back: '<path d="M15 5l-7 7 7 7"/>', close: '<path d="M6 6l12 12M18 6L6 18"/>',
@@ -150,14 +156,29 @@ const svg = (name, size = 20, sw = 1.7) => {
    opens it over the page. Escape, the phone's Back button and a tap anywhere
    all close it — Back because that is what closing a full-screen thing means
    on Android, and it must not also pop the route underneath. */
-function lightbox(src, action = null) {
+/* One viewer for every picture a project has: the listing's photographs and
+   your own progress shots in one strip. Tapping any of them opens here, and
+   swiping moves through the lot — which is what anyone who has used a phone
+   expects, and what having two separate half-viewers did not do.
+
+   The swipe is CSS scroll-snap rather than a gesture handler: the platform
+   already knows how to fling a strip of images with momentum, and every
+   hand-written version of that is worse. */
+function lightbox(items, startIndex = 0) {
+  const list = (Array.isArray(items) ? items : [{ src: items }]).filter((x) => x && x.src);
+  if (!list.length) return;
+  let index = Math.min(Math.max(0, startIndex), list.length - 1);
+
   const el = document.createElement('div');
   el.className = 'lightbox';
-  el.innerHTML = `<img src="${src}" alt="">` +
-    `<button class="x" aria-label="Close">${svg('close', 18, 2.4)}</button>` +
-    (action ? `<div class="lightbox-bar"><button class="btn primary" data-act="${action.act}"${
-      Object.entries(action.data || {}).map(([k, v]) => ` data-${k}="${h(v)}"`).join('')
-    }>${h(action.label)}</button></div>` : '');
+  el.innerHTML = `
+    <div class="lb-strip" id="lbstrip">
+      ${list.map((it) => `<div class="lb-slide"><img src="${h(it.src)}" alt=""
+         referrerpolicy="no-referrer" draggable="false"></div>`).join('')}
+    </div>
+    <button class="x" aria-label="Close">${svg('close', 18, 2.4)}</button>
+    ${list.length > 1 ? `<div class="lb-count" id="lbcount"></div>` : ''}
+    <div class="lightbox-bar" id="lbbar"></div>`;
 
   let open = true;
   const close = () => {
@@ -168,15 +189,129 @@ function lightbox(src, action = null) {
     window.removeEventListener('popstate', onPop);
     if (history.state && history.state.lightbox) history.back();
   };
-  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  const onKey = (e) => {
+    if (e.key === 'Escape') return close();
+    if (e.key === 'ArrowRight') return goTo(index + 1);
+    if (e.key === 'ArrowLeft') return goTo(index - 1);
+  };
   const onPop = () => { open = false; el.remove(); document.removeEventListener('keydown', onKey); };
 
-  el.addEventListener('click', (e) => { if (!e.target.closest('[data-act]')) close(); });
+  const strip = () => el.querySelector('#lbstrip');
+  const goTo = (i) => {
+    const n = Math.min(Math.max(0, i), list.length - 1);
+    const s = strip();
+    if (s) s.scrollTo({ left: s.clientWidth * n, behavior: 'smooth' });
+    paint(n);
+  };
+  function paint(i) {
+    index = i;
+    const count = el.querySelector('#lbcount');
+    if (count) count.textContent = `${i + 1} / ${list.length}`;
+    const bar = el.querySelector('#lbbar');
+    if (!bar) return;
+    const it = list[i];
+    // only your own photograph can become the cover; the shop's already is one
+    const canShare = typeof window.LogbookNative?.sharePhoto === 'function';
+    bar.innerHTML = (it && it.kind === 'photo' && it.projectId)
+      ? `<button class="btn primary" data-act="setcover" data-id="${it.projectId}"
+           data-file="${h(it.file)}">Use as cover</button>${
+         canShare ? `<button class="btn ghost" data-act="sharephoto"
+           data-file="${h(it.file)}" data-title="${h(it.title || '')}">Share</button>` : ''}` : '';
+  }
+
+  // a tap on the backdrop closes; a tap on a picture does not, or a swipe that
+  // ends on one would shut the viewer instead of moving it
+  el.addEventListener('click', (e) => {
+    if (e.target.closest('[data-act]')) return;
+    if (e.target.closest('.lb-slide') && (list.length > 1 || el.classList.contains('has-zoom'))) return;
+    close();
+  });
   el._close = close;
   document.addEventListener('keydown', onKey);
   window.addEventListener('popstate', onPop);
   history.pushState({ lightbox: true }, '');
   document.body.appendChild(el);
+
+  /* Double tap zooms, which is the gesture everyone already has. The zoomed
+     slide simply becomes scrollable and the image larger than it, so panning is
+     the platform's own scrolling rather than arithmetic on touch points. */
+  /* Pinch. The WebView's own page zoom is off — the app is a fixed layout, not
+     a document — so two fingers on a picture have to be handled here: track the
+     distance between them, scale the image by how much it changes, and let a
+     one-finger drag move it while it is bigger than the frame. Anything under a
+     small movement is ignored, or a slightly uneven two-finger tap jumps. */
+  let pinch = null, panFrom = null;
+  const slideAt = (i) => el.querySelectorAll('.lb-slide')[i];
+  const scaleOf = (slide) => Number(slide?.dataset.scale || 1);
+  const applyScale = (slide, scale, ox, oy) => {
+    const img = slide.querySelector('img');
+    if (!img) return;
+    const clamped = Math.min(6, Math.max(1, scale));
+    slide.dataset.scale = String(clamped);
+    const x = clamped === 1 ? 0 : (ox ?? Number(slide.dataset.ox || 0));
+    const y = clamped === 1 ? 0 : (oy ?? Number(slide.dataset.oy || 0));
+    slide.dataset.ox = String(x); slide.dataset.oy = String(y);
+    img.style.transform = `translate(${x}px, ${y}px) scale(${clamped})`;
+    if (clamped > 1) { slide.classList.add('zoomed'); el.classList.add('has-zoom'); }
+    else { slide.classList.remove('zoomed'); if (!el.querySelector('.lb-slide.zoomed')) el.classList.remove('has-zoom'); }
+  };
+  const gap = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+
+  el.addEventListener('touchstart', (e) => {
+    if (e.touches && e.touches.length === 2) {
+      pinch = { from: gap(e.touches), scale: scaleOf(slideAt(index)) };
+      panFrom = null;
+    } else if (e.touches && e.touches.length === 1 && scaleOf(slideAt(index)) > 1) {
+      const t = e.touches[0];
+      const slide = slideAt(index);
+      panFrom = { x: t.clientX, y: t.clientY,
+                  ox: Number(slide.dataset.ox || 0), oy: Number(slide.dataset.oy || 0) };
+    }
+  }, { passive: true });
+
+  el.addEventListener('touchmove', (e) => {
+    const slide = slideAt(index);
+    if (!slide) return;
+    if (pinch && e.touches && e.touches.length === 2) {
+      e.preventDefault();
+      applyScale(slide, pinch.scale * (gap(e.touches) / (pinch.from || 1)));
+    } else if (panFrom && e.touches && e.touches.length === 1) {
+      e.preventDefault();
+      const t = e.touches[0];
+      applyScale(slide, scaleOf(slide),
+                 panFrom.ox + (t.clientX - panFrom.x), panFrom.oy + (t.clientY - panFrom.y));
+    }
+  }, { passive: false });
+
+  el.addEventListener('touchend', (e) => {
+    if (!e.touches || e.touches.length === 0) { pinch = null; panFrom = null; }
+    const slide = slideAt(index);
+    // a nudge below a tenth is a wobble, not a pinch: settle back to fitting
+    if (slide && scaleOf(slide) < 1.1) applyScale(slide, 1);
+  }, { passive: true });
+
+  let lastTap = 0;
+  el.addEventListener('click', (e) => {
+    const slide = e.target.closest && e.target.closest('.lb-slide');
+    if (!slide || e.target.closest('[data-act]')) return;
+    const now = Date.now();
+    const quick = now - lastTap < 320;
+    // a completed double tap ends the sequence: without this a third tap pairs
+    // with the second and toggles straight back
+    lastTap = quick ? 0 : now;
+    if (!quick) return;
+    applyScale(slide, scaleOf(slide) > 1 ? 1 : 2.5, 0, 0);
+  });
+
+  const s = strip();
+  if (s) {
+    s.scrollLeft = s.clientWidth * index;
+    s.addEventListener('scroll', () => {
+      const i = Math.round(s.scrollLeft / Math.max(1, s.clientWidth));
+      if (i !== index) paint(i);
+    }, { passive: true });
+  }
+  paint(index);
 }
 
 
@@ -222,13 +357,38 @@ async function saveToPhone(filename, blob) {
 }
 
 let toastTimer;
-function toast(msg) {
+function toast(msg, action = null) {
   document.querySelector('.toast')?.remove();
   const t = document.createElement('div');
-  t.className = 'toast'; t.textContent = msg;
+  t.className = 'toast' + (action ? ' with-action' : '');
+  t.innerHTML = `<span>${h(msg)}</span>`;
+  if (action) {
+    const b = document.createElement('button');
+    b.className = 'toast-action';
+    b.textContent = action.label;
+    b.onclick = () => { t.remove(); clearTimeout(toastTimer); action.run(); };
+    t.appendChild(b);
+  }
   document.body.appendChild(t);
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.remove(), 2600);
+  toastTimer = setTimeout(() => t.remove(), action ? (action.ms || 6000) : 2600);
+  return t;
+}
+
+/* Android asks afterwards, not before: the thing happens and an Undo sits in
+   the corner for a few seconds. A modal "are you sure?" on every deletion is
+   both more interruption and less safety, because the answer becomes reflex.
+   Nothing is actually deleted until the offer expires. */
+const pendingDeletes = new Set();
+function deleteLater(key, seconds, commit) {
+  pendingDeletes.add(key);
+  const timer = setTimeout(async () => {
+    if (!pendingDeletes.has(key)) return;
+    pendingDeletes.delete(key);
+    try { await commit(); } catch (e) { toast(e.message); }
+    render();
+  }, seconds * 1000);
+  return () => { clearTimeout(timer); pendingDeletes.delete(key); render(); };
 }
 
 /* ------------------------------------------------------------------ state */
@@ -244,6 +404,8 @@ const S = {
   chooserHits: [],
   prefs: { currency: 'GBP', excluded: [], hints: {} },
   timer: null,                       // a running session, if there is one
+  statusFor: null,                   // the project whose status menu is open
+  gallery: null,                     // every picture the open project has
   browse: { q: '', shop: null, items: [], offset: 0, more: true, loading: false,
              shape: null, size: null, maxPrice: null, inStock: false, sort: 'relevance',
              scroll: 0, open: false, loaded: false },
@@ -315,6 +477,9 @@ const back = (fallback = '#/') => {
 
 async function render() {
   const hash = location.hash || '#/';
+
+  // a catalogue pick belongs to the form it was picked for, and to nothing else
+  if (!/^#\/new/.test(hash)) S.fromCatalogue = null;
 
   /* Leaving the form — by the back arrow, Cancel, or the phone's own Back —
      asks first if anything was typed. Saying "keep editing" puts the form back
@@ -462,6 +627,107 @@ const formIsDirty = () => {
   return Object.keys(now).some((k) => now[k] !== editing.opened[k]);
 };
 
+/* Pulling a list down to refresh it is the one gesture everybody has, and the
+   catalogues were only refreshable from a button in Settings. The pull only
+   starts at the top of the list, so it never fights with scrolling, and the
+   touchmove is non-passive because preventing the overscroll is the whole
+   point — the same lesson as the drag. */
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/* The gesture is watched on the whole screen, not just on the list. On the
+   catalogue the search box, six shop chips and the filter button fill the top
+   of the screen, so the most natural place to start a pull is not inside the
+   scroller at all — which is why pulling the catalogue down appeared to do
+   nothing. What is scrolled is still the list, and the pull still only starts
+   when the list is at its top. */
+function wirePull(surface, scroller = surface) {
+  if (!surface || surface._pullWired) return;
+  surface._pullWired = true;
+  const scroll = scroller;
+  const THRESHOLD = 110;
+  let startY = null, pulled = 0, busy = false;
+
+  const box = () => document.getElementById('pull');
+  const label = () => document.getElementById('pulltext');
+  const show = (px, text) => {
+    const b = box(), t = label();
+    if (b) b.style.height = Math.round(px) + 'px';
+    if (t) t.textContent = text;
+  };
+
+  surface.addEventListener('touchstart', (e) => {
+    if (busy || scroll.scrollTop > 0 || !e.touches || e.touches.length !== 1) { startY = null; return; }
+    // dragging a slider or a text field is not a pull
+    if (e.target.closest && e.target.closest('input, textarea, select')) { startY = null; return; }
+    startY = e.touches[0].clientY;
+    pulled = 0;
+  }, { passive: true });
+
+  surface.addEventListener('touchmove', (e) => {
+    if (startY == null || busy) return;
+    pulled = e.touches[0].clientY - startY;
+    if (pulled <= 0) { show(0, ''); return; }
+    e.preventDefault();
+    show(Math.min(72, pulled * 0.5), pulled > THRESHOLD ? 'Release to update' : 'Pull to update');
+  }, { passive: false });
+
+  const finish = async () => {
+    const enough = pulled > THRESHOLD;
+    startY = null; pulled = 0;
+    if (!enough || busy) { show(0, ''); return; }
+    busy = true;
+    show(44, 'Updating\u2026');
+    try {
+      const { job } = await api('/catalogue/sync', { method: 'POST' });
+      for (let i = 0; i < 6000; i++) {
+        const j = await api('/jobs/' + job);
+        if (j.state !== 'running') break;
+        if (j.message) show(44, j.message);
+        await sleep(250);
+      }
+      S.meta = await api('/state');
+      toast('Catalogues updated');
+    } catch (err) {
+      toast(err.message);
+    } finally {
+      busy = false;
+      show(0, '');
+      render();
+    }
+  };
+  surface.addEventListener('touchend', finish, { passive: true });
+  surface.addEventListener('touchcancel', () => { startY = null; pulled = 0; show(0, ''); }, { passive: true });
+}
+
+/* One swipeable strip, used by the project page and by the form. The dots were
+   painted but never wired: nothing moved them as the strip scrolled, and the
+   project page had no handler for tapping one at all — so a gallery that did
+   swipe still looked frozen, and one that did not looked the same as one that
+   did. */
+function wireShots(strip) {
+  if (!strip || strip._shotsWired) return;
+  strip._shotsWired = true;
+  const owner = strip.parentElement;
+  const mark = () => {
+    const i = Math.round(strip.scrollLeft / Math.max(1, strip.clientWidth));
+    const d = owner?.querySelector('.dots');
+    if (d) [...d.children].forEach((b, n) => b.setAttribute('aria-current', String(n === i)));
+    // the blurred backdrop follows the picture that is showing, or a portrait
+    // canvas ends up sitting on the wrong colour
+    const wash = owner?.querySelector('.wash'), img = strip.children[i];
+    if (wash && img) wash.style.backgroundImage = `url('${img.getAttribute('src')}')`;
+  };
+  strip.addEventListener('scroll', mark, { passive: true });
+  mark();
+}
+
+/** Tapping a dot moves the strip it belongs to, whichever strip that is. */
+function goToShot(button) {
+  const strip = button.closest('.hero, .formshot')?.querySelector('.shots');
+  if (!strip) return;
+  strip.scrollTo({ left: strip.clientWidth * Number(button.dataset.i || 0), behavior: 'smooth' });
+}
+
 async function seenHint(k) {
   S.prefs.hints = { ...(S.prefs.hints || {}), [k]: true };
   try {
@@ -512,7 +778,7 @@ function paintLogbook() {
         <span style="font-size:13px;font-weight:600;color:var(--ink-mid)">
           ${shown} project${shown === 1 ? '' : 's'}${
             S.filter !== 'all' ? ` <span style="color:var(--ink-mute);font-weight:400">· ${
-              h(STATUS[S.filter].short.toLowerCase())}</span>` : ''}</span>
+              h(statusOf(S.filter).short.toLowerCase())}</span>` : ''}</span>
         <div class="seg tight compact">
           <button data-act="view" data-k="grid" aria-pressed="${S.view === 'grid'}" aria-label="Grid view">${svg('grid', 16)}</button>
           <button data-act="view" data-k="list" aria-pressed="${S.view === 'list'}" aria-label="List view">${svg('list', 16)}</button>
@@ -526,7 +792,7 @@ function paintLogbook() {
       ${empty ? emptyLogbook() : groups.map((g) => `
         <section class="group${g.items.length ? '' : ' empty-sect'}" data-status="${g.k}">
           <header><span class="dot" style="background:${stDot(g.k)}"></span>
-            <h2>${h(STATUS[g.k].label)}</h2><span class="n tnum">${g.items.length}</span></header>
+            <h2>${h(statusOf(g.k).label)}</h2><span class="n tnum">${g.items.length}</span></header>
           <div class="group-body">${g.items.map(card).join('')}</div>
         </section>`).join('')}
       ${!empty && !groups.length ? `<div class="empty">${svg('gem', 40, 1.3)}
@@ -574,7 +840,7 @@ function paintLogbookBody() {
   scroll.innerHTML = groups.length ? groups.map((g) => `
     <section class="group" data-status="${g.k}">
       <header><span class="dot" style="background:${stDot(g.k)}"></span>
-        <h2>${h(STATUS[g.k].label)}</h2><span class="n tnum">${g.items.length}</span></header>
+        <h2>${h(statusOf(g.k).label)}</h2><span class="n tnum">${g.items.length}</span></header>
       <div class="group-body">${g.items.map(card).join('')}</div>
     </section>`).join('')
     : `<div class="empty">${svg('gem', 40, 1.3)}<h2>Nothing matches that</h2>
@@ -635,6 +901,10 @@ route(/^#\/p\/(\d+)$/, async (id) => {
     try {
       const row = await api(`/catalogue/product?shop=${encodeURIComponent(p.shop)}&handle=${encodeURIComponent(p.dac_handle)}`);
       if (row && row.image) p._remote = row.image;
+      if (row && row.images) {
+        try { const a = Array.isArray(row.images) ? row.images : JSON.parse(row.images || '[]');
+              if (a.length) p._remotes = a; } catch { /* the one shot will do */ }
+      }
     } catch { /* offline: the hero simply stays empty */ }
   }
   const spec = [
@@ -643,6 +913,32 @@ route(/^#\/p\/(\d+)$/, async (id) => {
     ['Diamonds', p.drills ? (p.drills_estimated ? '\u2248 ' + num(p.drills) : num(p.drills)) : null], ['Colours', p.colors ? num(p.colors) : null],
     ['Special diamonds', p.special], ['Brand', p.brand], ['Obtained from', p.source]
   ].filter(([, v]) => v);
+
+  /* Everything this project has a picture of, in the order it is shown: the
+     listing's photographs first, then your own. The viewer works from this, so
+     swiping runs through the lot rather than stopping at the end of whichever
+     half was tapped. Computed here rather than inside the markup, so the photo
+     grid further down can number its own entries against the same list. */
+  const coverShots = (() => {
+    try { const a = JSON.parse(p.covers || '[]'); if (a.length) return a; } catch {}
+    const one = p.cover ? [p.cover] : [];
+    if (one.length) return one;
+    return p._remotes && p._remotes.length ? p._remotes : (p._remote ? [p._remote] : []);
+  })();
+  const gallerySrc = (f) => f.startsWith('http') ? sized(f, 900) : '/covers/' + encodeURIComponent(f);
+  const coverCount = coverShots.length;
+  /* One list of photos, used by the grid and by the viewer. Filtering in one
+     place and not the other would have the viewer open the wrong picture as
+     soon as anything was removed. */
+  const photos = (p.photos || []).filter((ph) => !pendingDeletes.has('photo:' + ph.id));
+  S.gallery = {
+    id: p.id,
+    items: [
+      ...coverShots.map((f) => ({ src: gallerySrc(f), kind: 'cover' })),
+      ...photos.map((ph) => ({ src: '/photos/' + encodeURIComponent(ph.file),
+                               kind: 'photo', file: ph.file, projectId: p.id, title: p.title }))
+    ]
+  };
 
   const dates = [['Ordered', p.date_ordered], ['Received', p.date_received],
                  ['Started', p.date_started], ['Completed', p.date_completed]];
@@ -653,21 +949,19 @@ route(/^#\/p\/(\d+)$/, async (id) => {
   <div class="screen reading">
     <div class="scroll">
       ${(() => {
-        const shots = (() => {
-          try { const a = JSON.parse(p.covers || '[]'); if (a.length) return a; } catch {}
-          return p.cover ? [p.cover] : [];
-        })();
+        const shots = coverShots;
         const src = (f) => f.startsWith('http') ? sized(f, 900) : '/covers/' + encodeURIComponent(f);
-        if (!shots.length && p._remote) shots.push(p._remote);
         return `<div class="hero" style="background:${stVar(p.status)}">
         ${shots.length ? `<span class="wash" id="herowash" style="background-image:url('${
           h(src(shots[0]))}')"></span>
-        <div class="shots" id="shots">${shots.map((f) =>
-          `<img src="${h(src(f))}" alt="" loading="lazy" referrerpolicy="no-referrer">`).join('')}</div>` : ''}
+        <div class="shots" id="shots">${shots.map((f, i) =>
+          `<img src="${h(src(f))}" alt="" loading="lazy" referrerpolicy="no-referrer"
+                data-act="opengallery" data-i="${i}">`).join('')}</div>` : ''}
         <div class="overlay"></div>
         <div class="controls">
           <button class="iconbtn" data-back="#/" aria-label="Back">${svg('back', 20, 2)}</button>
-          <button class="btn primary" style="height:44px;flex:0 0 auto" data-go="#/p/${p.id}/edit">${svg('edit', 16)} Edit</button>
+          <button class="btn hero-btn" style="height:44px;flex:0 0 auto"
+                  data-go="#/p/${p.id}/edit">${svg('edit', 16)} Details</button>
         </div>
         ${shots.length > 1 ? `<div class="dots" id="dots">${shots.map((_, i) =>
           `<button data-act="shot" data-i="${i}" aria-current="${i === 0}" aria-label="Photo ${i + 1}"><i></i></button>`).join('')}</div>` : ''}
@@ -675,11 +969,16 @@ route(/^#\/p\/(\d+)$/, async (id) => {
       })()}
 
       <div class="pad" style="padding-top:18px">
-        <span class="statuspill" style="background:${stVar(p.status)}">
-          <span class="dot" style="background:${stDot(p.status)}"></span>${h(STATUS[p.status].label)}</span>
-        ${Number(p.rating) ? `<span class="stars shown" aria-label="${p.rating} out of 5">${
-          [1, 2, 3, 4, 5].map((n) => `<span${n <= p.rating ? ' class="on"' : ''}>${star(19)}</span>`).join('')
-        }</span>` : ''}
+        <button class="statuspill" style="background:${stVar(p.status)}"
+                data-act="statusmenu" data-id="${p.id}" aria-haspopup="menu">
+          <span class="dot" style="background:${stDot(p.status)}"></span>${h(statusOf(p.status).label)}
+          ${svg('chev', 14, 2.2)}</button>
+        <span class="stars shown live" aria-label="Rating">${
+          [1, 2, 3, 4, 5].map((n) => `<button data-act="setrating" data-id="${p.id}" data-k="${n}"
+            aria-label="${n} star${n === 1 ? '' : 's'}"${n <= Number(p.rating || 0) ? ' class="on"' : ''}
+            >${star(19)}</button>`).join('')}${
+          Number(p.rating) ? `<button class="clearstars" data-act="setrating" data-id="${p.id}" data-k="0"
+            aria-label="No rating">Clear</button>` : ''}</span>
         <h1 style="font-size:27px;line-height:1.15;margin:10px 0 2px">${h(p.title)}</h1>
         ${p.artist ? `<p style="margin:0;color:var(--ink-mute);font-size:14px">By ${h(p.artist)}${p.brand ? ' · ' + h(p.brand) : ''}</p>` : ''}
         ${(() => {
@@ -717,6 +1016,19 @@ route(/^#\/p\/(\d+)$/, async (id) => {
           <div class="panel pad-in">${dates.map(([k, v]) =>
             `<div class="row"><span class="k">${h(k)}</span>
              <span class="v tnum" style="${v ? '' : 'color:var(--ink-faint);font-weight:400'}">${h(dateText(v) || 'Not logged')}</span></div>`).join('')}</div>
+          <details class="sect" style="margin-top:8px">
+            <summary><span class="label" style="margin:0">Correct a date</span></summary>
+            <div class="grid2" style="margin-top:8px">
+              ${[['date_ordered', 'Ordered'], ['date_received', 'Received'],
+                 ['date_started', 'Started'], ['date_completed', 'Completed']].map(([k, l]) => `
+                <div><span class="minilabel">${l}</span>
+                <input class="fld" type="date" id="tl_${k}" value="${h(p[k] || '')}"></div>`).join('')}
+            </div>
+            <button class="btn ghost wide" style="margin-top:8px" data-act="savedates" data-id="${p.id}">
+              Save these dates</button>
+            <p style="margin:6px 2px 0;font-size:12px;color:var(--ink-mute)">The status follows the dates,
+              the same as it does everywhere else.</p>
+          </details>
         </div>
 
         ${(() => {
@@ -753,6 +1065,9 @@ route(/^#\/p\/(\d+)$/, async (id) => {
         ${(() => {
           const list = p.sessions || [];
           const mins = list.reduce((n, x) => n + (Number(x.minutes) || 0), 0);
+          /* A kit on the wish list or still in the post cannot be worked on, so
+             offering to time a session on it is noise. */
+          if (p.status === 'wishlist' || p.status === 'notReceived') return '';
           return `<div>
           <h3 class="label">Time</h3>
           ${spanList(list.map((se) => ({
@@ -806,6 +1121,21 @@ route(/^#\/p\/(\d+)$/, async (id) => {
               : `<div class="row"><span class="k">Not recorded yet</span>
                  <span class="v"><a href="#/p/${p.id}/edit">Add</a></span></div>`}
           </div>
+          <details class="sect" style="margin-top:8px">
+            <summary><span class="label" style="margin:0">Correct the cost</span></summary>
+            <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:8px">
+              ${[['price', 'Price'], ['shipping', 'Shipping'], ['tax', 'Tax']].map(([k, l]) => `
+                <div><span class="minilabel">${l}</span>
+                <input class="fld tnum" id="cost_${k}" inputmode="decimal" value="${h(p[k] ?? '')}"></div>`).join('')}
+            </div>
+            <div style="margin-top:10px"><span class="minilabel">Currency</span>
+              <div class="opts" id="cost_currency">${
+                [...new Set([...CURRENCIES, ...(p.currency ? [p.currency] : [])])].map((c) => `
+                <button type="button" class="opt" data-k="${c}" style="padding:0 8px"
+                        aria-pressed="${(p.currency || 'GBP') === c}">${c}</button>`).join('')}</div></div>
+            <button class="btn ghost wide" style="margin-top:8px" data-act="savecost" data-id="${p.id}">
+              Save the cost</button>
+          </details>
           ${p.price_source && PRICE_SOURCE[p.price_source] && PRICE_SOURCE[p.price_source][1]
             ? `<p style="margin:8px 2px 0;font-size:11px;line-height:1.45;color:var(--ink-mute)">Price is ${
                 h(PRICE_SOURCE[p.price_source][0])} — ${h(PRICE_SOURCE[p.price_source][1])}. Edit it to set what you actually paid.</p>`
@@ -815,11 +1145,11 @@ route(/^#\/p\/(\d+)$/, async (id) => {
         <div>
           <h3 class="label">Progress photos</h3>
           <div class="photos">
-            ${(p.photos || []).map((ph) => `
+            ${photos.map((ph, i) => `
               <div class="shot">
                 <img src="/photos/${encodeURIComponent(ph.file)}" alt="" loading="lazy">
-                <button class="open" data-act="viewphoto" data-file="${encodeURIComponent(ph.file)}"
-                        data-pid="${p.id}" aria-label="View this photo full size"></button>
+                <button class="open" data-act="opengallery" data-i="${coverCount + i}"
+                        aria-label="View this photo full size"></button>
                 <button class="x" data-act="delphoto" data-id="${ph.id}" aria-label="Remove photo">${svg('close', 12, 2.6)}</button>
               </div>`).join('')}
             <label class="btn dashed add">
@@ -842,23 +1172,14 @@ route(/^#\/p\/(\d+)$/, async (id) => {
     </div>
   </div>`;
 
-  const shots = document.getElementById('shots');
-  if (shots) {
-    const dots = document.getElementById('dots');
-    const wash = document.getElementById('herowash');
-    shots.onscroll = () => {
-      const i = Math.round(shots.scrollLeft / shots.clientWidth);
-      if (dots) [...dots.children].forEach((d, n) => d.setAttribute('aria-current', n === i));
-      const img = shots.children[i];
-      if (wash && img) wash.style.backgroundImage = `url('${img.getAttribute('src')}')`;
-    };
-    // onclick, not addEventListener: this runs on every render of a project,
-    // and a listener added to the document each time is never taken off again
-    if (dots) dots.onclick = (e) => {
-      const b = e.target.closest('[data-act="shot"]');
-      if (b) shots.scrollTo({ left: shots.clientWidth * Number(b.dataset.i), behavior: 'smooth' });
-    };
-  }
+  wireShots(document.getElementById('shots'));
+
+  // the currency chips in the inline cost editor behave like every other group
+  const cur = document.getElementById('cost_currency');
+  if (cur) cur.onclick = (e) => {
+    const b = e.target.closest('.opt'); if (!b) return;
+    [...cur.children].forEach((c) => c.setAttribute('aria-pressed', c === b));
+  };
 
   const pct = document.getElementById('pct');
   if (pct) {
@@ -924,8 +1245,13 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
           colors: c.colors, drills: c.drills, special: c.special,
           brand: shopName, source: shopName, price: c.price,
           currency: displayCurrency(c.shop, c.currency, S.prefs.currency),
-          dac_handle: c.handle, shop: c.shop, _preview: c.image || null };
-    S.fromCatalogue = null;
+          dac_handle: c.handle, shop: c.shop, _preview: c.image || null,
+          _images: (() => { try { return Array.isArray(c.images) ? c.images : JSON.parse(c.images || '[]'); }
+                            catch { return []; } })() };
+    /* Kept until the form is actually left. Clearing it here meant a second
+       render of the same form — a fold, a rotation, anything that re-runs the
+       route — produced a blank New project with no picture and none of the
+       details that had just been picked. */
   }
   const isNew = !id;
   const f = (name, label, value, extra = '', cls = '') =>
@@ -943,19 +1269,51 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
     try {
       const row = await api(`/catalogue/product?shop=${encodeURIComponent(p.shop)}&handle=${encodeURIComponent(p.dac_handle)}`);
       if (row && row.image) p._preview = row.image;
+      // the whole strip, not just the first shot: arriving by relink, by a
+      // title suggestion or by editing later showed one picture where the
+      // catalogue pick showed six
+      if (row && row.images) {
+        try { const a = Array.isArray(row.images) ? row.images : JSON.parse(row.images || '[]');
+              if (a.length) p._images = a; } catch { /* keep the single preview */ }
+      }
     } catch { /* offline: the form simply has no picture */ }
   }
-  const preview = p._preview
-    ? sized(p._preview, 600)
-    : (p.cover ? '/covers/' + encodeURIComponent(p.cover) : null);
+  /* The same set the project page shows, so a kit looks the same before it is
+     added as after: every picture the listing has, or the covers already
+     cached for it. */
+  const formShots = (() => {
+    const cached = (() => {
+      try { const a = JSON.parse(p.covers || '[]'); if (a.length) return a; } catch {}
+      return p.cover ? [p.cover] : [];
+    })();
+    if (cached.length) return cached.map((f) => '/covers/' + encodeURIComponent(f));
+    const remote = p._preview ? (Array.isArray(p._images) && p._images.length ? p._images : [p._preview]) : [];
+    return remote.map((u) => sized(u, 900));
+  })();
+  S.gallery = { id: p.id || null, items: formShots.map((src) => ({ src, kind: 'cover' })) };
 
   $out.innerHTML = `
   <div class="screen reading form">
     <div class="topbar">
-      ${topbar(isNew ? 'New project' : 'Edit project', { back: isNew ? '#/' : '#/p/' + id, sub: true })}
+      ${topbar(isNew ? 'New project' : 'Project details', { back: isNew ? '#/' : '#/p/' + id, sub: true })}
     </div>
     <div class="scroll pad stack" style="padding-top:18px;padding-bottom:26px">
-      ${preview ? `<div class="formshot"><img src="${h(preview)}" alt="" referrerpolicy="no-referrer"></div>` : ''}
+      <div class="formshot" id="formshot"${formShots.length ? '' : ' hidden'}>
+        <div class="shots" id="formshots">${formShots.map((src, i) => `
+          <img id="${i ? '' : 'formshotimg'}" src="${h(src)}" alt="" loading="lazy"
+               referrerpolicy="no-referrer" data-act="opengallery" data-i="${i}">`).join('')}</div>
+        ${formShots.length > 1 ? `<div class="dots" id="formdots">${formShots.map((_, i) =>
+          `<button data-act="formshot" data-i="${i}" aria-current="${i === 0}"
+                   aria-label="Picture ${i + 1}"><i></i></button>`).join('')}</div>` : ''}
+      </div>
+      ${(() => {
+        const url = productUrl(p.shop, p.dac_handle);
+        if (!url) return '';
+        const shop = shopById(p.shop);
+        return `<a class="shoplink" href="${h(url)}" target="_blank" rel="noopener noreferrer"
+                   ${shop ? `data-shop="${h(shop.id)}"` : ''}>${svg('link', 15)} View on ${
+                   h(shop ? shop.name : 'the shop')}</a>`;
+      })()}
       <div><label class="label" for="title">Project name</label>
         <input class="fld" id="title" name="title" value="${h(p.title || '')}" placeholder="Start typing to search the catalogue" autocomplete="off"
                data-handle="${h(p.dac_handle || '')}" data-shop="${h(p.shop || '')}"
@@ -1173,6 +1531,44 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
   /* The listing a project points at, changed on its own. The title box below
      fills the whole form from a catalogue row; this only moves the pointer, so
      corrections you have made by hand survive being relinked. */
+  /* A picture that fails to load leaves an empty grey box, which looks exactly
+     like having no picture at all — and that ambiguity cost several rounds of
+     "there is no image" against code that was demonstrably rendering one. */
+  const watchPreview = () => {
+    const box = document.getElementById('formshot');
+    const img = document.getElementById('formshotimg');
+    if (!box || !img) return;
+    img.onerror = () => { box.dataset.failed = '1'; };
+    img.onload = () => { delete box.dataset.failed; };
+  };
+
+  const showPreview = (url, images) => {
+    const box = document.getElementById('formshot');
+    const strip = document.getElementById('formshots');
+    if (!box || !strip || !url) return;
+    const list = (Array.isArray(images) && images.length ? images : [url]).map((u) => sized(u, 900));
+    strip.innerHTML = list.map((src, i) => `<img id="${i ? '' : 'formshotimg'}" src="${h(src)}" alt=""
+        loading="lazy" referrerpolicy="no-referrer" data-act="opengallery" data-i="${i}">`).join('');
+    S.gallery = { id: null, items: list.map((src) => ({ src, kind: 'cover' })) };
+    /* The dots are not decoration — without them a strip of six pictures looks
+       like one picture. They were only painted at first render, so relinking or
+       picking a title left a silently swipeable strip with nothing to say so. */
+    let dots = box.querySelector('.dots');
+    if (list.length > 1) {
+      if (!dots) { dots = document.createElement('div'); dots.className = 'dots'; dots.id = 'formdots'; box.appendChild(dots); }
+      dots.innerHTML = list.map((_, i) =>
+        `<button data-act="formshot" data-i="${i}" aria-current="${i === 0}"
+                 aria-label="Picture ${i + 1}"><i></i></button>`).join('');
+    } else if (dots) dots.remove();
+    box.hidden = false;
+    strip.scrollLeft = 0;
+    watchPreview();
+    wireShots(strip);
+  };
+
+  watchPreview();
+  wireShots(document.getElementById('formshots'));
+
   const linkState = document.getElementById('linkstate');
   const linkBox = document.getElementById('linkbox');
   const linkRes = document.getElementById('linkres');
@@ -1204,6 +1600,7 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
       const q = linkQ.value.trim();
       if (q.length < 2) { linkRes.innerHTML = ''; return; }
       const hits = await api('/catalogue/search?q=' + encodeURIComponent(q)).catch(() => []);
+      linkRes._hits = hits;
       linkRes.innerHTML = hits.slice(0, 6).map((c) => `
         <button type="button" class="checkrow" data-h="${h(c.handle)}" data-s="${h(c.shop || '')}" style="min-height:48px">
           <span style="flex:1 1 auto;min-width:0">
@@ -1220,6 +1617,9 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
     t.dataset.shop = b.dataset.s;
     const sel = document.getElementById('shop');
     if (sel && b.dataset.s) sel.value = b.dataset.s;
+    const picked = (linkRes._hits || []).find((x) => x.handle === b.dataset.h);
+    showPreview(picked?.image, (() => { try { return Array.isArray(picked?.images) ? picked.images
+                                                : JSON.parse(picked?.images || '[]'); } catch { return []; } })());
     linkRes.innerHTML = ''; linkQ.value = ''; linkBox.hidden = true;
     paintLink();
     toast('Relinked — save to fetch its pictures');
@@ -1279,6 +1679,9 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
       titleEl.dataset.shop = c.shop || '';
       const shopSel = document.getElementById('shop');
       if (shopSel && c.shop) shopSel.value = c.shop;
+      // the picture followed only the browse route in; now it follows any of them
+      showPreview(c.image, (() => { try { return Array.isArray(c.images) ? c.images : JSON.parse(c.images || '[]'); }
+                                    catch { return []; } })());
       sugg.innerHTML = ''; paintLink();
     };
 
@@ -1465,6 +1868,31 @@ const importRow = (r) => {
 };
 
 /** Sheet listing every product a CSV line could mean. */
+function paintStatusMenu() {
+  document.querySelector('.status-sheet')?.remove();
+  document.querySelector('.status-backdrop')?.remove();
+  const id = S.statusFor;
+  if (!id) return;
+  const project = S.projects.find((x) => String(x.id) === String(id));
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `
+    <div class="sheet-backdrop status-backdrop" data-act="closestatus"></div>
+    <div class="sheet status-sheet">
+      <div class="grab"></div>
+      <div class="pad" style="padding-bottom:6px"><h2 style="font-size:19px">Status</h2></div>
+      <div class="pad" style="padding-bottom:calc(16px + var(--safe-b))">
+        ${ALL_STATUSES.map((k) => `
+          <button class="checkrow" data-act="setstatus" data-id="${id}" data-k="${k}"
+                  style="min-height:52px"${project && project.status === k ? ' aria-current="true"' : ''}>
+            <span class="dot" style="background:${stDot(k)}"></span>
+            <span style="flex:1 1 auto;text-align:left">${h(STATUS[k].label)}</span>
+            ${project && project.status === k ? svg('tick', 17) : ''}
+          </button>`).join('')}
+      </div>
+    </div>`;
+  while (wrap.firstChild) document.body.appendChild(wrap.firstChild);
+}
+
 function paintChooser() {
   const r = S.chooserFor;
   if (!r) { document.querySelector('.sheet-backdrop')?.remove(); document.querySelector('.sheet')?.remove(); return; }
@@ -1666,18 +2094,22 @@ function paintBrowseBody() {
   const B = S.browse;
   const body = document.getElementById('browsebody');
   if (!body) return;
+  body.onscroll = () => { S.browse.scroll = body.scrollTop; };
+  wirePull(body.closest('.screen') || body, body);
+  // an empty result is exactly when you might want to fetch the shops again,
+  // so the indicator belongs on that screen too
+  const pull = `<div class="pull" id="pull"><span id="pulltext"></span></div>`;
   if (!B.items.length) {
-    body.innerHTML = B.loading
+    body.innerHTML = pull + (B.loading
       ? `<p style="margin:28px 0;text-align:center;color:var(--ink-mute);font-size:13px">Looking…</p>`
       : `<div class="empty">${svg('search', 36, 1.4)}<h2>Nothing found</h2>
-         <p>Try a different name, or pick another shop.</p></div>`;
+         <p>Try a different name, or pick another shop.</p></div>`);
     return;
   }
-  body.onscroll = () => { S.browse.scroll = body.scrollTop; };
   const countEl = document.getElementById('browsecount');
   if (countEl) countEl.textContent = B.items.length
     ? `${B.items.length}${B.more ? '+' : ''} kit${B.items.length === 1 ? '' : 's'}` : '';
-  body.innerHTML = `
+  body.innerHTML = pull + `
     <div class="group-body" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr));padding:16px 0 0">
       ${B.items.map((c, i) => `
         <button class="card cat-card" style="flex-direction:column" data-act="pickcat" data-i="${i}"${
@@ -2075,7 +2507,7 @@ document.addEventListener('pointerup', async () => {
     const filled = dateKeys.filter((k) => patch[k]).length;
     const cleared = dateKeys.filter((k) => !patch[k]).length;
     const note = filled ? ' · dates filled in' : cleared ? ' · dates cleared' : '';
-    toast(`${project.title} → ${STATUS[status].short}${note}`);
+    toast(`${project.title} → ${statusOf(status).short}${note}`);
     // whoever just did it does not need to be told how
     if (!S.prefs.hints?.drag) { await seenHint('drag'); paintLogbook(); }
   } catch (e) { toast(e.message); render(); }
@@ -2345,9 +2777,69 @@ async function handleClick(e) {
     await seenHint(el.dataset.k);
     paintLogbook();
   }
-  else if (act === 'viewphoto') {
-    lightbox('/photos/' + el.dataset.file,
-      { act: 'setcover', label: 'Use as cover', data: { id: el.dataset.pid, file: el.dataset.file } });
+  else if (act === 'statusmenu') {
+    /* The pill said what the status was but offered no way to change it, so the
+       only routes were a drag on the logbook or the whole edit form. */
+    S.statusFor = Number(el.dataset.id);
+    paintStatusMenu();
+  }
+  else if (act === 'closestatus') { S.statusFor = null; paintStatusMenu(); }
+  else if (act === 'setstatus') {
+    const id = Number(el.dataset.id);
+    const project = S.projects.find((x) => String(x.id) === String(id))
+                 || await api('/projects/' + id);
+    S.statusFor = null; paintStatusMenu();
+    if (project.status === el.dataset.k) return;
+    const patch = applyStatus(project, el.dataset.k, today());
+    await api('/projects/' + id, { method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });
+    toast(`${project.title} → ${statusOf(el.dataset.k).short}`);
+    render();
+  }
+  else if (act === 'setrating') {
+    const rating = Number(el.dataset.k) || null;
+    await api('/projects/' + el.dataset.id, { method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rating }) });
+    render();
+  }
+  else if (act === 'shot' || act === 'formshot') { goToShot(el); }
+  else if (act === 'opengallery') {
+    const g = S.gallery;
+    if (g && g.items.length) lightbox(g.items, Number(el.dataset.i) || 0);
+  }
+  else if (act === 'savedates') {
+    const dates = {};
+    for (const k of ['date_ordered', 'date_received', 'date_started', 'date_completed'])
+      dates[k] = document.getElementById('tl_' + k)?.value || null;
+    const project = await api('/projects/' + el.dataset.id);
+    // the same rule the form and the drag use, so a date means one thing
+    const status = statusFromDates({ ...project, ...dates });
+    await api('/projects/' + el.dataset.id, { method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...dates, status }) });
+    toast(status === project.status ? 'Dates saved' : `Dates saved · now ${statusOf(status).short}`);
+    render();
+  }
+  else if (act === 'savecost') {
+    const num = (id) => {
+      const v = (document.getElementById(id)?.value || '').trim();
+      if (!v) return null;
+      const n = parseFloat(v.replace(/[^0-9.\-]/g, ''));
+      return Number.isFinite(n) ? n : null;
+    };
+    const chosen = document.querySelector('#cost_currency .opt[aria-pressed="true"]')?.dataset.k;
+    const body = { price: num('cost_price'), shipping: num('cost_shipping'), tax: num('cost_tax') };
+    if (chosen) body.currency = chosen;
+    // a price you typed is yours, not the catalogue's guess
+    const before = await api('/projects/' + el.dataset.id);
+    if (body.price !== (before.price ?? null)) body.price_source = body.price == null ? null : 'you';
+    await api('/projects/' + el.dataset.id, { method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    toast('Cost saved');
+    render();
+  }
+  else if (act === 'sharephoto') {
+    const ok = window.LogbookNative?.sharePhoto('photos/' + el.dataset.file, el.dataset.title || '');
+    if (!ok) toast('That photo could not be shared');
   }
   else if (act === 'setcover') {
     const box = document.querySelector('.lightbox');
@@ -2409,9 +2901,10 @@ async function handleClick(e) {
     render();
   }
   else if (act === 'delphoto') {
-    if (!confirm('Remove this photo?')) return;
-    await api('/photos/' + el.dataset.id, { method: 'DELETE' });
+    const id = el.dataset.id;
+    const undo = deleteLater('photo:' + id, 6, () => api('/photos/' + id, { method: 'DELETE' }));
     render();
+    toast('Photo removed', { label: 'Undo', run: undo });
   }
 }
 
