@@ -47,3 +47,36 @@ const narrow = at(form, '.scroll.stack', 390);
 ok('the form is a plain stack on a phone', narrow && !narrow['grid-template-columns'],
    narrow && narrow['grid-template-columns'] ? narrow['grid-template-columns'].val : 'not found');
 
+
+/* The form's picture strip is the same component as the project page's, not a
+   lookalike with only a height — which is why the picture sat hard left and no
+   swipe ever moved it. Both must resolve to a scroll-snapping flex carousel,
+   with each picture filling its slide and centred inside it. */
+for (const w of [390, 1028]) {
+  const strips = `<div id="app"><div class="screen reading form"><div class="scroll pad stack">
+    <div class="formshot"><div class="shots"><img></div></div>
+    <div class="hero"><div class="shots"><img></div></div>
+  </div></div></div>`;
+  for (const owner of ['.formshot', '.hero']) {
+    const strip = at(strips, owner + ' .shots', w);
+    ok(`${owner} strip scrolls sideways at ${w}px`,
+       strip && strip['overflow-x'] && strip['overflow-x'].val === 'auto',
+       strip && strip['overflow-x'] ? strip['overflow-x'].val : 'no overflow-x');
+    ok(`${owner} strip snaps at ${w}px`,
+       strip && strip['scroll-snap-type'] && /x mandatory/.test(strip['scroll-snap-type'].val),
+       strip && strip['scroll-snap-type'] ? strip['scroll-snap-type'].val : 'no snapping');
+    ok(`${owner} strip claims the sideways drag at ${w}px`,
+       strip && strip['touch-action'] && strip['touch-action'].val === 'pan-x',
+       strip && strip['touch-action'] ? strip['touch-action'].val : 'no touch-action');
+    ok(`${owner} strip lays its pictures out in a row at ${w}px`,
+       strip && strip.display && strip.display.val === 'flex',
+       strip && strip.display ? strip.display.val : 'not flex');
+
+    const img = at(strips, owner + ' .shots img', w);
+    ok(`${owner} picture fills one slide at ${w}px`,
+       img && img.flex && /0 0 100%/.test(img.flex.val), img && img.flex ? img.flex.val : 'no flex');
+    ok(`${owner} picture is centred in its slide at ${w}px`,
+       img && img['object-fit'] && img['object-fit'].val === 'contain',
+       img && img['object-fit'] ? img['object-fit'].val : 'no object-fit');
+  }
+}
