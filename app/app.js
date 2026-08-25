@@ -105,7 +105,13 @@ const STATUS = {
 };
 // what you are working on first, what you are not going to finish last
 const ORDER = ['started', 'onHold', 'received', 'notReceived', 'wishlist', 'completed', 'abandoned'];
-const stVar = (s) => `var(--st-${s})`, stDot = (s) => `var(--st-${s}-dot)`;
+/* A status that is not one of the seven — an import that went wrong, a restore
+   from an older file — used to take the whole project page down with
+   "cannot read properties of undefined". A missing status is worth showing
+   badly, not worth a blank screen. */
+const statusOf = (k) => STATUS[k] || { label: k ? String(k) : 'No status', short: k ? String(k) : 'No status' };
+const stVar = (s) => `var(--st-${STATUS[s] ? s : 'notReceived'})`;
+const stDot = (s) => `var(--st-${STATUS[s] ? s : 'notReceived'}-dot)`;
 
 const ICON = {
   back: '<path d="M15 5l-7 7 7 7"/>', close: '<path d="M6 6l12 12M18 6L6 18"/>',
@@ -150,14 +156,29 @@ const svg = (name, size = 20, sw = 1.7) => {
    opens it over the page. Escape, the phone's Back button and a tap anywhere
    all close it — Back because that is what closing a full-screen thing means
    on Android, and it must not also pop the route underneath. */
-function lightbox(src, action = null) {
+/* One viewer for every picture a project has: the listing's photographs and
+   your own progress shots in one strip. Tapping any of them opens here, and
+   swiping moves through the lot — which is what anyone who has used a phone
+   expects, and what having two separate half-viewers did not do.
+
+   The swipe is CSS scroll-snap rather than a gesture handler: the platform
+   already knows how to fling a strip of images with momentum, and every
+   hand-written version of that is worse. */
+function lightbox(items, startIndex = 0) {
+  const list = (Array.isArray(items) ? items : [{ src: items }]).filter((x) => x && x.src);
+  if (!list.length) return;
+  let index = Math.min(Math.max(0, startIndex), list.length - 1);
+
   const el = document.createElement('div');
   el.className = 'lightbox';
-  el.innerHTML = `<img src="${src}" alt="">` +
-    `<button class="x" aria-label="Close">${svg('close', 18, 2.4)}</button>` +
-    (action ? `<div class="lightbox-bar"><button class="btn primary" data-act="${action.act}"${
-      Object.entries(action.data || {}).map(([k, v]) => ` data-${k}="${h(v)}"`).join('')
-    }>${h(action.label)}</button></div>` : '');
+  el.innerHTML = `
+    <div class="lb-strip" id="lbstrip">
+      ${list.map((it) => `<div class="lb-slide"><img src="${h(it.src)}" alt=""
+         referrerpolicy="no-referrer" draggable="false"></div>`).join('')}
+    </div>
+    <button class="x" aria-label="Close">${svg('close', 18, 2.4)}</button>
+    ${list.length > 1 ? `<div class="lb-count" id="lbcount"></div>` : ''}
+    <div class="lightbox-bar" id="lbbar"></div>`;
 
   let open = true;
   const close = () => {
@@ -168,15 +189,55 @@ function lightbox(src, action = null) {
     window.removeEventListener('popstate', onPop);
     if (history.state && history.state.lightbox) history.back();
   };
-  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  const onKey = (e) => {
+    if (e.key === 'Escape') return close();
+    if (e.key === 'ArrowRight') return goTo(index + 1);
+    if (e.key === 'ArrowLeft') return goTo(index - 1);
+  };
   const onPop = () => { open = false; el.remove(); document.removeEventListener('keydown', onKey); };
 
-  el.addEventListener('click', (e) => { if (!e.target.closest('[data-act]')) close(); });
+  const strip = () => el.querySelector('#lbstrip');
+  const goTo = (i) => {
+    const n = Math.min(Math.max(0, i), list.length - 1);
+    const s = strip();
+    if (s) s.scrollTo({ left: s.clientWidth * n, behavior: 'smooth' });
+    paint(n);
+  };
+  function paint(i) {
+    index = i;
+    const count = el.querySelector('#lbcount');
+    if (count) count.textContent = `${i + 1} / ${list.length}`;
+    const bar = el.querySelector('#lbbar');
+    if (!bar) return;
+    const it = list[i];
+    // only your own photograph can become the cover; the shop's already is one
+    bar.innerHTML = (it && it.kind === 'photo' && it.projectId)
+      ? `<button class="btn primary" data-act="setcover" data-id="${it.projectId}"
+           data-file="${h(it.file)}">Use as cover</button>` : '';
+  }
+
+  // a tap on the backdrop closes; a tap on a picture does not, or a swipe that
+  // ends on one would shut the viewer instead of moving it
+  el.addEventListener('click', (e) => {
+    if (e.target.closest('[data-act]')) return;
+    if (e.target.closest('.lb-slide') && list.length > 1) return;
+    close();
+  });
   el._close = close;
   document.addEventListener('keydown', onKey);
   window.addEventListener('popstate', onPop);
   history.pushState({ lightbox: true }, '');
   document.body.appendChild(el);
+
+  const s = strip();
+  if (s) {
+    s.scrollLeft = s.clientWidth * index;
+    s.addEventListener('scroll', () => {
+      const i = Math.round(s.scrollLeft / Math.max(1, s.clientWidth));
+      if (i !== index) paint(i);
+    }, { passive: true });
+  }
+  paint(index);
 }
 
 
@@ -245,6 +306,7 @@ const S = {
   prefs: { currency: 'GBP', excluded: [], hints: {} },
   timer: null,                       // a running session, if there is one
   statusFor: null,                   // the project whose status menu is open
+  gallery: null,                     // every picture the open project has
   browse: { q: '', shop: null, items: [], offset: 0, more: true, loading: false,
              shape: null, size: null, maxPrice: null, inStock: false, sort: 'relevance',
              scroll: 0, open: false, loaded: false },
@@ -316,6 +378,9 @@ const back = (fallback = '#/') => {
 
 async function render() {
   const hash = location.hash || '#/';
+
+  // a catalogue pick belongs to the form it was picked for, and to nothing else
+  if (!/^#\/new/.test(hash)) S.fromCatalogue = null;
 
   /* Leaving the form — by the back arrow, Cancel, or the phone's own Back —
      asks first if anything was typed. Saying "keep editing" puts the form back
@@ -513,7 +578,7 @@ function paintLogbook() {
         <span style="font-size:13px;font-weight:600;color:var(--ink-mid)">
           ${shown} project${shown === 1 ? '' : 's'}${
             S.filter !== 'all' ? ` <span style="color:var(--ink-mute);font-weight:400">· ${
-              h(STATUS[S.filter].short.toLowerCase())}</span>` : ''}</span>
+              h(statusOf(S.filter).short.toLowerCase())}</span>` : ''}</span>
         <div class="seg tight compact">
           <button data-act="view" data-k="grid" aria-pressed="${S.view === 'grid'}" aria-label="Grid view">${svg('grid', 16)}</button>
           <button data-act="view" data-k="list" aria-pressed="${S.view === 'list'}" aria-label="List view">${svg('list', 16)}</button>
@@ -527,7 +592,7 @@ function paintLogbook() {
       ${empty ? emptyLogbook() : groups.map((g) => `
         <section class="group${g.items.length ? '' : ' empty-sect'}" data-status="${g.k}">
           <header><span class="dot" style="background:${stDot(g.k)}"></span>
-            <h2>${h(STATUS[g.k].label)}</h2><span class="n tnum">${g.items.length}</span></header>
+            <h2>${h(statusOf(g.k).label)}</h2><span class="n tnum">${g.items.length}</span></header>
           <div class="group-body">${g.items.map(card).join('')}</div>
         </section>`).join('')}
       ${!empty && !groups.length ? `<div class="empty">${svg('gem', 40, 1.3)}
@@ -575,7 +640,7 @@ function paintLogbookBody() {
   scroll.innerHTML = groups.length ? groups.map((g) => `
     <section class="group" data-status="${g.k}">
       <header><span class="dot" style="background:${stDot(g.k)}"></span>
-        <h2>${h(STATUS[g.k].label)}</h2><span class="n tnum">${g.items.length}</span></header>
+        <h2>${h(statusOf(g.k).label)}</h2><span class="n tnum">${g.items.length}</span></header>
       <div class="group-body">${g.items.map(card).join('')}</div>
     </section>`).join('')
     : `<div class="empty">${svg('gem', 40, 1.3)}<h2>Nothing matches that</h2>
@@ -645,6 +710,27 @@ route(/^#\/p\/(\d+)$/, async (id) => {
     ['Special diamonds', p.special], ['Brand', p.brand], ['Obtained from', p.source]
   ].filter(([, v]) => v);
 
+  /* Everything this project has a picture of, in the order it is shown: the
+     listing's photographs first, then your own. The viewer works from this, so
+     swiping runs through the lot rather than stopping at the end of whichever
+     half was tapped. Computed here rather than inside the markup, so the photo
+     grid further down can number its own entries against the same list. */
+  const coverShots = (() => {
+    try { const a = JSON.parse(p.covers || '[]'); if (a.length) return a; } catch {}
+    const one = p.cover ? [p.cover] : [];
+    return one.length ? one : (p._remote ? [p._remote] : []);
+  })();
+  const gallerySrc = (f) => f.startsWith('http') ? sized(f, 900) : '/covers/' + encodeURIComponent(f);
+  const coverCount = coverShots.length;
+  S.gallery = {
+    id: p.id,
+    items: [
+      ...coverShots.map((f) => ({ src: gallerySrc(f), kind: 'cover' })),
+      ...(p.photos || []).map((ph) => ({ src: '/photos/' + encodeURIComponent(ph.file),
+                                         kind: 'photo', file: ph.file, projectId: p.id }))
+    ]
+  };
+
   const dates = [['Ordered', p.date_ordered], ['Received', p.date_received],
                  ['Started', p.date_started], ['Completed', p.date_completed]];
   const costs = [['Price', p.price], ['Shipping', p.shipping], ['Tax', p.tax]].filter(([, v]) => v != null);
@@ -654,17 +740,14 @@ route(/^#\/p\/(\d+)$/, async (id) => {
   <div class="screen reading">
     <div class="scroll">
       ${(() => {
-        const shots = (() => {
-          try { const a = JSON.parse(p.covers || '[]'); if (a.length) return a; } catch {}
-          return p.cover ? [p.cover] : [];
-        })();
+        const shots = coverShots;
         const src = (f) => f.startsWith('http') ? sized(f, 900) : '/covers/' + encodeURIComponent(f);
-        if (!shots.length && p._remote) shots.push(p._remote);
         return `<div class="hero" style="background:${stVar(p.status)}">
         ${shots.length ? `<span class="wash" id="herowash" style="background-image:url('${
           h(src(shots[0]))}')"></span>
-        <div class="shots" id="shots">${shots.map((f) =>
-          `<img src="${h(src(f))}" alt="" loading="lazy" referrerpolicy="no-referrer">`).join('')}</div>` : ''}
+        <div class="shots" id="shots">${shots.map((f, i) =>
+          `<img src="${h(src(f))}" alt="" loading="lazy" referrerpolicy="no-referrer"
+                data-act="opengallery" data-i="${i}">`).join('')}</div>` : ''}
         <div class="overlay"></div>
         <div class="controls">
           <button class="iconbtn" data-back="#/" aria-label="Back">${svg('back', 20, 2)}</button>
@@ -678,7 +761,7 @@ route(/^#\/p\/(\d+)$/, async (id) => {
       <div class="pad" style="padding-top:18px">
         <button class="statuspill" style="background:${stVar(p.status)}"
                 data-act="statusmenu" data-id="${p.id}" aria-haspopup="menu">
-          <span class="dot" style="background:${stDot(p.status)}"></span>${h(STATUS[p.status].label)}
+          <span class="dot" style="background:${stDot(p.status)}"></span>${h(statusOf(p.status).label)}
           ${svg('chev', 14, 2.2)}</button>
         <span class="stars shown live" aria-label="Rating">${
           [1, 2, 3, 4, 5].map((n) => `<button data-act="setrating" data-id="${p.id}" data-k="${n}"
@@ -821,11 +904,11 @@ route(/^#\/p\/(\d+)$/, async (id) => {
         <div>
           <h3 class="label">Progress photos</h3>
           <div class="photos">
-            ${(p.photos || []).map((ph) => `
+            ${(p.photos || []).map((ph, i) => `
               <div class="shot">
                 <img src="/photos/${encodeURIComponent(ph.file)}" alt="" loading="lazy">
-                <button class="open" data-act="viewphoto" data-file="${encodeURIComponent(ph.file)}"
-                        data-pid="${p.id}" aria-label="View this photo full size"></button>
+                <button class="open" data-act="opengallery" data-i="${coverCount + i}"
+                        aria-label="View this photo full size"></button>
                 <button class="x" data-act="delphoto" data-id="${ph.id}" aria-label="Remove photo">${svg('close', 12, 2.6)}</button>
               </div>`).join('')}
             <label class="btn dashed add">
@@ -931,7 +1014,10 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
           brand: shopName, source: shopName, price: c.price,
           currency: displayCurrency(c.shop, c.currency, S.prefs.currency),
           dac_handle: c.handle, shop: c.shop, _preview: c.image || null };
-    S.fromCatalogue = null;
+    /* Kept until the form is actually left. Clearing it here meant a second
+       render of the same form — a fold, a rotation, anything that re-runs the
+       route — produced a blank New project with no picture and none of the
+       details that had just been picked. */
   }
   const isNew = !id;
   const f = (name, label, value, extra = '', cls = '') =>
@@ -961,7 +1047,8 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
       ${topbar(isNew ? 'New project' : 'Edit project', { back: isNew ? '#/' : '#/p/' + id, sub: true })}
     </div>
     <div class="scroll pad stack" style="padding-top:18px;padding-bottom:26px">
-      ${preview ? `<div class="formshot"><img src="${h(preview)}" alt="" referrerpolicy="no-referrer"></div>` : ''}
+      <div class="formshot" id="formshot"${preview ? '' : ' hidden'}>
+        <img id="formshotimg" src="${h(preview || '')}" alt="" referrerpolicy="no-referrer"></div>
       <div><label class="label" for="title">Project name</label>
         <input class="fld" id="title" name="title" value="${h(p.title || '')}" placeholder="Start typing to search the catalogue" autocomplete="off"
                data-handle="${h(p.dac_handle || '')}" data-shop="${h(p.shop || '')}"
@@ -1179,6 +1266,14 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
   /* The listing a project points at, changed on its own. The title box below
      fills the whole form from a catalogue row; this only moves the pointer, so
      corrections you have made by hand survive being relinked. */
+  const showPreview = (url) => {
+    const box = document.getElementById('formshot');
+    const img = document.getElementById('formshotimg');
+    if (!box || !img || !url) return;
+    img.src = sized(url, 600);
+    box.hidden = false;
+  };
+
   const linkState = document.getElementById('linkstate');
   const linkBox = document.getElementById('linkbox');
   const linkRes = document.getElementById('linkres');
@@ -1210,6 +1305,7 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
       const q = linkQ.value.trim();
       if (q.length < 2) { linkRes.innerHTML = ''; return; }
       const hits = await api('/catalogue/search?q=' + encodeURIComponent(q)).catch(() => []);
+      linkRes._hits = hits;
       linkRes.innerHTML = hits.slice(0, 6).map((c) => `
         <button type="button" class="checkrow" data-h="${h(c.handle)}" data-s="${h(c.shop || '')}" style="min-height:48px">
           <span style="flex:1 1 auto;min-width:0">
@@ -1226,6 +1322,7 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
     t.dataset.shop = b.dataset.s;
     const sel = document.getElementById('shop');
     if (sel && b.dataset.s) sel.value = b.dataset.s;
+    showPreview((linkRes._hits || []).find((x) => x.handle === b.dataset.h)?.image);
     linkRes.innerHTML = ''; linkQ.value = ''; linkBox.hidden = true;
     paintLink();
     toast('Relinked — save to fetch its pictures');
@@ -1285,6 +1382,8 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
       titleEl.dataset.shop = c.shop || '';
       const shopSel = document.getElementById('shop');
       if (shopSel && c.shop) shopSel.value = c.shop;
+      // the picture followed only the browse route in; now it follows any of them
+      showPreview(c.image);
       sugg.innerHTML = ''; paintLink();
     };
 
@@ -2106,7 +2205,7 @@ document.addEventListener('pointerup', async () => {
     const filled = dateKeys.filter((k) => patch[k]).length;
     const cleared = dateKeys.filter((k) => !patch[k]).length;
     const note = filled ? ' · dates filled in' : cleared ? ' · dates cleared' : '';
-    toast(`${project.title} → ${STATUS[status].short}${note}`);
+    toast(`${project.title} → ${statusOf(status).short}${note}`);
     // whoever just did it does not need to be told how
     if (!S.prefs.hints?.drag) { await seenHint('drag'); paintLogbook(); }
   } catch (e) { toast(e.message); render(); }
@@ -2392,7 +2491,7 @@ async function handleClick(e) {
     const patch = applyStatus(project, el.dataset.k, today());
     await api('/projects/' + id, { method: 'PATCH',
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });
-    toast(`${project.title} → ${STATUS[el.dataset.k].short}`);
+    toast(`${project.title} → ${statusOf(el.dataset.k).short}`);
     render();
   }
   else if (act === 'setrating') {
@@ -2401,9 +2500,9 @@ async function handleClick(e) {
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rating }) });
     render();
   }
-  else if (act === 'viewphoto') {
-    lightbox('/photos/' + el.dataset.file,
-      { act: 'setcover', label: 'Use as cover', data: { id: el.dataset.pid, file: el.dataset.file } });
+  else if (act === 'opengallery') {
+    const g = S.gallery;
+    if (g && g.items.length) lightbox(g.items, Number(el.dataset.i) || 0);
   }
   else if (act === 'setcover') {
     const box = document.querySelector('.lightbox');
