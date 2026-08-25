@@ -314,6 +314,57 @@ public class MainActivity extends Activity {
             } catch (Exception e) { return null; }
         }
 
+        /**
+         * Hand a picture to whatever the phone can send things with.
+         *
+         * A WebView has no Web Share API, so this is the only way a photograph
+         * can leave the app. The image goes into MediaStore first — it needs a
+         * content URI another app is allowed to read, and a FileProvider is not
+         * available here: it lives in a support library, and this app has no
+         * dependencies.
+         */
+        @JavascriptInterface
+        public boolean sharePhoto(String path, final String title) {
+            mustBeOurPage();
+            File f = safe(path);
+            if (f == null || !f.exists()) return false;
+            try {
+                byte[] bytes = new byte[(int) f.length()];
+                try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
+                    int read = 0;
+                    while (read < bytes.length) {
+                        int n = in.read(bytes, read, bytes.length - read);
+                        if (n < 0) break;
+                        read += n;
+                    }
+                }
+                ContentValues v = new ContentValues();
+                v.put(MediaStore.Images.Media.DISPLAY_NAME,
+                      "dazzle-diary-" + System.currentTimeMillis() + ".jpg");
+                v.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
+                final Uri item = getContentResolver().insert(
+                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI, v);
+                if (item == null) return false;
+                java.io.OutputStream os = getContentResolver().openOutputStream(item);
+                if (os == null) return false;
+                os.write(bytes);
+                os.close();
+
+                final Intent send = new Intent(Intent.ACTION_SEND);
+                send.setType("image/jpeg");
+                send.putExtra(Intent.EXTRA_STREAM, item);
+                if (title != null && title.length() > 0) send.putExtra(Intent.EXTRA_TEXT, title);
+                send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                runOnUiThread(new Runnable() { @Override public void run() {
+                    try { startActivity(Intent.createChooser(send, "Share this photo")); }
+                    catch (Exception ignored) {}
+                } });
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
         /** The status and navigation bars are part of the app's surface, so they
          *  follow whatever theme the page settled on — including the in-app
          *  Light/Dark override, which no static theme can know about. */

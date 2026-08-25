@@ -17,6 +17,12 @@ Supported shops: **Diamond Art Club**, **Mystical Dream Diamonds**,
 
 ### Your stash
 
+Everything about a project is changed on the project itself: tap the status to
+move it on, tap the stars to rate it, drag the slider for progress, log a
+session, record a hold, correct the cost or a date. **Project details** is
+there for the underlying record — the kit's measurements, its catalogue
+listing, the fields you rarely touch.
+
 - Projects grouped into **Not received → Received → Started → Completed**, with
   a cover thumbnail, artist, size, drill shape and diamond count on every card.
 - **Drag a project between groups** to change its status.
@@ -215,6 +221,13 @@ The app reads each shop's public product listing — the same JSON their own
 storefront uses — and caches cover images locally for kits you own, which is
 what a shop's own logbook does. Artwork remains the copyright of the artists and
 the shops. Don't redistribute it.
+
+## Contributing to this repository
+
+`main` is protected: every change arrives by pull request, the checks have to
+pass, and **there is no administrator override** — a direct push is refused for
+everyone. `git config core.hooksPath tools/hooks` makes a local clone refuse to
+commit on `main` in the first place.
 
 ## Licence
 
