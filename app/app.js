@@ -244,6 +244,7 @@ const S = {
   chooserHits: [],
   prefs: { currency: 'GBP', excluded: [], hints: {} },
   timer: null,                       // a running session, if there is one
+  statusFor: null,                   // the project whose status menu is open
   browse: { q: '', shop: null, items: [], offset: 0, more: true, loading: false,
              shape: null, size: null, maxPrice: null, inStock: false, sort: 'relevance',
              scroll: 0, open: false, loaded: false },
@@ -675,11 +676,16 @@ route(/^#\/p\/(\d+)$/, async (id) => {
       })()}
 
       <div class="pad" style="padding-top:18px">
-        <span class="statuspill" style="background:${stVar(p.status)}">
-          <span class="dot" style="background:${stDot(p.status)}"></span>${h(STATUS[p.status].label)}</span>
-        ${Number(p.rating) ? `<span class="stars shown" aria-label="${p.rating} out of 5">${
-          [1, 2, 3, 4, 5].map((n) => `<span${n <= p.rating ? ' class="on"' : ''}>${star(19)}</span>`).join('')
-        }</span>` : ''}
+        <button class="statuspill" style="background:${stVar(p.status)}"
+                data-act="statusmenu" data-id="${p.id}" aria-haspopup="menu">
+          <span class="dot" style="background:${stDot(p.status)}"></span>${h(STATUS[p.status].label)}
+          ${svg('chev', 14, 2.2)}</button>
+        <span class="stars shown live" aria-label="Rating">${
+          [1, 2, 3, 4, 5].map((n) => `<button data-act="setrating" data-id="${p.id}" data-k="${n}"
+            aria-label="${n} star${n === 1 ? '' : 's'}"${n <= Number(p.rating || 0) ? ' class="on"' : ''}
+            >${star(19)}</button>`).join('')}${
+          Number(p.rating) ? `<button class="clearstars" data-act="setrating" data-id="${p.id}" data-k="0"
+            aria-label="No rating">Clear</button>` : ''}</span>
         <h1 style="font-size:27px;line-height:1.15;margin:10px 0 2px">${h(p.title)}</h1>
         ${p.artist ? `<p style="margin:0;color:var(--ink-mute);font-size:14px">By ${h(p.artist)}${p.brand ? ' · ' + h(p.brand) : ''}</p>` : ''}
         ${(() => {
@@ -1465,6 +1471,31 @@ const importRow = (r) => {
 };
 
 /** Sheet listing every product a CSV line could mean. */
+function paintStatusMenu() {
+  document.querySelector('.status-sheet')?.remove();
+  document.querySelector('.status-backdrop')?.remove();
+  const id = S.statusFor;
+  if (!id) return;
+  const project = S.projects.find((x) => String(x.id) === String(id));
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `
+    <div class="sheet-backdrop status-backdrop" data-act="closestatus"></div>
+    <div class="sheet status-sheet">
+      <div class="grab"></div>
+      <div class="pad" style="padding-bottom:6px"><h2 style="font-size:19px">Status</h2></div>
+      <div class="pad" style="padding-bottom:calc(16px + var(--safe-b))">
+        ${ALL_STATUSES.map((k) => `
+          <button class="checkrow" data-act="setstatus" data-id="${id}" data-k="${k}"
+                  style="min-height:52px"${project && project.status === k ? ' aria-current="true"' : ''}>
+            <span class="dot" style="background:${stDot(k)}"></span>
+            <span style="flex:1 1 auto;text-align:left">${h(STATUS[k].label)}</span>
+            ${project && project.status === k ? svg('tick', 17) : ''}
+          </button>`).join('')}
+      </div>
+    </div>`;
+  while (wrap.firstChild) document.body.appendChild(wrap.firstChild);
+}
+
 function paintChooser() {
   const r = S.chooserFor;
   if (!r) { document.querySelector('.sheet-backdrop')?.remove(); document.querySelector('.sheet')?.remove(); return; }
@@ -2344,6 +2375,31 @@ async function handleClick(e) {
   else if (act === 'hintdone') {
     await seenHint(el.dataset.k);
     paintLogbook();
+  }
+  else if (act === 'statusmenu') {
+    /* The pill said what the status was but offered no way to change it, so the
+       only routes were a drag on the logbook or the whole edit form. */
+    S.statusFor = Number(el.dataset.id);
+    paintStatusMenu();
+  }
+  else if (act === 'closestatus') { S.statusFor = null; paintStatusMenu(); }
+  else if (act === 'setstatus') {
+    const id = Number(el.dataset.id);
+    const project = S.projects.find((x) => String(x.id) === String(id))
+                 || await api('/projects/' + id);
+    S.statusFor = null; paintStatusMenu();
+    if (project.status === el.dataset.k) return;
+    const patch = applyStatus(project, el.dataset.k, today());
+    await api('/projects/' + id, { method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });
+    toast(`${project.title} → ${STATUS[el.dataset.k].short}`);
+    render();
+  }
+  else if (act === 'setrating') {
+    const rating = Number(el.dataset.k) || null;
+    await api('/projects/' + el.dataset.id, { method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rating }) });
+    render();
   }
   else if (act === 'viewphoto') {
     lightbox('/photos/' + el.dataset.file,
