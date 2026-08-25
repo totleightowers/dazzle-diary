@@ -1266,6 +1266,17 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
   /* The listing a project points at, changed on its own. The title box below
      fills the whole form from a catalogue row; this only moves the pointer, so
      corrections you have made by hand survive being relinked. */
+  /* A picture that fails to load leaves an empty grey box, which looks exactly
+     like having no picture at all — and that ambiguity cost several rounds of
+     "there is no image" against code that was demonstrably rendering one. */
+  const watchPreview = () => {
+    const box = document.getElementById('formshot');
+    const img = document.getElementById('formshotimg');
+    if (!box || !img) return;
+    img.onerror = () => { box.dataset.failed = '1'; };
+    img.onload = () => { delete box.dataset.failed; };
+  };
+
   const showPreview = (url) => {
     const box = document.getElementById('formshot');
     const img = document.getElementById('formshotimg');
@@ -1273,6 +1284,8 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
     img.src = sized(url, 600);
     box.hidden = false;
   };
+
+  watchPreview();
 
   const linkState = document.getElementById('linkstate');
   const linkBox = document.getElementById('linkbox');
