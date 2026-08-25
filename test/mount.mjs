@@ -128,6 +128,17 @@ export async function mount({ width = 390, products = null, catalogue = true } =
     if (/OFL\.txt$/.test(raw)) return { ok: true, status: 200, text: async () => 'SIL OPEN FONT LICENSE Version 1.1' };
     let url;
     try { url = new URL(real); } catch { return { ok: false, status: 400 }; }
+    /* One product, the way a Shopify shop answers for it. The app falls back to
+       this when a catalogue row carries no picture, so the stub has to answer
+       it honestly or the fallback looks broken when it works. */
+    const single = url.pathname.match(/^\/products\/(.+)\.js$/);
+    if (single) {
+      const p = feed.find((x) => x.handle === decodeURIComponent(single[1]));
+      if (!p) return { ok: false, status: 404 };
+      const shots = (p.gallery || p.images || []).map((i) => (i.src || i).replace('https:', ''));
+      return { ok: true, status: 200,
+               json: async () => ({ handle: p.handle, featured_image: shots[0] || null, images: shots }) };
+    }
     const page = Number(url.searchParams.get('page') || 1);
     if (!catalogue || url.hostname !== 'diamondartclub.com' || page > 1)
       return { ok: true, status: 200, json: async () => ({ products: [] }) };

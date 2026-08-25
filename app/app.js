@@ -634,9 +634,16 @@ const formIsDirty = () => {
    point — the same lesson as the drag. */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function wirePull(scroll) {
-  if (!scroll || scroll._pullWired) return;
-  scroll._pullWired = true;
+/* The gesture is watched on the whole screen, not just on the list. On the
+   catalogue the search box, six shop chips and the filter button fill the top
+   of the screen, so the most natural place to start a pull is not inside the
+   scroller at all — which is why pulling the catalogue down appeared to do
+   nothing. What is scrolled is still the list, and the pull still only starts
+   when the list is at its top. */
+function wirePull(surface, scroller = surface) {
+  if (!surface || surface._pullWired) return;
+  surface._pullWired = true;
+  const scroll = scroller;
   const THRESHOLD = 110;
   let startY = null, pulled = 0, busy = false;
 
@@ -648,13 +655,15 @@ function wirePull(scroll) {
     if (t) t.textContent = text;
   };
 
-  scroll.addEventListener('touchstart', (e) => {
+  surface.addEventListener('touchstart', (e) => {
     if (busy || scroll.scrollTop > 0 || !e.touches || e.touches.length !== 1) { startY = null; return; }
+    // dragging a slider or a text field is not a pull
+    if (e.target.closest && e.target.closest('input, textarea, select')) { startY = null; return; }
     startY = e.touches[0].clientY;
     pulled = 0;
   }, { passive: true });
 
-  scroll.addEventListener('touchmove', (e) => {
+  surface.addEventListener('touchmove', (e) => {
     if (startY == null || busy) return;
     pulled = e.touches[0].clientY - startY;
     if (pulled <= 0) { show(0, ''); return; }
@@ -686,8 +695,37 @@ function wirePull(scroll) {
       render();
     }
   };
-  scroll.addEventListener('touchend', finish, { passive: true });
-  scroll.addEventListener('touchcancel', () => { startY = null; pulled = 0; show(0, ''); }, { passive: true });
+  surface.addEventListener('touchend', finish, { passive: true });
+  surface.addEventListener('touchcancel', () => { startY = null; pulled = 0; show(0, ''); }, { passive: true });
+}
+
+/* One swipeable strip, used by the project page and by the form. The dots were
+   painted but never wired: nothing moved them as the strip scrolled, and the
+   project page had no handler for tapping one at all — so a gallery that did
+   swipe still looked frozen, and one that did not looked the same as one that
+   did. */
+function wireShots(strip) {
+  if (!strip || strip._shotsWired) return;
+  strip._shotsWired = true;
+  const owner = strip.parentElement;
+  const mark = () => {
+    const i = Math.round(strip.scrollLeft / Math.max(1, strip.clientWidth));
+    const d = owner?.querySelector('.dots');
+    if (d) [...d.children].forEach((b, n) => b.setAttribute('aria-current', String(n === i)));
+    // the blurred backdrop follows the picture that is showing, or a portrait
+    // canvas ends up sitting on the wrong colour
+    const wash = owner?.querySelector('.wash'), img = strip.children[i];
+    if (wash && img) wash.style.backgroundImage = `url('${img.getAttribute('src')}')`;
+  };
+  strip.addEventListener('scroll', mark, { passive: true });
+  mark();
+}
+
+/** Tapping a dot moves the strip it belongs to, whichever strip that is. */
+function goToShot(button) {
+  const strip = button.closest('.hero, .formshot')?.querySelector('.shots');
+  if (!strip) return;
+  strip.scrollTo({ left: strip.clientWidth * Number(button.dataset.i || 0), behavior: 'smooth' });
 }
 
 async function seenHint(k) {
@@ -863,6 +901,10 @@ route(/^#\/p\/(\d+)$/, async (id) => {
     try {
       const row = await api(`/catalogue/product?shop=${encodeURIComponent(p.shop)}&handle=${encodeURIComponent(p.dac_handle)}`);
       if (row && row.image) p._remote = row.image;
+      if (row && row.images) {
+        try { const a = Array.isArray(row.images) ? row.images : JSON.parse(row.images || '[]');
+              if (a.length) p._remotes = a; } catch { /* the one shot will do */ }
+      }
     } catch { /* offline: the hero simply stays empty */ }
   }
   const spec = [
@@ -880,7 +922,8 @@ route(/^#\/p\/(\d+)$/, async (id) => {
   const coverShots = (() => {
     try { const a = JSON.parse(p.covers || '[]'); if (a.length) return a; } catch {}
     const one = p.cover ? [p.cover] : [];
-    return one.length ? one : (p._remote ? [p._remote] : []);
+    if (one.length) return one;
+    return p._remotes && p._remotes.length ? p._remotes : (p._remote ? [p._remote] : []);
   })();
   const gallerySrc = (f) => f.startsWith('http') ? sized(f, 900) : '/covers/' + encodeURIComponent(f);
   const coverCount = coverShots.length;
@@ -1129,23 +1172,7 @@ route(/^#\/p\/(\d+)$/, async (id) => {
     </div>
   </div>`;
 
-  const shots = document.getElementById('shots');
-  if (shots) {
-    const dots = document.getElementById('dots');
-    const wash = document.getElementById('herowash');
-    shots.onscroll = () => {
-      const i = Math.round(shots.scrollLeft / shots.clientWidth);
-      if (dots) [...dots.children].forEach((d, n) => d.setAttribute('aria-current', n === i));
-      const img = shots.children[i];
-      if (wash && img) wash.style.backgroundImage = `url('${img.getAttribute('src')}')`;
-    };
-    // onclick, not addEventListener: this runs on every render of a project,
-    // and a listener added to the document each time is never taken off again
-    if (dots) dots.onclick = (e) => {
-      const b = e.target.closest('[data-act="shot"]');
-      if (b) shots.scrollTo({ left: shots.clientWidth * Number(b.dataset.i), behavior: 'smooth' });
-    };
-  }
+  wireShots(document.getElementById('shots'));
 
   // the currency chips in the inline cost editor behave like every other group
   const cur = document.getElementById('cost_currency');
@@ -1242,6 +1269,13 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
     try {
       const row = await api(`/catalogue/product?shop=${encodeURIComponent(p.shop)}&handle=${encodeURIComponent(p.dac_handle)}`);
       if (row && row.image) p._preview = row.image;
+      // the whole strip, not just the first shot: arriving by relink, by a
+      // title suggestion or by editing later showed one picture where the
+      // catalogue pick showed six
+      if (row && row.images) {
+        try { const a = Array.isArray(row.images) ? row.images : JSON.parse(row.images || '[]');
+              if (a.length) p._images = a; } catch { /* keep the single preview */ }
+      }
     } catch { /* offline: the form simply has no picture */ }
   }
   /* The same set the project page shows, so a kit looks the same before it is
@@ -1516,11 +1550,24 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
     strip.innerHTML = list.map((src, i) => `<img id="${i ? '' : 'formshotimg'}" src="${h(src)}" alt=""
         loading="lazy" referrerpolicy="no-referrer" data-act="opengallery" data-i="${i}">`).join('');
     S.gallery = { id: null, items: list.map((src) => ({ src, kind: 'cover' })) };
+    /* The dots are not decoration — without them a strip of six pictures looks
+       like one picture. They were only painted at first render, so relinking or
+       picking a title left a silently swipeable strip with nothing to say so. */
+    let dots = box.querySelector('.dots');
+    if (list.length > 1) {
+      if (!dots) { dots = document.createElement('div'); dots.className = 'dots'; dots.id = 'formdots'; box.appendChild(dots); }
+      dots.innerHTML = list.map((_, i) =>
+        `<button data-act="formshot" data-i="${i}" aria-current="${i === 0}"
+                 aria-label="Picture ${i + 1}"><i></i></button>`).join('');
+    } else if (dots) dots.remove();
     box.hidden = false;
+    strip.scrollLeft = 0;
     watchPreview();
+    wireShots(strip);
   };
 
   watchPreview();
+  wireShots(document.getElementById('formshots'));
 
   const linkState = document.getElementById('linkstate');
   const linkBox = document.getElementById('linkbox');
@@ -2047,20 +2094,22 @@ function paintBrowseBody() {
   const B = S.browse;
   const body = document.getElementById('browsebody');
   if (!body) return;
+  body.onscroll = () => { S.browse.scroll = body.scrollTop; };
+  wirePull(body.closest('.screen') || body, body);
+  // an empty result is exactly when you might want to fetch the shops again,
+  // so the indicator belongs on that screen too
+  const pull = `<div class="pull" id="pull"><span id="pulltext"></span></div>`;
   if (!B.items.length) {
-    body.innerHTML = B.loading
+    body.innerHTML = pull + (B.loading
       ? `<p style="margin:28px 0;text-align:center;color:var(--ink-mute);font-size:13px">Looking…</p>`
       : `<div class="empty">${svg('search', 36, 1.4)}<h2>Nothing found</h2>
-         <p>Try a different name, or pick another shop.</p></div>`;
+         <p>Try a different name, or pick another shop.</p></div>`);
     return;
   }
-  body.onscroll = () => { S.browse.scroll = body.scrollTop; };
-  wirePull(body);
   const countEl = document.getElementById('browsecount');
   if (countEl) countEl.textContent = B.items.length
     ? `${B.items.length}${B.more ? '+' : ''} kit${B.items.length === 1 ? '' : 's'}` : '';
-  body.innerHTML = `
-    <div class="pull" id="pull"><span id="pulltext"></span></div>
+  body.innerHTML = pull + `
     <div class="group-body" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr));padding:16px 0 0">
       ${B.items.map((c, i) => `
         <button class="card cat-card" style="flex-direction:column" data-act="pickcat" data-i="${i}"${
@@ -2753,10 +2802,7 @@ async function handleClick(e) {
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rating }) });
     render();
   }
-  else if (act === 'formshot') {
-    const strip = document.getElementById('formshots');
-    if (strip) strip.scrollTo({ left: strip.clientWidth * Number(el.dataset.i), behavior: 'smooth' });
-  }
+  else if (act === 'shot' || act === 'formshot') { goToShot(el); }
   else if (act === 'opengallery') {
     const g = S.gallery;
     if (g && g.items.length) lightbox(g.items, Number(el.dataset.i) || 0);

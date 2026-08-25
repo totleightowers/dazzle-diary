@@ -320,3 +320,84 @@ test('a picture can be pinched, panned and pinched back', async () => {
   assert.equal(slide.dataset.scale, '1', 'pinching back in did not restore it');
   assert.ok(!slide.classList.contains('zoomed'));
 });
+
+test('the dots follow the strip, and tapping one moves it', async () => {
+  const m = await mount();
+  await m.sync();
+  await m.go('#/browse');
+  await m.tap('[data-act="pickcat"]');
+
+  const strip = m.find('#formshots'), dots = m.all('#formdots button');
+  assert.ok(dots.length > 1, 'a strip of several pictures has no dots to say so');
+  assert.equal(dots.length, m.all('#formshots img').length);
+  assert.equal(dots[0].getAttribute('aria-current'), 'true');
+
+  // tapping the second dot moves the strip to the second picture
+  await m.tap('#formdots button[data-i="1"]');
+  assert.equal(strip.scrollLeft, strip.clientWidth, 'tapping a dot did not move the strip');
+
+  // and swiping the strip moves the dots, which is what makes a swipe legible
+  strip.dispatchEvent({ type: 'scroll' });
+  assert.equal(m.all('#formdots button')[1].getAttribute('aria-current'), 'true',
+               'the dots did not follow the strip');
+  assert.equal(m.all('#formdots button')[0].getAttribute('aria-current'), 'false');
+});
+
+test('the project page gallery answers its own dots too', async () => {
+  const m = await mount();
+  await m.sync();
+  const p = await m.seed({ title: 'Moon Eater', status: 'started', shop: 'dac', dac_handle: 'moon-eater' });
+  await m.go('#/p/' + p.id);
+  const strip = m.find('#shots');
+  assert.ok(m.all('#dots button').length > 1, 'the project page shows no dots for its gallery');
+  await m.tap('#dots button[data-i="1"]');
+  assert.equal(strip.scrollLeft, strip.clientWidth, 'a dot on the project page did nothing');
+  strip.dispatchEvent({ type: 'scroll' });
+  assert.equal(m.all('#dots button')[1].getAttribute('aria-current'), 'true');
+});
+
+test('the catalogue is pulled down from anywhere on the screen, not just the list', async () => {
+  const m = await mount();
+  await m.sync();
+  await m.go('#/browse');
+  const at = (y) => ({ clientX: 120, clientY: y });
+
+  // the top of the catalogue is search box, shop chips and filters — starting
+  // the pull there is the natural thing to do, and it was doing nothing
+  const chip = m.find('.chiprow .chip');
+  chip.dispatchEvent({ type: 'touchstart', touches: [at(100)] });
+  chip.dispatchEvent({ type: 'touchmove', touches: [at(180)], preventDefault() {} });
+  assert.equal(m.find('#pulltext').textContent, 'Pull to update');
+  chip.dispatchEvent({ type: 'touchmove', touches: [at(260)], preventDefault() {} });
+  assert.equal(m.find('#pulltext').textContent, 'Release to update');
+  m.find('#pull').dispatchEvent({ type: 'touchcancel' });
+
+  // but dragging the price slider is not a pull
+  await m.tap('[data-act="bfilters"]');
+  const slider = m.find('#bprice');
+  slider.dispatchEvent({ type: 'touchstart', touches: [at(100)] });
+  slider.dispatchEvent({ type: 'touchmove', touches: [at(260)], preventDefault() {} });
+  assert.equal(m.find('#pulltext').textContent, '', 'dragging the slider started a refresh');
+});
+
+test('a kit whose catalogue row lost its picture still shows one', async () => {
+  // a shop that has changed its feed since the last sync leaves rows with no
+  // image, and the kit was then blank everywhere it appeared
+  const blank = {
+    id: 7, title: 'Lost Cover', vendor: 'Someone', handle: 'lost-cover',
+    product_type: 'Diamond Art Kit', images: [],
+    gallery: ['https://cdn.shopify.com/a.jpg', 'https://cdn.shopify.com/b.jpg'],
+    variants: [{ title: '20" x 20" (50cm x 50cm) / Round with 30 Colors / 40000', price: '50.00', available: true }]
+  };
+  const m = await mount({ products: [blank] });
+  await m.sync();
+  const row = await m.api('/catalogue/product?shop=dac&handle=lost-cover');
+  assert.ok(row && row.image, 'the shop was never asked for the picture');
+
+  const p = await m.seed({ title: 'Lost Cover', status: 'started', shop: 'dac', dac_handle: 'lost-cover' });
+  await m.go('#/p/' + p.id);
+  assert.ok(m.all('.hero .shots img').length >= 2, 'the project page still has no pictures');
+
+  await m.go('#/p/' + p.id + '/edit');
+  assert.ok(m.all('#formshots img').length >= 2, 'the form still has no pictures');
+});
