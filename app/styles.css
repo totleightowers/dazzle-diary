@@ -524,6 +524,11 @@ pre.licence {
   z-index: 60; max-width: calc(100% - 40px); padding: 12px 18px; border-radius: 999px;
   background: var(--ink); color: var(--paper); font-size: 13px; font-weight: 600;
   box-shadow: 0 6px 24px rgba(0,0,0,.24); }
+.toast.with-action { display: flex; align-items: center; gap: 14px; padding-right: 8px; }
+.toast-action {
+  flex: 0 0 auto; padding: 6px 12px; border-radius: 999px; font-weight: 700;
+  font-size: 13px; color: var(--accent); background: rgba(255,255,255,.12);
+}
 
 .photos { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
 .photos .shot { position: relative; aspect-ratio: 1; border-radius: 11px; overflow: hidden;
@@ -564,6 +569,12 @@ select.fld {
   display: flex; align-items: center; justify-content: center; padding: 0 4px;
 }
 .lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 10px; display: block; }
+
+/* A zoomed slide scrolls in both directions and holds an image bigger than it:
+   panning is then the platform's own scrolling, with its own momentum. */
+.lb-slide.zoomed { overflow: auto; scroll-snap-align: none; touch-action: pan-x pan-y; padding: 0; }
+.lb-slide.zoomed img { max-width: none; max-height: none; width: 260%; border-radius: 0; }
+.lightbox.has-zoom .lb-strip { scroll-snap-type: none; overflow-x: hidden; }
 .lb-count {
   position: absolute; top: calc(env(safe-area-inset-top, 0px) + 20px); left: 50%;
   transform: translateX(-50%); color: rgba(255,255,255,.85); font-size: 13px;

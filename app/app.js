@@ -220,7 +220,7 @@ function lightbox(items, startIndex = 0) {
   // ends on one would shut the viewer instead of moving it
   el.addEventListener('click', (e) => {
     if (e.target.closest('[data-act]')) return;
-    if (e.target.closest('.lb-slide') && list.length > 1) return;
+    if (e.target.closest('.lb-slide') && (list.length > 1 || el.classList.contains('has-zoom'))) return;
     close();
   });
   el._close = close;
@@ -228,6 +228,25 @@ function lightbox(items, startIndex = 0) {
   window.addEventListener('popstate', onPop);
   history.pushState({ lightbox: true }, '');
   document.body.appendChild(el);
+
+  /* Double tap zooms, which is the gesture everyone already has. The zoomed
+     slide simply becomes scrollable and the image larger than it, so panning is
+     the platform's own scrolling rather than arithmetic on touch points. */
+  let lastTap = 0;
+  el.addEventListener('click', (e) => {
+    const slide = e.target.closest && e.target.closest('.lb-slide');
+    if (!slide || e.target.closest('[data-act]')) return;
+    const now = Date.now();
+    const quick = now - lastTap < 320;
+    // a completed double tap ends the sequence: without this a third tap pairs
+    // with the second and toggles straight back
+    lastTap = quick ? 0 : now;
+    if (!quick) return;
+    const on = slide.classList.contains('zoomed');
+    for (const other of el.querySelectorAll('.lb-slide.zoomed')) other.classList.remove('zoomed');
+    if (!on) slide.classList.add('zoomed');
+    el.classList[on ? 'remove' : 'add']('has-zoom');
+  });
 
   const s = strip();
   if (s) {
@@ -283,13 +302,38 @@ async function saveToPhone(filename, blob) {
 }
 
 let toastTimer;
-function toast(msg) {
+function toast(msg, action = null) {
   document.querySelector('.toast')?.remove();
   const t = document.createElement('div');
-  t.className = 'toast'; t.textContent = msg;
+  t.className = 'toast' + (action ? ' with-action' : '');
+  t.innerHTML = `<span>${h(msg)}</span>`;
+  if (action) {
+    const b = document.createElement('button');
+    b.className = 'toast-action';
+    b.textContent = action.label;
+    b.onclick = () => { t.remove(); clearTimeout(toastTimer); action.run(); };
+    t.appendChild(b);
+  }
   document.body.appendChild(t);
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.remove(), 2600);
+  toastTimer = setTimeout(() => t.remove(), action ? (action.ms || 6000) : 2600);
+  return t;
+}
+
+/* Android asks afterwards, not before: the thing happens and an Undo sits in
+   the corner for a few seconds. A modal "are you sure?" on every deletion is
+   both more interruption and less safety, because the answer becomes reflex.
+   Nothing is actually deleted until the offer expires. */
+const pendingDeletes = new Set();
+function deleteLater(key, seconds, commit) {
+  pendingDeletes.add(key);
+  const timer = setTimeout(async () => {
+    if (!pendingDeletes.has(key)) return;
+    pendingDeletes.delete(key);
+    try { await commit(); } catch (e) { toast(e.message); }
+    render();
+  }, seconds * 1000);
+  return () => { clearTimeout(timer); pendingDeletes.delete(key); render(); };
 }
 
 /* ------------------------------------------------------------------ state */
@@ -722,12 +766,16 @@ route(/^#\/p\/(\d+)$/, async (id) => {
   })();
   const gallerySrc = (f) => f.startsWith('http') ? sized(f, 900) : '/covers/' + encodeURIComponent(f);
   const coverCount = coverShots.length;
+  /* One list of photos, used by the grid and by the viewer. Filtering in one
+     place and not the other would have the viewer open the wrong picture as
+     soon as anything was removed. */
+  const photos = (p.photos || []).filter((ph) => !pendingDeletes.has('photo:' + ph.id));
   S.gallery = {
     id: p.id,
     items: [
       ...coverShots.map((f) => ({ src: gallerySrc(f), kind: 'cover' })),
-      ...(p.photos || []).map((ph) => ({ src: '/photos/' + encodeURIComponent(ph.file),
-                                         kind: 'photo', file: ph.file, projectId: p.id }))
+      ...photos.map((ph) => ({ src: '/photos/' + encodeURIComponent(ph.file),
+                               kind: 'photo', file: ph.file, projectId: p.id }))
     ]
   };
 
@@ -904,7 +952,7 @@ route(/^#\/p\/(\d+)$/, async (id) => {
         <div>
           <h3 class="label">Progress photos</h3>
           <div class="photos">
-            ${(p.photos || []).map((ph, i) => `
+            ${photos.map((ph, i) => `
               <div class="shot">
                 <img src="/photos/${encodeURIComponent(ph.file)}" alt="" loading="lazy">
                 <button class="open" data-act="opengallery" data-i="${coverCount + i}"
@@ -2577,9 +2625,10 @@ async function handleClick(e) {
     render();
   }
   else if (act === 'delphoto') {
-    if (!confirm('Remove this photo?')) return;
-    await api('/photos/' + el.dataset.id, { method: 'DELETE' });
+    const id = el.dataset.id;
+    const undo = deleteLater('photo:' + id, 6, () => api('/photos/' + id, { method: 'DELETE' }));
     render();
+    toast('Photo removed', { label: 'Undo', run: undo });
   }
 }
 

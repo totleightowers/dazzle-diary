@@ -104,3 +104,40 @@ test('the gallery opens from a cover and holds the photos too', async () => {
   assert.equal(m.all('.lb-slide').length, covers + 1,
                'the viewer does not hold the covers and the photo');
 });
+
+test('removing a photo can be undone, and asks nothing first', async () => {
+  const m = await mount();
+  const p = await m.seed({ title: 'Moon Eater', status: 'started' });
+  for (const n of [1, 2]) await m.api(`/projects/${p.id}/photos`, {
+    method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: new Uint8Array([n]).buffer });
+  await m.go('#/p/' + p.id);
+  assert.equal(m.all('.shot').length, 2);
+
+  m.answerConfirms(false);                  // nothing should be asking
+  await m.tap('[data-act="delphoto"]');
+  assert.equal(m.confirms.length, 0, 'it asked before removing');
+  assert.equal(m.all('.shot').length, 1, 'the photo is still on the page');
+  assert.equal((await m.api('/projects/' + p.id)).photos.length, 2,
+               'it deleted the photo before the offer to undo expired');
+
+  await m.tap('.toast-action');
+  assert.equal(m.all('.shot').length, 2, 'undo did not bring it back');
+  assert.equal((await m.api('/projects/' + p.id)).photos.length, 2);
+});
+
+test('a double tap zooms the viewer and a second one restores it', async () => {
+  const m = await mount();
+  await m.sync();
+  const p = await m.seed({ title: 'Moon Eater', status: 'started', shop: 'dac', dac_handle: 'moon-eater' });
+  await m.go('#/p/' + p.id);
+  await m.tap('.shots img');
+  const slide = m.find('.lb-slide');
+  const double = () => { slide.dispatchEvent({ type: 'click' }); slide.dispatchEvent({ type: 'click' }); };
+
+  double();
+  assert.ok(slide.classList.contains('zoomed'), 'a double tap did not zoom');
+  assert.ok(m.find('.lightbox').classList.contains('has-zoom'), 'the strip still slides while zoomed');
+  double();
+  assert.ok(!slide.classList.contains('zoomed'), 'a second double tap did not restore it');
+  assert.ok(m.find('.lb-strip'), 'zooming closed the viewer');
+});
