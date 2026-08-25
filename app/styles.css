@@ -364,18 +364,16 @@ body.dragging .empty-sect .group-body { min-height: 56px; }
   position: relative; border-radius: var(--r-card); overflow: hidden; background: var(--sunken);
   height: 190px;
 }
-/* the same strip the project page uses, so a kit behaves the same before it is
-   added as after: swipe between the shop's pictures, tap one to open it */
-.formshot .shots { height: 100%; }
 .formshot .dots { bottom: 8px; }
 
 .shoplink {
   display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 13px;
   border-radius: 999px; font-size: 13px; font-weight: 600; text-decoration: none;
   color: var(--ink); background: var(--chip-bg); border: 1px solid var(--line);
-  align-self: flex-start;
+  /* a pill, not a bar: flex-start alone left it stretched across the whole
+     column once the form became a grid on a wide screen */
+  align-self: flex-start; justify-self: start;
 }
-.formshot img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
 .formshot[data-failed] img { display: none; }
 .formshot[data-failed]::after {
   content: 'The shop\2019s picture would not load';
@@ -498,8 +496,10 @@ pre.licence {
   filter: blur(26px) saturate(1.15) brightness(.75);
   transform: scale(1.08);
 }
-/* swipeable gallery: native scroll-snap rather than a hand-rolled pager */
-.hero .shots {
+/* swipeable gallery: native scroll-snap rather than a hand-rolled pager.
+   The form's strip is the same component, not a lookalike: it had only a
+   height, which is why the picture sat hard left and no swipe ever moved it. */
+.hero .shots, .formshot .shots {
   position: relative; height: 100%; display: flex;
   overflow-x: auto; overflow-y: hidden;
   scroll-snap-type: x mandatory; scrollbar-width: none;
@@ -508,8 +508,8 @@ pre.licence {
   touch-action: pan-x;
   overscroll-behavior-x: contain;
 }
-.hero .shots::-webkit-scrollbar { display: none; }
-.hero .shots img {
+.hero .shots::-webkit-scrollbar, .formshot .shots::-webkit-scrollbar { display: none; }
+.hero .shots img, .formshot .shots img {
   flex: 0 0 100%; width: 100%; height: 100%;
   object-fit: contain; display: block; scroll-snap-align: center;
 }

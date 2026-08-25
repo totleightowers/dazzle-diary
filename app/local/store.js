@@ -59,13 +59,47 @@ const onDisk = (f) => !!f && !!Native()?.exists('covers/' + f);
 const gallery = (row) => { try { return JSON.parse(row.covers || '[]'); } catch { return []; } };
 
 /** Pull a project's cover gallery off its listing. Returns [] if it has none. */
+const asList = (v) => Array.isArray(v) ? v
+  : (() => { try { return JSON.parse(v || '[]'); } catch { return []; } })();
+
+/* A catalogue row can carry no picture: a shop that has changed its feed since
+   the last sync, or a listing added after it. Rather than leave the kit blank
+   everywhere it appears, ask the shop for that one product. The answer is
+   written back onto the row, so this costs one request per kit, once. */
+async function liveImages(shopId, handle) {
+  const shop = shopById(shopId);
+  if (!shop || !handle) return [];
+  const abs = (u) => String(u || '').replace(/^\/\//, 'https://');
+  try {
+    if (shop.platform === 'woo') {
+      const j = await fetchJson(`https://${shop.domain}/wp-json/wc/store/v1/products?slug=${encodeURIComponent(handle)}`);
+      return ((j[0] || {}).images || []).map(i => abs(i.src)).filter(Boolean).slice(0, 6);
+    }
+    const j = await fetchJson(`https://${shop.domain}/products/${encodeURIComponent(handle)}.js`);
+    const list = (j.images || []).map(abs).filter(Boolean);
+    return (list.length ? list : [abs(j.featured_image)].filter(Boolean)).slice(0, 6);
+  } catch { return []; }
+}
+
+/** The row's pictures, going to the shop if the row itself has none. */
+async function listingImages(shopId, handle) {
+  const c = (cache && cache.rows || []).find(r => r.shop === shopId && r.handle === handle);
+  const known = c ? (asList(c.images).length ? asList(c.images) : (c.image ? [c.image] : [])) : [];
+  if (known.length) return known;
+  const live = await liveImages(shopId, handle);
+  if (live.length && c) {
+    c.image = live[0];
+    c.images = JSON.stringify(live);
+    try { await idb.put('catalogue', c); } catch { /* the in-memory row is enough for now */ }
+  }
+  return live;
+}
+
 async function listingCovers(row) {
   if (!row.dac_handle) return [];
-  const c = cache.rows.find(r => r.shop === (row.shop || 'dac') && r.handle === row.dac_handle);
-  if (!c || !c.image) return [];
-  const urls = Array.isArray(c.images) ? c.images
-    : (() => { try { return JSON.parse(c.images || '[]'); } catch { return []; } })();
-  return cacheGallery(`${row.shop || 'dac'}-${row.dac_handle}`, urls.length ? urls : [c.image]);
+  const urls = await listingImages(row.shop || 'dac', row.dac_handle);
+  if (!urls.length) return [];
+  return cacheGallery(`${row.shop || 'dac'}-${row.dac_handle}`, urls);
 }
 
 /** Fetch covers for any project still missing one. Safe to call repeatedly. */
@@ -373,7 +407,12 @@ export async function localApi(path, opts = {}) {
   if (p === '/catalogue/product' && m === 'GET') {
     const shop = q(url, 'shop'), handle = q(url, 'handle');
     if (!shop || !handle) return null;
-    return (cache && cache.rows || []).find(r => r.shop === shop && r.handle === handle) || null;
+    const row = (cache && cache.rows || []).find(r => r.shop === shop && r.handle === handle);
+    if (row && !row.image) await listingImages(shop, handle);   // fills the row in place
+    if (row) return row;
+    // not in the catalogue at all — the pictures are still worth having
+    const live = await liveImages(shop, handle);
+    return live.length ? { shop, handle, image: live[0], images: JSON.stringify(live) } : null;
   }
 
   if (p === '/catalogue/search' || p === '/catalogue/browse') {
