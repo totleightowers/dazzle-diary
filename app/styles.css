@@ -377,6 +377,15 @@ body.dragging .empty-sect .group-body { min-height: 56px; }
 }
 .stars.shown { gap: 1px; margin-top: 6px; }
 .stars.shown > span { padding: 0; display: inline-flex; }
+/* on the project the stars are the control, not a picture of one */
+.stars.shown.live > button { padding: 3px; color: var(--line); display: inline-flex; }
+.stars.shown.live > button.on { color: oklch(0.66 0.15 78); --star-fill: oklch(0.78 0.15 78); }
+.stars.shown.live > button:active { transform: scale(.92); }
+
+/* the status pill is a button now, so it needs to look pressable */
+.statuspill[data-act] { border: 0; cursor: pointer; }
+.statuspill[data-act]:active { filter: brightness(1.08); }
+.checkrow[aria-current="true"] { border-color: var(--accent); }
 .stars .clearstars { margin-left: auto; font-size: 12px; color: var(--ink-mute); padding: 4px 8px; }
 
 /* A collapsible group in the edit form: the dates and the hold history are a
