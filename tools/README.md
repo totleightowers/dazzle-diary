@@ -30,3 +30,17 @@ the app, the problem is the WebView rather than the CSS.
 ```sh
 node tools/preview.mjs     # http://localhost:8788
 ```
+
+## Hooks
+
+`main` is written to by merging a pull request, never by committing to it. The
+remote refuses a direct push outright — branch protection applies to
+administrators too, with no override — and these hooks catch it a step earlier,
+before the work ends up on the wrong branch and has to be moved.
+
+```sh
+git config core.hooksPath tools/hooks
+```
+
+`pre-commit` refuses a commit made while on `main`; `pre-push` refuses a push to
+it.
