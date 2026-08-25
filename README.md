@@ -216,6 +216,13 @@ storefront uses — and caches cover images locally for kits you own, which is
 what a shop's own logbook does. Artwork remains the copyright of the artists and
 the shops. Don't redistribute it.
 
+## Contributing to this repository
+
+`main` is protected: every change arrives by pull request, the checks have to
+pass, and **there is no administrator override** — a direct push is refused for
+everyone. `git config core.hooksPath tools/hooks` makes a local clone refuse to
+commit on `main` in the first place.
+
 ## Licence
 
 MIT — see [LICENSE](LICENSE).
