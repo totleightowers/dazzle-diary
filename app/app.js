@@ -211,9 +211,12 @@ function lightbox(items, startIndex = 0) {
     if (!bar) return;
     const it = list[i];
     // only your own photograph can become the cover; the shop's already is one
+    const canShare = typeof window.LogbookNative?.sharePhoto === 'function';
     bar.innerHTML = (it && it.kind === 'photo' && it.projectId)
       ? `<button class="btn primary" data-act="setcover" data-id="${it.projectId}"
-           data-file="${h(it.file)}">Use as cover</button>` : '';
+           data-file="${h(it.file)}">Use as cover</button>${
+         canShare ? `<button class="btn ghost" data-act="sharephoto"
+           data-file="${h(it.file)}" data-title="${h(it.title || '')}">Share</button>` : ''}` : '';
   }
 
   // a tap on the backdrop closes; a tap on a picture does not, or a swipe that
@@ -572,6 +575,69 @@ const formIsDirty = () => {
   return Object.keys(now).some((k) => now[k] !== editing.opened[k]);
 };
 
+/* Pulling a list down to refresh it is the one gesture everybody has, and the
+   catalogues were only refreshable from a button in Settings. The pull only
+   starts at the top of the list, so it never fights with scrolling, and the
+   touchmove is non-passive because preventing the overscroll is the whole
+   point — the same lesson as the drag. */
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function wirePull(scroll) {
+  if (!scroll || scroll._pullWired) return;
+  scroll._pullWired = true;
+  const THRESHOLD = 110;
+  let startY = null, pulled = 0, busy = false;
+
+  const box = () => document.getElementById('pull');
+  const label = () => document.getElementById('pulltext');
+  const show = (px, text) => {
+    const b = box(), t = label();
+    if (b) b.style.height = Math.round(px) + 'px';
+    if (t) t.textContent = text;
+  };
+
+  scroll.addEventListener('touchstart', (e) => {
+    if (busy || scroll.scrollTop > 0 || !e.touches || e.touches.length !== 1) { startY = null; return; }
+    startY = e.touches[0].clientY;
+    pulled = 0;
+  }, { passive: true });
+
+  scroll.addEventListener('touchmove', (e) => {
+    if (startY == null || busy) return;
+    pulled = e.touches[0].clientY - startY;
+    if (pulled <= 0) { show(0, ''); return; }
+    e.preventDefault();
+    show(Math.min(72, pulled * 0.5), pulled > THRESHOLD ? 'Release to update' : 'Pull to update');
+  }, { passive: false });
+
+  const finish = async () => {
+    const enough = pulled > THRESHOLD;
+    startY = null; pulled = 0;
+    if (!enough || busy) { show(0, ''); return; }
+    busy = true;
+    show(44, 'Updating\u2026');
+    try {
+      const { job } = await api('/catalogue/sync', { method: 'POST' });
+      for (let i = 0; i < 6000; i++) {
+        const j = await api('/jobs/' + job);
+        if (j.state !== 'running') break;
+        if (j.message) show(44, j.message);
+        await sleep(250);
+      }
+      S.meta = await api('/state');
+      toast('Catalogues updated');
+    } catch (err) {
+      toast(err.message);
+    } finally {
+      busy = false;
+      show(0, '');
+      render();
+    }
+  };
+  scroll.addEventListener('touchend', finish, { passive: true });
+  scroll.addEventListener('touchcancel', () => { startY = null; pulled = 0; show(0, ''); }, { passive: true });
+}
+
 async function seenHint(k) {
   S.prefs.hints = { ...(S.prefs.hints || {}), [k]: true };
   try {
@@ -631,6 +697,7 @@ function paintLogbook() {
     </div>
 
     <div class="scroll pad" style="padding-bottom:24px">
+      <div class="pull" id="pull"><span id="pulltext"></span></div>
       ${needsCatalogue ? firstRunSync() : ''}
       ${!needsCatalogue && !empty && S.projects.length > 1 && !S.prefs.hints?.drag ? dragHint() : ''}
       ${empty ? emptyLogbook() : groups.map((g) => `
@@ -649,6 +716,8 @@ function paintLogbook() {
       <button class="btn ghost square" data-go="#/import" aria-label="Import orders">${svg('imp')}</button>
     </div>
   </div>`;
+
+  wirePull($list.querySelector('.scroll'));
 
   const input = document.getElementById('q');
   if (input) {
@@ -775,7 +844,7 @@ route(/^#\/p\/(\d+)$/, async (id) => {
     items: [
       ...coverShots.map((f) => ({ src: gallerySrc(f), kind: 'cover' })),
       ...photos.map((ph) => ({ src: '/photos/' + encodeURIComponent(ph.file),
-                               kind: 'photo', file: ph.file, projectId: p.id }))
+                               kind: 'photo', file: ph.file, projectId: p.id, title: p.title }))
     ]
   };
 
@@ -2564,6 +2633,10 @@ async function handleClick(e) {
   else if (act === 'opengallery') {
     const g = S.gallery;
     if (g && g.items.length) lightbox(g.items, Number(el.dataset.i) || 0);
+  }
+  else if (act === 'sharephoto') {
+    const ok = window.LogbookNative?.sharePhoto('photos/' + el.dataset.file, el.dataset.title || '');
+    if (!ok) toast('That photo could not be shared');
   }
   else if (act === 'setcover') {
     const box = document.querySelector('.lightbox');

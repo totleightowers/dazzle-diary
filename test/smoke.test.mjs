@@ -141,3 +141,61 @@ test('a double tap zooms the viewer and a second one restores it', async () => {
   assert.ok(!slide.classList.contains('zoomed'), 'a second double tap did not restore it');
   assert.ok(m.find('.lb-strip'), 'zooming closed the viewer');
 });
+
+test('pulling the logbook down updates the catalogues', async () => {
+  const m = await mount();
+  await m.seed({ title: 'Moon Eater', status: 'started' });
+  await m.go('#/');
+  const scroll = m.find('.scroll');
+  const text = () => m.find('#pulltext')?.textContent || '';
+  const touch = (type, y) => scroll.dispatchEvent({ type, touches: y == null ? [] : [{ clientY: y }] });
+
+  assert.ok(m.find('#pull'), 'there is nowhere for the pull to show');
+  scroll.scrollTop = 0;
+  touch('touchstart', 100);
+  touch('touchmove', 160);
+  assert.match(text(), /Pull to update/, 'a short pull says nothing');
+  touch('touchmove', 260);
+  assert.match(text(), /Release/, 'a long pull does not offer to update');
+  touch('touchend');
+  await m.settle();
+  assert.notEqual(text(), '', 'releasing did not start an update');
+
+  for (let i = 0; i < 40 && /…/.test(text()); i++) await m.settle();
+  assert.equal(text(), '', 'the indicator never went away');
+
+  // part way down the list, a downward drag is scrolling and nothing else
+  scroll.scrollTop = 400;
+  touch('touchstart', 100);
+  touch('touchmove', 300);
+  assert.equal(text(), '', 'it tried to refresh while the list was scrolled');
+});
+
+test('a progress photo can be shared, when the phone can share', async () => {
+  const m = await mount();
+  const shared = [];
+  m.window.LogbookNative.sharePhoto = (path, title) => { shared.push({ path, title }); return true; };
+  const p = await m.seed({ title: 'Moon Eater', status: 'started' });
+  await m.api(`/projects/${p.id}/photos`, { method: 'POST',
+    headers: { 'Content-Type': 'image/jpeg' }, body: new Uint8Array([7]).buffer });
+
+  await m.go('#/p/' + p.id);
+  await m.tap('.shot .open');
+  await m.tap('[data-act="sharephoto"]');
+  assert.equal(shared.length, 1, 'nothing was handed to the phone to share');
+  assert.match(shared[0].path, /^photos\//, 'it shared the wrong path');
+  assert.equal(shared[0].title, 'Moon Eater', 'the photo went out unnamed');
+});
+
+test('no share button on a phone that cannot share', async () => {
+  const m = await mount();
+  delete m.window.LogbookNative.sharePhoto;
+  const p = await m.seed({ title: 'Moon Eater', status: 'started' });
+  await m.api(`/projects/${p.id}/photos`, { method: 'POST',
+    headers: { 'Content-Type': 'image/jpeg' }, body: new Uint8Array([7]).buffer });
+  await m.go('#/p/' + p.id);
+  await m.tap('.shot .open');
+  assert.ok(m.find('.lb-strip'), 'the viewer did not open');
+  assert.equal(m.find('[data-act="sharephoto"]'), null,
+               'it offered to share on a build with no way to do it');
+});
