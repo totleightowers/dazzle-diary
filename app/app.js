@@ -235,6 +235,61 @@ function lightbox(items, startIndex = 0) {
   /* Double tap zooms, which is the gesture everyone already has. The zoomed
      slide simply becomes scrollable and the image larger than it, so panning is
      the platform's own scrolling rather than arithmetic on touch points. */
+  /* Pinch. The WebView's own page zoom is off — the app is a fixed layout, not
+     a document — so two fingers on a picture have to be handled here: track the
+     distance between them, scale the image by how much it changes, and let a
+     one-finger drag move it while it is bigger than the frame. Anything under a
+     small movement is ignored, or a slightly uneven two-finger tap jumps. */
+  let pinch = null, panFrom = null;
+  const slideAt = (i) => el.querySelectorAll('.lb-slide')[i];
+  const scaleOf = (slide) => Number(slide?.dataset.scale || 1);
+  const applyScale = (slide, scale, ox, oy) => {
+    const img = slide.querySelector('img');
+    if (!img) return;
+    const clamped = Math.min(6, Math.max(1, scale));
+    slide.dataset.scale = String(clamped);
+    const x = clamped === 1 ? 0 : (ox ?? Number(slide.dataset.ox || 0));
+    const y = clamped === 1 ? 0 : (oy ?? Number(slide.dataset.oy || 0));
+    slide.dataset.ox = String(x); slide.dataset.oy = String(y);
+    img.style.transform = `translate(${x}px, ${y}px) scale(${clamped})`;
+    if (clamped > 1) { slide.classList.add('zoomed'); el.classList.add('has-zoom'); }
+    else { slide.classList.remove('zoomed'); if (!el.querySelector('.lb-slide.zoomed')) el.classList.remove('has-zoom'); }
+  };
+  const gap = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+
+  el.addEventListener('touchstart', (e) => {
+    if (e.touches && e.touches.length === 2) {
+      pinch = { from: gap(e.touches), scale: scaleOf(slideAt(index)) };
+      panFrom = null;
+    } else if (e.touches && e.touches.length === 1 && scaleOf(slideAt(index)) > 1) {
+      const t = e.touches[0];
+      const slide = slideAt(index);
+      panFrom = { x: t.clientX, y: t.clientY,
+                  ox: Number(slide.dataset.ox || 0), oy: Number(slide.dataset.oy || 0) };
+    }
+  }, { passive: true });
+
+  el.addEventListener('touchmove', (e) => {
+    const slide = slideAt(index);
+    if (!slide) return;
+    if (pinch && e.touches && e.touches.length === 2) {
+      e.preventDefault();
+      applyScale(slide, pinch.scale * (gap(e.touches) / (pinch.from || 1)));
+    } else if (panFrom && e.touches && e.touches.length === 1) {
+      e.preventDefault();
+      const t = e.touches[0];
+      applyScale(slide, scaleOf(slide),
+                 panFrom.ox + (t.clientX - panFrom.x), panFrom.oy + (t.clientY - panFrom.y));
+    }
+  }, { passive: false });
+
+  el.addEventListener('touchend', (e) => {
+    if (!e.touches || e.touches.length === 0) { pinch = null; panFrom = null; }
+    const slide = slideAt(index);
+    // a nudge below a tenth is a wobble, not a pinch: settle back to fitting
+    if (slide && scaleOf(slide) < 1.1) applyScale(slide, 1);
+  }, { passive: true });
+
   let lastTap = 0;
   el.addEventListener('click', (e) => {
     const slide = e.target.closest && e.target.closest('.lb-slide');
@@ -245,10 +300,7 @@ function lightbox(items, startIndex = 0) {
     // with the second and toggles straight back
     lastTap = quick ? 0 : now;
     if (!quick) return;
-    const on = slide.classList.contains('zoomed');
-    for (const other of el.querySelectorAll('.lb-slide.zoomed')) other.classList.remove('zoomed');
-    if (!on) slide.classList.add('zoomed');
-    el.classList[on ? 'remove' : 'add']('has-zoom');
+    applyScale(slide, scaleOf(slide) > 1 ? 1 : 2.5, 0, 0);
   });
 
   const s = strip();
@@ -697,7 +749,6 @@ function paintLogbook() {
     </div>
 
     <div class="scroll pad" style="padding-bottom:24px">
-      <div class="pull" id="pull"><span id="pulltext"></span></div>
       ${needsCatalogue ? firstRunSync() : ''}
       ${!needsCatalogue && !empty && S.projects.length > 1 && !S.prefs.hints?.drag ? dragHint() : ''}
       ${empty ? emptyLogbook() : groups.map((g) => `
@@ -716,8 +767,6 @@ function paintLogbook() {
       <button class="btn ghost square" data-go="#/import" aria-label="Import orders">${svg('imp')}</button>
     </div>
   </div>`;
-
-  wirePull($list.querySelector('.scroll'));
 
   const input = document.getElementById('q');
   if (input) {
@@ -973,6 +1022,9 @@ route(/^#\/p\/(\d+)$/, async (id) => {
         ${(() => {
           const list = p.sessions || [];
           const mins = list.reduce((n, x) => n + (Number(x.minutes) || 0), 0);
+          /* A kit on the wish list or still in the post cannot be worked on, so
+             offering to time a session on it is noise. */
+          if (p.status === 'wishlist' || p.status === 'notReceived') return '';
           return `<div>
           <h3 class="label">Time</h3>
           ${spanList(list.map((se) => ({
@@ -1166,7 +1218,9 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
           colors: c.colors, drills: c.drills, special: c.special,
           brand: shopName, source: shopName, price: c.price,
           currency: displayCurrency(c.shop, c.currency, S.prefs.currency),
-          dac_handle: c.handle, shop: c.shop, _preview: c.image || null };
+          dac_handle: c.handle, shop: c.shop, _preview: c.image || null,
+          _images: (() => { try { return Array.isArray(c.images) ? c.images : JSON.parse(c.images || '[]'); }
+                            catch { return []; } })() };
     /* Kept until the form is actually left. Clearing it here meant a second
        render of the same form — a fold, a rotation, anything that re-runs the
        route — produced a blank New project with no picture and none of the
@@ -1190,9 +1244,19 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
       if (row && row.image) p._preview = row.image;
     } catch { /* offline: the form simply has no picture */ }
   }
-  const preview = p._preview
-    ? sized(p._preview, 600)
-    : (p.cover ? '/covers/' + encodeURIComponent(p.cover) : null);
+  /* The same set the project page shows, so a kit looks the same before it is
+     added as after: every picture the listing has, or the covers already
+     cached for it. */
+  const formShots = (() => {
+    const cached = (() => {
+      try { const a = JSON.parse(p.covers || '[]'); if (a.length) return a; } catch {}
+      return p.cover ? [p.cover] : [];
+    })();
+    if (cached.length) return cached.map((f) => '/covers/' + encodeURIComponent(f));
+    const remote = p._preview ? (Array.isArray(p._images) && p._images.length ? p._images : [p._preview]) : [];
+    return remote.map((u) => sized(u, 900));
+  })();
+  S.gallery = { id: p.id || null, items: formShots.map((src) => ({ src, kind: 'cover' })) };
 
   $out.innerHTML = `
   <div class="screen reading form">
@@ -1200,8 +1264,22 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
       ${topbar(isNew ? 'New project' : 'Project details', { back: isNew ? '#/' : '#/p/' + id, sub: true })}
     </div>
     <div class="scroll pad stack" style="padding-top:18px;padding-bottom:26px">
-      <div class="formshot" id="formshot"${preview ? '' : ' hidden'}>
-        <img id="formshotimg" src="${h(preview || '')}" alt="" referrerpolicy="no-referrer"></div>
+      <div class="formshot" id="formshot"${formShots.length ? '' : ' hidden'}>
+        <div class="shots" id="formshots">${formShots.map((src, i) => `
+          <img id="${i ? '' : 'formshotimg'}" src="${h(src)}" alt="" loading="lazy"
+               referrerpolicy="no-referrer" data-act="opengallery" data-i="${i}">`).join('')}</div>
+        ${formShots.length > 1 ? `<div class="dots" id="formdots">${formShots.map((_, i) =>
+          `<button data-act="formshot" data-i="${i}" aria-current="${i === 0}"
+                   aria-label="Picture ${i + 1}"><i></i></button>`).join('')}</div>` : ''}
+      </div>
+      ${(() => {
+        const url = productUrl(p.shop, p.dac_handle);
+        if (!url) return '';
+        const shop = shopById(p.shop);
+        return `<a class="shoplink" href="${h(url)}" target="_blank" rel="noopener noreferrer"
+                   ${shop ? `data-shop="${h(shop.id)}"` : ''}>${svg('link', 15)} View on ${
+                   h(shop ? shop.name : 'the shop')}</a>`;
+      })()}
       <div><label class="label" for="title">Project name</label>
         <input class="fld" id="title" name="title" value="${h(p.title || '')}" placeholder="Start typing to search the catalogue" autocomplete="off"
                data-handle="${h(p.dac_handle || '')}" data-shop="${h(p.shop || '')}"
@@ -1430,12 +1508,16 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
     img.onload = () => { delete box.dataset.failed; };
   };
 
-  const showPreview = (url) => {
+  const showPreview = (url, images) => {
     const box = document.getElementById('formshot');
-    const img = document.getElementById('formshotimg');
-    if (!box || !img || !url) return;
-    img.src = sized(url, 600);
+    const strip = document.getElementById('formshots');
+    if (!box || !strip || !url) return;
+    const list = (Array.isArray(images) && images.length ? images : [url]).map((u) => sized(u, 900));
+    strip.innerHTML = list.map((src, i) => `<img id="${i ? '' : 'formshotimg'}" src="${h(src)}" alt=""
+        loading="lazy" referrerpolicy="no-referrer" data-act="opengallery" data-i="${i}">`).join('');
+    S.gallery = { id: null, items: list.map((src) => ({ src, kind: 'cover' })) };
     box.hidden = false;
+    watchPreview();
   };
 
   watchPreview();
@@ -1488,7 +1570,9 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
     t.dataset.shop = b.dataset.s;
     const sel = document.getElementById('shop');
     if (sel && b.dataset.s) sel.value = b.dataset.s;
-    showPreview((linkRes._hits || []).find((x) => x.handle === b.dataset.h)?.image);
+    const picked = (linkRes._hits || []).find((x) => x.handle === b.dataset.h);
+    showPreview(picked?.image, (() => { try { return Array.isArray(picked?.images) ? picked.images
+                                                : JSON.parse(picked?.images || '[]'); } catch { return []; } })());
     linkRes.innerHTML = ''; linkQ.value = ''; linkBox.hidden = true;
     paintLink();
     toast('Relinked — save to fetch its pictures');
@@ -1549,7 +1633,8 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
       const shopSel = document.getElementById('shop');
       if (shopSel && c.shop) shopSel.value = c.shop;
       // the picture followed only the browse route in; now it follows any of them
-      showPreview(c.image);
+      showPreview(c.image, (() => { try { return Array.isArray(c.images) ? c.images : JSON.parse(c.images || '[]'); }
+                                    catch { return []; } })());
       sugg.innerHTML = ''; paintLink();
     };
 
@@ -1970,10 +2055,12 @@ function paintBrowseBody() {
     return;
   }
   body.onscroll = () => { S.browse.scroll = body.scrollTop; };
+  wirePull(body);
   const countEl = document.getElementById('browsecount');
   if (countEl) countEl.textContent = B.items.length
     ? `${B.items.length}${B.more ? '+' : ''} kit${B.items.length === 1 ? '' : 's'}` : '';
   body.innerHTML = `
+    <div class="pull" id="pull"><span id="pulltext"></span></div>
     <div class="group-body" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr));padding:16px 0 0">
       ${B.items.map((c, i) => `
         <button class="card cat-card" style="flex-direction:column" data-act="pickcat" data-i="${i}"${
@@ -2665,6 +2752,10 @@ async function handleClick(e) {
     await api('/projects/' + el.dataset.id, { method: 'PATCH',
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rating }) });
     render();
+  }
+  else if (act === 'formshot') {
+    const strip = document.getElementById('formshots');
+    if (strip) strip.scrollTo({ left: strip.clientWidth * Number(el.dataset.i), behavior: 'smooth' });
   }
   else if (act === 'opengallery') {
     const g = S.gallery;
