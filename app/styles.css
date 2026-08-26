@@ -275,6 +275,9 @@ img { max-width: 100%; display: block; }
 .card { touch-action: pan-y; }
 
 .bar {
+  /* same trap as the picture strip: a 4px bar in a flex column that overflows
+     is shrunk away entirely, so a card with a long title lost its progress */
+  flex: 0 0 4px;
   height: 4px; border-radius: 999px; background: var(--sunken); overflow: hidden; margin-top: 6px;
 }
 .bar > i { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
@@ -362,7 +365,12 @@ body.dragging .empty-sect .group-body { min-height: 56px; }
 
 .formshot {
   position: relative; border-radius: var(--r-card); overflow: hidden; background: var(--sunken);
-  height: 190px;
+  /* flex-shrink:0, not just a height. The form is a flex COLUMN taller than the
+     screen, so every item that can shrink does — and overflow:hidden gives this
+     one an automatic minimum size of nothing, so it collapsed to a hairline and
+     the picture vanished. On a wide screen the same stack is a grid, where that
+     does not happen, which is why it looked like a phone-only fault. */
+  flex: 0 0 190px; height: 190px;
 }
 .formshot .dots { bottom: 8px; }
 

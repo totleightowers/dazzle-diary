@@ -396,6 +396,8 @@ const S = {
   view: localStorage.getItem('view') || 'grid',
   filter: 'all',
   q: '',
+  // the logbook's own filters, beside the status chips and the search box
+  lb: { shop: null, shape: null, size: null, rating: 0, sort: 'recent', open: false },
   projects: [],
   meta: null,
   importPreview: null,
@@ -475,8 +477,49 @@ const back = (fallback = '#/') => {
   else swap(fallback);
 };
 
+/* Where you were on each screen. Opening a project and coming back put you at
+   the top of the logbook every time, which on a list of 76 is the difference
+   between glancing at something and losing your place. Keyed by route, so a
+   project you return to also opens where you left it, and one you have never
+   opened still starts at the top. The logbook keeps its own place under "#/"
+   whichever pane it is in. */
+const scrollMem = new Map();
+let painted = null;
+const scrollerOf = (root) => root && root.querySelector ? root.querySelector('.scroll') : null;
+
+function rememberScroll() {
+  if ($list && $list !== $out) {
+    const s = scrollerOf($list);
+    if (s) scrollMem.set('#/', s.scrollTop);
+  }
+  if (painted) {
+    const s = scrollerOf($out);
+    if (s) scrollMem.set(painted, s.scrollTop);
+  }
+}
+
+function restoreScroll(hash) {
+  const put = () => {
+    if ($list && $list !== $out) {
+      const s = scrollerOf($list);
+      if (s) s.scrollTop = scrollMem.get('#/') || 0;
+    }
+    const s = scrollerOf($out);
+    if (s) s.scrollTop = scrollMem.get(hash) || 0;
+  };
+  /* Twice: once now, and once after the frame in which lazily-sized things —
+     pictures, a grid that has just been handed its rows — settle, or the list
+     is still short when the position is set and it lands at the bottom. */
+  put();
+  requestAnimationFrame(() => { put(); requestAnimationFrame(put); });
+}
+
+/** Start this screen at the top next time — filters changed, so the old place means nothing. */
+const forgetScroll = (hash) => scrollMem.delete(hash);
+
 async function render() {
   const hash = location.hash || '#/';
+  rememberScroll();
 
   // a catalogue pick belongs to the form it was picked for, and to nothing else
   if (!/^#\/new/.test(hash)) S.fromCatalogue = null;
@@ -507,6 +550,8 @@ async function render() {
         <button class="btn primary" data-go="#/browse">${svg('search', 18)} Add from catalogue</button>
       </div></div></div>`;
       window.scrollTo(0, 0);
+      painted = hash;
+      restoreScroll(hash);
       return;
     }
   }
@@ -519,6 +564,8 @@ async function render() {
         <h2>Something went wrong</h2><p>${h(e.message)}</p>
         <button class="btn ghost" data-go="#/">Back to the logbook</button></div></div></div>`; }
       window.scrollTo(0, 0);
+      painted = hash;
+      restoreScroll(hash);
       return;
     }
   }
@@ -736,21 +783,94 @@ async function seenHint(k) {
   } catch { /* it is a hint; showing it once more is not worth an error */ }
 }
 
-function paintLogbook() {
+/* What the logbook is showing, worked out once. Both paints used to compute
+   this for themselves and had already drifted apart — the full paint kept empty
+   sections and the body-only paint did not. */
+const LB_SORTS = [
+  { k: 'recent', label: 'Recently added' }, { k: 'name', label: 'A\u2013Z' },
+  { k: 'progress', label: 'Furthest on' }, { k: 'rating', label: 'Best rated' },
+  { k: 'size', label: 'Biggest' }, { k: 'drills', label: 'Most drills' }
+];
+const LB_SORT = {
+  recent: (a, b) => b.id - a.id,
+  name: (a, b) => a.title.localeCompare(b.title),
+  progress: (a, b) => (b.progress || 0) - (a.progress || 0),
+  rating: (a, b) => (b.rating || 0) - (a.rating || 0) || a.title.localeCompare(b.title),
+  size: (a, b) => ((b.width_in || 0) * (b.height_in || 0)) - ((a.width_in || 0) * (a.height_in || 0)),
+  drills: (a, b) => (b.drills || 0) - (a.drills || 0)
+};
+const RATINGS = [{ k: 0, label: 'Any' }, { k: 3, label: '3+' }, { k: 4, label: '4+' }, { k: 5, label: '5' }];
+
+/** How many of the extra filters are on — for the badge, and for "Clear all". */
+const lbActive = () => {
+  const f = S.lb;
+  return (f.shop ? 1 : 0) + (f.shape ? 1 : 0) + (f.size ? 1 : 0)
+       + (f.rating ? 1 : 0) + (f.sort !== 'recent' ? 1 : 0);
+};
+
+/** The shops she actually owns kits from — not every shop the app knows. */
+const lbShops = () => [...new Set(S.projects.map((p) => p.shop).filter(Boolean))]
+  .map((id) => shopById(id)).filter(Boolean);
+
+function logbookGroups() {
   const q = S.q.trim().toLowerCase();
+  const f = S.lb;
+  const bucket = SIZE_BUCKETS.find((x) => x.k === f.size);
+  const edge = (p) => (p.width_in && p.height_in) ? Math.max(p.width_in, p.height_in) * 2.54 : null;
   const match = (p) =>
     (S.filter === 'all' || p.status === S.filter) &&
-    (!q || p.title.toLowerCase().includes(q) || (p.artist || '').toLowerCase().includes(q));
+    (!q || p.title.toLowerCase().includes(q) || (p.artist || '').toLowerCase().includes(q)) &&
+    (!f.shop || p.shop === f.shop) &&
+    (!f.shape || p.shape === f.shape) &&
+    (!f.rating || Number(p.rating || 0) >= f.rating) &&
+    (!bucket || (edge(p) != null
+                 && (!bucket.minCm || edge(p) >= bucket.minCm)
+                 && (!bucket.maxCm || edge(p) <= bucket.maxCm)));
 
-  // keep empty sections visible when everything is shown, so there is always
-  // somewhere to drop a card
   /* Seven sections, most of them empty most of the time, is a lot of nothing to
      scroll past. They are rendered all the same and hidden in CSS, so a drag
      still has somewhere to drop — the body gets a class while one is live. */
-  const showEmpty = S.filter === 'all' && !S.q.trim();
-  const groups = ORDER
-    .map((k) => ({ k, items: S.projects.filter((p) => p.status === k).filter(match) }))
+  const showEmpty = S.filter === 'all' && !q && !lbActive();
+  const sort = LB_SORT[f.sort] || LB_SORT.recent;
+  return ORDER
+    .map((k) => ({ k, items: S.projects.filter((p) => p.status === k).filter(match).sort(sort) }))
     .filter((g) => g.items.length || showEmpty);
+}
+
+/* The same panel the catalogue has, over what a logbook actually holds. The
+   status chips above already answer "where is it up to"; this answers "which
+   one", on a list that is 76 long and growing. Sorting applies inside each
+   section, because the sections are the point of this screen. */
+function logbookFilters() {
+  const f = S.lb;
+  const shops = lbShops();
+  const row = (label, inner) => inner ? `
+    <div style="margin-top:12px">
+      <span class="label" style="margin-bottom:6px">${label}</span>
+      <div class="chiprow" style="margin:0;padding:0;flex-wrap:wrap;gap:6px">${inner}</div>
+    </div>` : '';
+  const chip = (act, k, label, on, shop) =>
+    `<button class="chip" style="height:36px;padding:0 12px" data-act="${act}" data-k="${k}"${
+      shop ? ` data-shop="${h(shop)}"` : ''} aria-pressed="${on}">${h(label)}</button>`;
+  return `
+  <div class="panel" style="padding:12px 14px 16px;margin-top:2px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+      <span class="label" style="margin:0">Filters${lbActive() ? ` \u00b7 ${lbActive()} on` : ''}</span>
+      <button class="btn ghost" style="height:32px;font-size:12px;font-weight:700;padding:0 12px"
+              data-act="lbclear" ${lbActive() ? '' : 'disabled'}>Clear all</button>
+    </div>
+    ${row('Shop', shops.length > 1
+      ? shops.map((sh) => chip('lbshop', sh.id, sh.name, f.shop === sh.id, sh.id)).join('') : '')}
+    ${row('Drill shape', ['Round', 'Square'].map((sh) => chip('lbshape', sh, sh, f.shape === sh)).join(''))}
+    ${row('Canvas size (longest edge)', SIZE_BUCKETS.map((b) => chip('lbsize', b.k, b.label, f.size === b.k)).join(''))}
+    ${row('Rating', RATINGS.map((r) => chip('lbrating', r.k, r.label, f.rating === r.k)).join(''))}
+    ${row('Sort each section by', LB_SORTS.map((o) => chip('lbsort', o.k, o.label, f.sort === o.k)).join(''))}
+  </div>`;
+}
+
+function paintLogbook() {
+  const groups = logbookGroups();
+  const showEmpty = S.filter === 'all' && !S.q.trim() && !lbActive();
   const shown = groups.reduce((n, g) => n + g.items.length, 0);
   const counts = S.meta?.counts || {};
   const chips = [{ k: 'all', label: 'All', n: S.projects.length }]
@@ -775,15 +895,17 @@ function paintLogbook() {
           <span>${h(c.label)}</span><span class="n tnum">${c.n}</span></button>`).join('')}
       </div>
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
-        <span style="font-size:13px;font-weight:600;color:var(--ink-mid)">
-          ${shown} project${shown === 1 ? '' : 's'}${
-            S.filter !== 'all' ? ` <span style="color:var(--ink-mute);font-weight:400">· ${
-              h(statusOf(S.filter).short.toLowerCase())}</span>` : ''}</span>
+        <button class="chip" data-act="lbfilters" aria-pressed="${S.lb.open || lbActive() > 0}" style="flex:0 0 auto">
+          ${svg('filter', 15)}<span>Filters</span>${lbActive() ? `<span class="n tnum">${lbActive()}</span>` : ''}
+        </button>
+        <span id="lbcount" style="margin:0 auto 0 4px;font-size:13px;font-weight:600;color:var(--ink-mid)">
+          ${shown} project${shown === 1 ? '' : 's'}</span>
         <div class="seg tight compact">
           <button data-act="view" data-k="grid" aria-pressed="${S.view === 'grid'}" aria-label="Grid view">${svg('grid', 16)}</button>
           <button data-act="view" data-k="list" aria-pressed="${S.view === 'list'}" aria-label="List view">${svg('list', 16)}</button>
         </div>
       </div>
+      ${S.lb.open ? logbookFilters() : ''}
     </div>
 
     <div class="scroll pad" style="padding-bottom:24px">
@@ -813,6 +935,16 @@ function paintLogbook() {
   syncClear();
 }
 
+/* Changing what the list holds puts you back at its top: keeping a scroll
+   position from a set of 76 while looking at a set of 4 lands you at the
+   bottom of nothing. */
+function repaintLogbook() {
+  forgetScroll('#/');
+  paintLogbook();
+  const scroll = $list.querySelector('.scroll');
+  if (scroll) scroll.scrollTop = 0;
+}
+
 // keep the clear button in step with the field without repainting the input itself
 function syncClear() {
   const wrap = $list.querySelector('.search');
@@ -829,14 +961,12 @@ function syncClear() {
 
 // re-render only the list while typing, so the field keeps focus and caret
 function paintLogbookBody() {
-  const q = S.q.trim().toLowerCase();
-  const match = (p) =>
-    (S.filter === 'all' || p.status === S.filter) &&
-    (!q || p.title.toLowerCase().includes(q) || (p.artist || '').toLowerCase().includes(q));
-  const groups = ORDER.map((k) => ({ k, items: S.projects.filter((p) => p.status === k).filter(match) }))
-                      .filter((g) => g.items.length);
+  const groups = logbookGroups().filter((g) => g.items.length);
   const shown = groups.reduce((n, g) => n + g.items.length, 0);
   const scroll = $list.querySelector('.scroll');
+  // a different set of projects, so the old place in the list means nothing
+  if (scroll) scroll.scrollTop = 0;
+  forgetScroll('#/');
   scroll.innerHTML = groups.length ? groups.map((g) => `
     <section class="group" data-status="${g.k}">
       <header><span class="dot" style="background:${stDot(g.k)}"></span>
@@ -845,7 +975,9 @@ function paintLogbookBody() {
     </section>`).join('')
     : `<div class="empty">${svg('gem', 40, 1.3)}<h2>Nothing matches that</h2>
        <p>Try a different title or artist, or clear the filters.</p></div>`;
-  $list.querySelector('.label').textContent = `${shown} project${shown === 1 ? '' : 's'}`;
+  // by id, not "the first .label on screen": the filter panel has labels of its own
+  const count = document.getElementById('lbcount');
+  if (count) count.textContent = `${shown} project${shown === 1 ? '' : 's'}`;
 }
 
 /* Nothing works properly until the catalogues are on the phone: no covers, no
@@ -1976,16 +2108,10 @@ route(/^#\/browse$/, async () => {
   const shops = await api('/shops');
   if (!S.facets) S.facets = await api('/catalogue/facets').catch(() => null);
   paintBrowse(shops);
-  // returning from a project keeps what you had: filters, results and place
-  if (S.browse.loaded && S.browse.items.length) {
-    paintBrowseBody();
-    requestAnimationFrame(() => {
-      const sc = $out.querySelector('.scroll');
-      if (sc) sc.scrollTop = S.browse.scroll || 0;
-    });
-  } else {
-    loadBrowse(true);
-  }
+  // returning from a project keeps what you had: filters and results. Where you
+  // were in them is remembered for every screen alike, by render().
+  if (S.browse.loaded && S.browse.items.length) paintBrowseBody();
+  else loadBrowse(true);
 });
 
 const SIZE_BUCKETS = [
@@ -2041,7 +2167,7 @@ function paintBrowse(shops) {
   let t;
   q.oninput = () => {
     clearTimeout(t);
-    t = setTimeout(() => { S.browse.q = q.value; loadBrowse(true); }, 260);
+    t = setTimeout(() => { S.browse.q = q.value; forgetScroll('#/browse'); loadBrowse(true); }, 260);
   };
   paintBrowseBody();
 }
@@ -2094,7 +2220,6 @@ function paintBrowseBody() {
   const B = S.browse;
   const body = document.getElementById('browsebody');
   if (!body) return;
-  body.onscroll = () => { S.browse.scroll = body.scrollTop; };
   wirePull(body.closest('.screen') || body, body);
   // an empty result is exactly when you might want to fetch the shops again,
   // so the indicator belongs on that screen too
@@ -2545,7 +2670,23 @@ async function handleClick(e) {
   if (!el) return;
   const act = el.dataset.act;
 
-  if (act === 'filter') { S.filter = el.dataset.k; paintLogbook(); }
+  if (act === 'filter') { S.filter = el.dataset.k; repaintLogbook(); }
+  else if (act === 'lbfilters') { S.lb.open = !S.lb.open; paintLogbook(); }
+  else if (act === 'lbclear') {
+    S.lb = { ...S.lb, shop: null, shape: null, size: null, rating: 0, sort: 'recent' };
+    repaintLogbook();
+  }
+  else if (act === 'lbshop' || act === 'lbshape' || act === 'lbsize'
+           || act === 'lbrating' || act === 'lbsort') {
+    const f = S.lb, k = el.dataset.k;
+    // tapping the one that is already on turns it off again, as the catalogue does
+    if (act === 'lbshop') f.shop = f.shop === k ? null : k;
+    if (act === 'lbshape') f.shape = f.shape === k ? null : k;
+    if (act === 'lbsize') f.size = f.size === k ? null : k;
+    if (act === 'lbrating') f.rating = Number(k);
+    if (act === 'lbsort') f.sort = k;
+    repaintLogbook();
+  }
   else if (act === 'view') { S.view = el.dataset.k; localStorage.setItem('view', S.view); paintLogbook(); }
   else if (act === 'clearq') {
     S.q = '';
@@ -2659,7 +2800,7 @@ async function handleClick(e) {
     paintImportReview();
     toast('Set to ' + (alt.artist || alt.title || 'that one'));
   }
-  else if (act === 'bshop') { S.browse.shop = el.dataset.k || null; S.browse.scroll = 0; paintBrowse(); loadBrowse(true); }
+  else if (act === 'bshop') { S.browse.shop = el.dataset.k || null; forgetScroll('#/browse'); paintBrowse(); loadBrowse(true); }
   else if (act === 'bfilters') { S.browse.open = !S.browse.open; paintBrowse(); paintBrowseBody(); bindPrice(); }
   else if (act === 'bclear') {
     Object.assign(S.browse, { shape: null, size: null, maxPrice: null, inStock: false, sort: 'relevance', scroll: 0 });
@@ -2671,13 +2812,11 @@ async function handleClick(e) {
     if (act === 'bsize')  B.size  = B.size  === el.dataset.k ? null : el.dataset.k;
     if (act === 'bsort')  B.sort  = el.dataset.k;
     if (act === 'bstock') B.inStock = !B.inStock;
-    B.scroll = 0;
+    forgetScroll('#/browse');   // a different set of kits, so the old place means nothing
     paintBrowse(); loadBrowse(true); bindPrice();
   }
   else if (act === 'bmore') { await loadBrowse(false); }
   else if (act === 'pickcat') {
-    const body = document.getElementById('browsebody');
-    if (body) S.browse.scroll = body.scrollTop;
     S.fromCatalogue = S.browse.items[Number(el.dataset.i)];
     go('#/new');
   }

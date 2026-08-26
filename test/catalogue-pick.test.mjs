@@ -30,6 +30,9 @@ globalThis.document={getElementById:(id)=>id==='app'?app:(els.get(id)||(()=>{con
 globalThis.location={hash:'#/'}; globalThis.localStorage={getItem:()=>null,setItem(){}};
 Object.defineProperty(globalThis,'navigator',{value:{},configurable:true});
 globalThis.confirm=()=>true; globalThis.history={state:{},pushState(){},back(){}};
+// things a WebView provides and Node does not
+globalThis.requestAnimationFrame=(fn)=>setTimeout(()=>fn(Date.now()),0);
+globalThis.cancelAnimationFrame=(id)=>clearTimeout(id);
 globalThis.btoa=(s)=>Buffer.from(s,'binary').toString('base64');
 const PRODUCT={id:1,title:'Moon Eater',vendor:'Yuumei Art',handle:'moon-eater',
   product_type:'Diamond Art Kit',images:[{src:'https://cdn.shopify.com/moon.jpg'}],
