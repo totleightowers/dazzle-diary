@@ -12,6 +12,16 @@ updates:
     labels: [dependencies, ci]
     commit-message:
       prefix: ci
+    # CodeQL's init and analyze steps must be on the same version: bump one and
+    # leave the other and every analysis fails with "Not all workflow steps that
+    # use `github/codeql-action` actions use the same version". Dependabot
+    # raises one pull request per action path, so ungrouped it produces a pair
+    # that cannot be merged one at a time — whichever went first would break
+    # CodeQL on main until the other followed. Grouped, they arrive together.
+    groups:
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
   - package-ecosystem: npm
     directory: /
     schedule:
