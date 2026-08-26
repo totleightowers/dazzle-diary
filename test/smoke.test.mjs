@@ -401,3 +401,108 @@ test('a kit whose catalogue row lost its picture still shows one', async () => {
   await m.go('#/p/' + p.id + '/edit');
   assert.ok(m.all('#formshots img').length >= 2, 'the form still has no pictures');
 });
+
+test('coming back from a project lands where you left the logbook', async () => {
+  const m = await mount();
+  const ids = [];
+  for (let i = 0; i < 12; i++) ids.push((await m.seed({ title: 'Kit ' + i, status: 'received' })).id);
+  await m.go('#/');
+
+  const list = () => m.find('.screen .scroll');
+  list().scrollTop = 640;
+  await m.go('#/p/' + ids[6]);
+  assert.equal(list().scrollTop, 0, 'a project should open at its top');
+
+  await m.go('#/');
+  assert.equal(list().scrollTop, 640, 'the logbook came back at the top');
+
+  // a project you have scrolled through also opens where you left it
+  await m.go('#/p/' + ids[6]);
+  list().scrollTop = 220;
+  await m.go('#/');
+  await m.go('#/p/' + ids[6]);
+  assert.equal(list().scrollTop, 220, 'the project came back at the top');
+
+  // but a project you have never opened starts at the top
+  await m.go('#/p/' + ids[9]);
+  assert.equal(list().scrollTop, 0);
+});
+
+test('the catalogue keeps your place, and loses it when the filters change', async () => {
+  const m = await mount();
+  await m.sync();
+  await m.go('#/browse');
+  const body = () => m.find('#browsebody');
+  body().scrollTop = 500;
+
+  await m.tap('[data-act="pickcat"]');          // into New project
+  await m.go('#/browse');
+  assert.equal(body().scrollTop, 500, 'the catalogue came back at the top');
+
+  await m.tap('[data-act="bfilters"]');
+  await m.tap('[data-act="bshape"][data-k="Round"]');
+  assert.equal(body().scrollTop, 0, 'a different set of kits kept the old place');
+});
+
+test('the logbook can be filtered and sorted, not just searched', async () => {
+  const m = await mount();
+  // this file's store is one database shared by every test in it, so a test
+  // that counts what is on screen has to start from a known logbook
+  for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
+  await m.seed({ title: 'Big Round DAC', status: 'received', shop: 'dac',
+                 shape: 'Round', width_in: 32, height_in: 24, rating: 5, drills: 90000 });
+  await m.seed({ title: 'Small Square DAC', status: 'received', shop: 'dac',
+                 shape: 'Square', width_in: 12, height_in: 12, rating: 2, drills: 9000 });
+  await m.seed({ title: 'Mystical Round', status: 'received', shop: 'mdd',
+                 shape: 'Round', width_in: 20, height_in: 16, rating: 4, drills: 40000 });
+  await m.go('#/');
+  const titles = () => m.all('.card .name').map((n) => n.textContent);
+  const count = () => m.find('#lbcount').textContent.trim();
+  assert.equal(count(), '3 projects');
+
+  await m.tap('[data-act="lbfilters"]');
+  assert.ok(m.find('[data-act="lbsort"]'), 'the panel did not open');
+
+  // shop
+  await m.tap('[data-act="lbshop"][data-k="mdd"]');
+  assert.deepEqual(titles(), ['Mystical Round']);
+  await m.tap('[data-act="lbshop"][data-k="mdd"]');   // tapping it again turns it off
+  assert.equal(count(), '3 projects');
+
+  // shape, and size, and rating
+  await m.tap('[data-act="lbshape"][data-k="Square"]');
+  assert.deepEqual(titles(), ['Small Square DAC']);
+  await m.tap('[data-act="lbshape"][data-k="Square"]');
+  await m.tap('[data-act="lbsize"][data-k="sml"]');
+  assert.deepEqual(titles(), ['Small Square DAC']);
+  await m.tap('[data-act="lbsize"][data-k="sml"]');
+  await m.tap('[data-act="lbrating"][data-k="4"]');
+  assert.deepEqual(titles().sort(), ['Big Round DAC', 'Mystical Round']);
+
+  // the badge counts what is on, and Clear all turns the lot off
+  assert.equal(m.find('[data-act="lbfilters"] .n').textContent, '1');
+  await m.tap('[data-act="lbsort"][data-k="name"]');
+  assert.equal(m.find('[data-act="lbfilters"] .n').textContent, '2');
+  await m.tap('[data-act="lbclear"]');
+  assert.equal(count(), '3 projects');
+  assert.equal(m.find('[data-act="lbfilters"] .n'), null, 'the badge outlived the filters');
+
+  // sorting applies inside a section
+  await m.tap('[data-act="lbsort"][data-k="name"]');
+  assert.deepEqual(titles(), ['Big Round DAC', 'Mystical Round', 'Small Square DAC']);
+  await m.tap('[data-act="lbsort"][data-k="drills"]');
+  assert.deepEqual(titles(), ['Big Round DAC', 'Mystical Round', 'Small Square DAC']);
+  await m.tap('[data-act="lbsort"][data-k="rating"]');
+  assert.deepEqual(titles(), ['Big Round DAC', 'Mystical Round', 'Small Square DAC']);
+});
+
+test('filtering the logbook puts you back at the top of it', async () => {
+  const m = await mount();
+  for (let i = 0; i < 12; i++) await m.seed({ title: 'Kit ' + i, status: 'received', shape: i % 2 ? 'Round' : 'Square' });
+  await m.go('#/');
+  const list = () => m.find('.screen .scroll');
+  list().scrollTop = 500;
+  await m.tap('[data-act="lbfilters"]');
+  await m.tap('[data-act="lbshape"][data-k="Round"]');
+  assert.equal(list().scrollTop, 0, 'a smaller list kept a scroll position from a bigger one');
+});

@@ -30,6 +30,9 @@ globalThis.document={getElementById:(id)=>els.get(id)||(()=>{const e=mk('div',id
 globalThis.location={hash:'#/'}; globalThis.localStorage={getItem:()=>null,setItem(){}};
 Object.defineProperty(globalThis,'navigator',{value:{},configurable:true});
 globalThis.confirm=()=>true; globalThis.history={state:{},pushState(){},back(){}};
+// things a WebView provides and Node does not
+globalThis.requestAnimationFrame=(fn)=>setTimeout(()=>fn(Date.now()),0);
+globalThis.cancelAnimationFrame=(id)=>clearTimeout(id);
 globalThis.btoa=(s)=>Buffer.from(s,'binary').toString('base64');
 globalThis.fetch=async()=>({ok:true,status:200,json:async()=>({products:[]}),arrayBuffer:async()=>new Uint8Array([1]).buffer});
 
@@ -44,7 +47,7 @@ const routes = [['logbook','#/'], ['project','#/p/'+proj.id], ['edit','#/p/'+pro
                 ['new','#/new'], ['settings','#/settings'], ['licences','#/licences'],
                 ['import','#/import'], ['catalogue','#/browse']];
 const AUTO = (v) => v && /\bauto\b/.test(v);
-const offenders = []; let checked = 0;
+const offenders = [], squashed = []; let checked = 0;
 
 for (const width of [1236, 390]) {
   window.innerWidth = width;
@@ -69,9 +72,22 @@ for (const width of [1236, 390]) {
           const sideAuto = AUTO(ml) || AUTO(mr) || (shorthand && /auto/.test(shorthand));
           const hasWidth = (c.width && c.width.val) || (c.flex && /1|auto/.test(c.flex.val));
           checked++;
+          const who = `${el.tag}${el.id ? '#'+el.id : ''}${el.classes.length ? '.'+el.classes.join('.') : ''}`;
           if (sideAuto && !hasWidth) {
-            const who = `${el.tag}${el.id ? '#'+el.id : ''}${el.classes.length ? '.'+el.classes.join('.') : ''}`;
             offenders.push(`${name} @${width}px: ${who} inside ${node.tag}.${node.classes.join('.')}`);
+          }
+          /* The other half of the same trap: a flex column taller than the
+             screen shrinks every item that can shrink, and overflow:hidden
+             gives an item an automatic minimum size of nothing. A fixed height
+             is not a promise unless flex-shrink says so. */
+          const fixedHeight = c.height && /^\d+(\.\d+)?(px|dvh|vh)$/.test(c.height.val);
+          const hides = (c.overflow && /hidden|auto|scroll/.test(c.overflow.val))
+                     || (c['overflow-y'] && /hidden|auto|scroll/.test(c['overflow-y'].val));
+          const holds = (c['flex-shrink'] && c['flex-shrink'].val === '0')
+                     || (c.flex && /^0\s+0/.test(c.flex.val))
+                     || (c['min-height'] && c['min-height'].val !== 'auto' && c['min-height'].val !== '0');
+          if (fixedHeight && hides && !holds) {
+            squashed.push(`${name} @${width}px: ${who} (height ${c.height.val}) inside ${node.tag}.${node.classes.join('.')}`);
           }
         }
         walk(el);
@@ -88,4 +104,12 @@ for (const width of [1236, 390]) {
 test('nothing shrinks where it should fill', () => {
   assert.ok(checked > 50, `only ${checked} elements were examined`);
   assert.deepEqual(offenders, [], 'these need width: 100% beside their auto margins');
+});
+
+/* A fixed height inside a scrolling flex column is only kept if the item also
+   refuses to shrink. The form's picture strip did not, so on a narrow screen —
+   where the form is a flex column rather than a grid — it collapsed to nothing
+   and the kit appeared to have no picture at all. */
+test('nothing with a fixed height gets squashed to nothing', () => {
+  assert.deepEqual(squashed, [], 'these need flex-shrink: 0 beside their height');
 });
