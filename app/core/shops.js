@@ -40,6 +40,24 @@ const coverageOf = (s) => /partial/i.test(String(s || '')) ? 'Partial drill' : '
 /** Shops with no usable product_type need a guard: plenty of accessories have
  *  "diamond painting" in the title. */
 const ACCESSORY = /\b(cover|release paper|replacement|coaster|glue|clay|wax|tweezer|tray|pen(?!cil)|multiplacer|placer|sheet|sticker|roller|light\s?pad|storage|organiser|organizer|ruler|apron|mat|bag|frame|magnet|button|gift card|tool)\b/i;
+
+/* Two signals, because neither alone is enough. The named types catch the
+   "Complete Set" bundles, which are things you own and finish but carry no
+   per-item spec; the diamond count catches everything else, including whatever
+   new kind of thing the shop invents next. Left out by both: pens, wax, trays,
+   loose diamonds, mystery boxes, a calendar and a table. */
+const DAC_MAKEABLE = new Set([
+  'Diamond Art Kit', 'Mega Dazzles', 'Mini Dazzles', 'Sparkle Pals', 'Keychains',
+  'Coasters', 'Sparkle Boards', 'Gem Houses', 'Frameables', 'Bookmarks',
+  'Stickers', 'Magnets', 'Hanging Signs', 'Greeting Cards'
+]);
+
+/** The diamond count Diamond Art Club puts at the end of a variant title, or
+ *  null. Present for anything you place diamonds on and nothing else. */
+function dacDrillCount(v) {
+  const last = String((v && v.title) || '').split('/').pop().trim().replace(/,/g, '');
+  return /^\d{3,}$/.test(last) ? parseInt(last, 10) : null;
+}
 const isAccessory = (t) => ACCESSORY.test(String(t || ''));
 
 /* ------------------------------------------------------------------ shops */
@@ -52,14 +70,24 @@ export const SHOPS = [
     currency: 'USD',
     name: 'Diamond Art Club',
     domain: 'diamondartclub.com',
-    isKit: (p) => ['Diamond Art Kit', 'Mega Dazzles', 'Mini Dazzles'].includes(p.product_type),
+    /* Coasters, keychains, gem houses, sparkle boards, bookmarks and the rest
+       are things you place diamonds on, and people own them and want to log
+       them — but they are filed under a dozen different product types, and a
+       list of those types would go stale the moment a new one appeared.
+       What actually separates a project from a supply is the variant: DAC ends
+       it with the diamond count for anything you place diamonds on, and never
+       for a pen, a tray, loose drills or a mystery box. So that is the test —
+       and it correctly picks up the odd decorate-it-yourself tumbler filed
+       under Accessories, which no list of types would have caught. */
+    isKit: (p) => DAC_MAKEABLE.has(p.product_type)
+               || dacDrillCount((p.variants || [])[0]) != null,
     parse(p, v) {
       // everything is in the variant: 22" x 28" (55.8cm x 70.6cm) / Round with 35 Colors including 2 ABs / 50,148
       const t = String(v.title || '');
       const inches = t.match(/([\d.]+)\s*"\s*x\s*([\d.]+)\s*"/i);
       const colors = t.match(/([\d,]+)\s+colou?rs?\b/i);
       const special = t.match(/includ(?:ing|es)\s+(.+?)(?:\s*\/|$)/i);
-      const last = t.split('/').pop().trim().replace(/,/g, '');
+      const drills = dacDrillCount(v);
       return {
         title: p.title,
         artist: String(p.vendor || '').replace(/^by\s+/i, '').trim() || null,
@@ -67,7 +95,7 @@ export const SHOPS = [
         height_in: inches ? parseFloat(inches[2]) : null,
         shape: shapeOf(t), coverage: coverageOf(t),
         colors: colors ? int(colors[1]) : null,
-        drills: /^\d{3,}$/.test(last) ? parseInt(last, 10) : null,
+        drills,
         special: special ? special[1].trim() : null
       };
     }

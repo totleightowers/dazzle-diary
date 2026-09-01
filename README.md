@@ -91,6 +91,11 @@ Dazzle Diary currently has catalogue adapters for:
 You can switch off shops you do not use. Disabled shops are left out of
 catalogue syncs and browsing.
 
+Coasters, keychains, gem houses, bookmarks and the rest are treated as
+projects, not accessories — they are things you place diamonds on and finish,
+and they belong in a logbook. Pens, wax, trays, loose diamonds and mystery
+boxes are not.
+
 What each shop publishes differs, and every adapter is written against the real
 feed rather than a specification. Diamond Art Club packs the whole spec into
 the variant title; Mystical Dream Diamonds puts sizes in description prose;

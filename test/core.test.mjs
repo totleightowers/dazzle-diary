@@ -524,3 +524,39 @@ test('the README does not link to files that are not there', () => {
   }
   assert.deepEqual(bad, []);
 });
+
+test('the things you place diamonds on are kits, and the supplies are not', () => {
+  const dac = shopById('dac');
+  const p = (title, product_type, variant) => ({
+    handle: 'x', title, vendor: 'By Someone', product_type,
+    images: [{ src: 'https://cdn.shopify.com/a.jpg' }],
+    variants: [{ title: variant, price: '17.99', available: true }]
+  });
+  const SPEC = '4" x 4" (10cm x 10cm) / Round with 19 Colors including 19 Iridescent Diamonds / 5,730';
+
+  // coasters, keychains and the rest are projects people own and finish
+  for (const type of ['Coasters', 'Keychains', 'Gem Houses', 'Sparkle Boards', 'Bookmarks'])
+    assert.equal(dac.isKit(p('Thing', type, SPEC)), true, `${type} should be a kit`);
+
+  // a bundle carries no per-item spec, and is still a kit by its type
+  assert.equal(dac.isKit(p('Sparkle Pals™ Complete Set', 'Sparkle Pals', 'Default Title')), true);
+
+  // something filed oddly is caught by its diamond count alone
+  assert.equal(dac.isKit(p('Mini Tumblr - Holly Jolly', 'Accessories',
+    '5.3" x 3.1" (13.4cm x 8cm) / Round with 14 Colors / 3,000')), true);
+
+  // supplies are not
+  for (const [title, type] of [['Twist And Pick Premium Pen', 'Accessories'],
+                               ['Bling Diamonds – Square (Set of 10)', 'Diamonds'],
+                               ['Mystery Box', 'Mystery Box'], ['Wall Calendar', 'Calendar'],
+                               ['Diamond Painting Table', 'Tables']])
+    assert.equal(dac.isKit(p(title, type, 'Default Title')), false, `${type} should not be a kit`);
+
+  // and a coaster's spec comes through like any other canvas
+  const row = toRow(dac, p('Coasters - The Grinch™', 'Coasters', SPEC));
+  assert.equal(row.kind, 'kit');
+  assert.equal(row.drills, 5730);
+  assert.equal(row.colors, 19);
+  assert.equal(row.width_in, 4);
+  assert.equal(row.shape, 'Round');
+});
