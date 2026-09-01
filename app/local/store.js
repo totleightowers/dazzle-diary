@@ -201,7 +201,13 @@ const newJob = (id) => {
 /* ------------------------------------------------------------------- sync */
 async function fetchJson(url) {
   const res = await fetch(via(url), { headers: { Accept: 'application/json' } });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) {
+    /* The shell puts the real reason in the body — "host not allowed:
+       munimade.com" is a fixable thing to be told, and "HTTP 500" is not. */
+    let why = '';
+    try { why = (await res.text()).trim().slice(0, 120); } catch { /* no body to read */ }
+    throw new Error(why && !/^\s*</.test(why) ? `${why} (HTTP ${res.status})` : `HTTP ${res.status}`);
+  }
   return res.json();
 }
 
@@ -215,7 +221,7 @@ async function syncOne(shop, job, want) {
     const perPage = shop.platform === 'woo' ? 100 : 250;
     let json;
     try { json = await fetchJson(url); }
-    catch (e) { if (page > 1) break; throw new Error(`${shop.name}: ${e.message}`); }
+    catch (e) { if (page > 1) break; throw e; }
     const batch = Array.isArray(json) ? json : (json.products || []);
     if (!batch.length) break;
     products.push(...batch);
@@ -971,12 +977,14 @@ export async function localApi(path, opts = {}) {
     const owned = rows.filter(r => r.status !== 'wishlist');
     const acquired = (r) => r.date_ordered || r.date_received || null;
 
-    /* Which projects this period is "about". With no period it is everything
-       you own; with one, the canvases you finished in it — otherwise a record
-       like "biggest kit" would answer from a stash that has nothing to do with
-       the month on screen. */
+    /* Each record carries its own scope rather than the page carrying one for
+       all of them. "The dearest kit I finished" is not a question anybody asks;
+       "the dearest kit I own" is. So money and canvas size are about the stash,
+       duration and pace are about what you finished, and the few that are worth
+       both ways say so in their own name. */
     const finished = rows.filter(r => r.status === 'completed' && inPeriod(r.date_completed));
-    const scope = period ? finished : owned;
+    const acquiredInPeriod = owned.filter(r => inPeriod(acquired(r)));
+    const scope = period ? acquiredInPeriod : owned;
 
     const mins = sessions.filter(x => inPeriod(x.on))
                          .reduce((n, x) => n + (Number(x.minutes) || 0), 0);
@@ -1041,7 +1049,7 @@ export async function localApi(path, opts = {}) {
       const k = key(r); if (k) a[k] = (a[k] || 0) + 1; return a;
     }, {})).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0] || null;
 
-    const bought = owned.filter(r => inPeriod(acquired(r)));
+    const bought = acquiredInPeriod;
 
     return {
       period: period || null, years, months,
@@ -1056,10 +1064,16 @@ export async function localApi(path, opts = {}) {
         sessions: sessions.filter(x => inPeriod(x.on)).length,
         everHeld
       },
+      // whether the "not counting time put down" figures can differ at all
+      heldAmongFinished: finished.filter(r => held(r) > 0).length,
       records: {
         biggestSize: most(scope, area), smallestSize: least(scope, area),
         mostDiamonds: most(scope, r => Number(r.drills) || null),
         fewestDiamonds: least(scope, r => Number(r.drills) || null),
+        // the same four again, about the ones you actually finished
+        biggestFinished: most(finished, area), smallestFinished: least(finished, area),
+        mostDiamondsFinished: most(finished, r => Number(r.drills) || null),
+        fewestDiamondsFinished: least(finished, r => Number(r.drills) || null),
         longestDays: most(finished, takenIncl), shortestDays: least(finished, takenIncl),
         longestDaysNet: most(finished, takenExcl), shortestDaysNet: least(finished, takenExcl),
         mostHours: most(scope, r => Number(r.hours) || null),

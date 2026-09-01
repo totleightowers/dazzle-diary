@@ -617,16 +617,23 @@ const SPEC_HTML = `<ul>
   <li><b>Diamond Amount:</b> 95,200</li>
   <li><b>Image Size:</b> 60cm x 85cm (23.6" x 33.5")</li>
   <li><b>Color Amount:</b> 80 Colors Including 3 AB, 5 Shimmer, 2 Metallic</li></ul>`;
+/* Each test gets its own handle. The whole file shares one database, and a
+   catalogue row that another test has already filled in and had cached is
+   indistinguishable from one this test's own fetch filled in — which is how a
+   test asserting that an empty page yields nothing came back with 95,200. */
+let muniN = 0;
 const muniProduct = (over = {}) => ({
   id: 42, title: "'The Underwater Castle' by Femke Deborah, Diamond Painting Canvas Kit (128)",
-  vendor: 'Vancy Arts', handle: 'underwater-castle-128', product_type: 'Diamond Painting Kit',
+  vendor: 'Vancy Arts', handle: 'underwater-castle-' + (++muniN),
+  product_type: 'Diamond Painting Kit',
   tags: ['square', 'square drill'], specHtml: SPEC_HTML,
   images: [{ src: 'https://cdn.shopify.com/a.jpg' }],
   variants: [{ title: 'Default Title', price: '85.00', available: true }], ...over
 });
 
 test('a kit whose spec is only on the shop page gets it when you own it', async () => {
-  const m = await mount({ products: [muniProduct()], shop: 'muni' });
+  const kit = muniProduct();
+  const m = await mount({ products: [kit], shop: 'muni' });
   await m.sync();
 
   /* Ask for this shop by name. An earlier test walks Settings and taps every
@@ -638,7 +645,7 @@ test('a kit whose spec is only on the shop page gets it when you own it', async 
   assert.equal(listed[0].width_in, null, 'the feed itself carries no size');
   assert.equal(listed[0].drills, null);
 
-  const row = await m.api('/catalogue/product?shop=muni&handle=underwater-castle-128');
+  const row = await m.api('/catalogue/product?shop=muni&handle=' + kit.handle);
   assert.equal(row.width_in, 23.6, 'the inches on the page are used rather than converted from cm');
   assert.equal(row.height_in, 33.5);
   assert.equal(row.drills, 95200);
@@ -648,15 +655,16 @@ test('a kit whose spec is only on the shop page gets it when you own it', async 
 });
 
 test('the backfill fills owned projects and never overwrites what you typed', async () => {
-  const m = await mount({ products: [muniProduct()], shop: 'muni' });
+  const kit = muniProduct();
+  const m = await mount({ products: [kit], shop: 'muni' });
   await m.sync();
   for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
 
   const mine = await m.seed({ title: 'The Underwater Castle', status: 'started',
-                              shop: 'muni', dac_handle: 'underwater-castle-128' });
+                              shop: 'muni', dac_handle: kit.handle });
   // a count you corrected by hand is yours and must survive
   const typed = await m.seed({ title: 'Corrected', status: 'started', shop: 'muni',
-                               dac_handle: 'underwater-castle-128', drills: 1234, colors: 7 });
+                               dac_handle: kit.handle, drills: 1234, colors: 7 });
   await m.sync();
 
   const filled = await m.api('/projects/' + mine.id);
@@ -671,23 +679,117 @@ test('the backfill fills owned projects and never overwrites what you typed', as
 });
 
 test('a shop page with nothing on it is not asked about twice', async () => {
-  const m = await mount({ products: [muniProduct({ specHtml: '<html><body>nothing here</body></html>' })], shop: 'muni' });
+  const kit = muniProduct({ specHtml: '<html><body>nothing here</body></html>' });
+  const m = await mount({ products: [kit], shop: 'muni' });
   await m.sync();
-  const row = await m.api('/catalogue/product?shop=muni&handle=underwater-castle-128');
+  const row = await m.api('/catalogue/product?shop=muni&handle=' + kit.handle);
   assert.equal(row.drills, null);
   assert.equal(row.spec_checked, 1, 'an empty page must still be marked as read');
 });
 
 test('a counted diamond number stops being an estimate', async () => {
-  const m = await mount({ products: [muniProduct()], shop: 'muni' });
+  const kit = muniProduct();
+  const m = await mount({ products: [kit], shop: 'muni' });
   await m.sync();
   for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
   const p = await m.seed({ title: 'Estimated', status: 'started', shop: 'muni',
-                           dac_handle: 'underwater-castle-128' });
+                           dac_handle: kit.handle });
   await m.api('/projects/' + p.id, { method: 'PATCH',
     headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ drills_estimated: 1 }) });
   await m.sync();
   const after = await m.api('/projects/' + p.id);
   assert.equal(after.drills, 95200);
   assert.ok(!after.drills_estimated, 'a counted number is not an estimate');
+});
+
+/* Each record carries the scope that suits it rather than the page carrying one
+   for all of them: "the dearest kit I finished" is not a question anybody asks.
+   And a record with nothing to say is left out rather than shown empty. */
+test('records use the scope that suits them, and empty ones are left out', async () => {
+  const m = await mount();
+  for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
+  // the biggest and dearest canvas you own is not one you have finished
+  await m.seed({ title: 'Huge Unfinished', status: 'started', drills: 200000,
+                 width_in: 40, height_in: 50, price: 200, date_ordered: '2026-01-02' });
+  await m.seed({ title: 'Finished Medium', status: 'completed', drills: 50000,
+                 width_in: 20, height_in: 24, price: 60, date_ordered: '2026-02-01',
+                 date_started: '2026-02-05', date_completed: '2026-03-05' });
+
+  const s = await m.api('/summary');
+  // the stash records are about everything owned
+  assert.equal(s.records.biggestSize.title, 'Huge Unfinished');
+  assert.equal(s.records.dearest.title, 'Huge Unfinished');
+  // the finished ones are about what you finished
+  assert.equal(s.records.biggestFinished.title, 'Finished Medium');
+  assert.equal(s.records.mostDiamondsFinished.title, 'Finished Medium');
+  assert.equal(s.heldAmongFinished, 0, 'nothing was ever put down');
+
+  await m.go('#/summary');
+  const labels = () => m.all('.panel .row').map((x) => x.textContent.replace(/\s+/g, ' ').trim());
+  const shown = labels().join(' | ');
+
+  // nothing here was ever put down, so the "not counting time put down"
+  // variants would only repeat the plain ones
+  assert.ok(!/not counting time put down/i.test(shown), shown);
+  // one finished canvas, so the longest and quickest collapse to one line
+  assert.ok(/Start to finish/.test(shown), shown);
+
+  // no sessions were logged, so there is nothing to say about time at the board
+  assert.ok(!/Longest single sitting/.test(shown), shown);
+  // and no tile claims zero hours
+  const tiles = m.all('.tile').map((x) => x.textContent.replace(/\s+/g, ' ').trim());
+  assert.ok(!tiles.some((x) => /^0/.test(x)), tiles.join(' | '));
+  assert.ok(!tiles.some((x) => /hours logged/.test(x)), 'an empty hours tile was shown');
+
+  // the scope switch is gone
+  assert.equal(m.find('[data-act="sumscope"]'), null);
+});
+
+test('once a canvas has been put down, both readings of the time appear', async () => {
+  const m = await mount();
+  for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
+  await m.seed({ title: 'Paused', status: 'completed', drills: 40000, width_in: 20, height_in: 20,
+                 date_ordered: '2026-01-01', date_started: '2026-01-10', date_completed: '2026-04-10',
+                 holds: JSON.stringify([{ held: '2026-02-01', restarted: '2026-03-01' }]) });
+  const s = await m.api('/summary');
+  assert.equal(s.heldAmongFinished, 1);
+  assert.equal(s.records.longestDays.value, 90);
+  assert.equal(s.records.longestDaysNet.value, 62);
+
+  await m.go('#/summary');
+  const shown = m.all('.panel .row').map((x) => x.textContent.replace(/\s+/g, ' ').trim()).join(' | ');
+  assert.ok(/[Nn]ot counting time put down/.test(shown), shown);
+});
+
+test('the way into the summary is a card, not a stretched button', async () => {
+  const m = await mount();
+  await m.go('#/settings');
+  const card = m.find('.navcard');
+  assert.ok(card, 'no way into the summary from Settings');
+  assert.equal(card.getAttribute('data-go'), '#/summary');
+  assert.equal(m.find('.btn.ghost.wide[data-go="#/summary"]'), null,
+               'the full-width button put its label at one edge and its chevron at the other');
+});
+
+test('a most-and-least pair that lands on one canvas becomes one line', async () => {
+  const m = await mount();
+  for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
+  // one finished canvas: biggest and smallest are the same fact twice
+  await m.seed({ title: 'Only One', status: 'completed', drills: 90000, width_in: 30, height_in: 40,
+                 price: 120, date_ordered: '2026-01-01', date_started: '2026-02-01',
+                 date_completed: '2026-05-01' });
+  await m.seed({ title: 'Still Going', status: 'started', drills: 40000, width_in: 20, height_in: 20,
+                 price: 50, date_ordered: '2026-01-05' });
+  await m.go('#/summary');
+  const rows = m.all('.panel .row').map((x) => x.textContent.replace(/\s+/g, ' ').trim());
+  const finished = rows.filter((x) => /Only One/.test(x));
+
+  assert.ok(finished.some((x) => /^Canvas /.test(x)), rows.join(' | '));
+  assert.ok(!finished.some((x) => /^Smallest /.test(x)),
+            'the only finished canvas was named as both biggest and smallest');
+  assert.ok(!rows.some((x) => /^Fewest diamonds Only One/.test(x)), rows.join(' | '));
+
+  // but the stash has two, so its pairs stay pairs
+  assert.ok(rows.some((x) => /^Biggest /.test(x)), rows.join(' | '));
+  assert.ok(rows.some((x) => /^Smallest /.test(x)), rows.join(' | '));
 });

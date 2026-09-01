@@ -2314,14 +2314,21 @@ route(/^#\/summary$/, async () => {
   if (SUMMARY.year && SUMMARY.month) params.set('month', SUMMARY.month);
   const s = await api('/summary' + (params.toString() ? '?' + params : ''));
   const t = s.totals, r = s.records;
+  const held = s.heldAmongFinished > 0;
 
   const periodName = !SUMMARY.year ? 'All time'
     : SUMMARY.month ? `${MONTHS[Number(SUMMARY.month) - 1]} ${SUMMARY.year}`
     : String(SUMMARY.year);
 
-  const tile = (value, cap, bg) =>
-    `<div class="tile"${bg ? ` style="background:${bg}"` : ''}>
+  /* A tile reading zero is a category you have nothing in yet — noise rather
+     than information — so it waits until there is something to say. */
+  const tile = (n, value, cap, bg) => !n ? ''
+    : `<div class="tile"${bg ? ` style="background:${bg}"` : ''}>
        <div class="big tnum">${value}</div><div class="cap">${cap}</div></div>`;
+  const tiles = (...cells) => {
+    const on = cells.filter(Boolean);
+    return on.length ? `<div class="tiles">${on.join('')}</div>` : '';
+  };
 
   /* A record is worth nothing if you cannot get to the canvas it is about, so
      every row opens the project. */
@@ -2340,6 +2347,16 @@ route(/^#\/summary$/, async () => {
       </span>
       <span class="v tnum" style="white-space:nowrap;font-weight:700">${fmt(x.value, x)}</span>
     </button>` : '';
+
+  /* A most/least pair that lands on the same canvas is the same fact printed
+     twice — which is what one finished project gives you. It collapses to a
+     single row, named for the thing rather than for the extreme. */
+  const pair = (solo, mostLabel, mostRec, leastLabel, leastRec, fmt) => {
+    if (!mostRec && !leastRec) return '';
+    if (!mostRec || !leastRec || mostRec.id === leastRec.id)
+      return rec(solo, mostRec || leastRec, fmt);
+    return rec(mostLabel, mostRec, fmt) + rec(leastLabel, leastRec, fmt);
+  };
 
   const section = (title, rows, note) => {
     const body = rows.filter(Boolean).join('');
@@ -2371,55 +2388,46 @@ route(/^#\/summary$/, async () => {
         <p style="margin:10px 2px 0;font-size:13px;font-weight:600;color:var(--ink-mid)">${h(periodName)}</p>
       </div>
 
-      <div class="tiles">
-        ${tile(num(t.done), 'paintings finished', 'var(--st-completed)')}
-        ${tile(num(t.bought), SUMMARY.year ? 'paintings bought' : 'paintings owned')}
-        ${tile(bigNum(t.placed), t.partial
+      ${tiles(
+        tile(t.done, num(t.done), 'paintings finished', 'var(--st-completed)'),
+        tile(t.bought, num(t.bought), SUMMARY.year ? 'paintings bought' : 'paintings owned'),
+        tile(t.placed, bigNum(t.placed), t.partial
           ? 'diamonds placed — finished canvases plus how far you are through the rest'
-          : 'diamonds in what you finished', 'var(--st-started)')}
-        ${tile(num(t.days), `day${t.days === 1 ? '' : 's'} at the board`)}
-        ${tile(hoursText(t.hours), 'hours logged')}
-        ${tile(num(t.streak), `day${t.streak === 1 ? '' : 's'} in a row — your longest run`)}
-      </div>
+          : 'diamonds in what you finished', 'var(--st-started)'),
+        tile(t.days, num(t.days), `day${t.days === 1 ? '' : 's'} at the board`),
+        tile(t.hours, hoursText(t.hours), 'hours logged'),
+        tile(t.streak, num(t.streak), `day${t.streak === 1 ? '' : 's'} in a row — your longest run`),
+        tile(t.sessions, num(t.sessions), `session${t.sessions === 1 ? '' : 's'}`),
+        tile(t.spend, money(t.spend), SUMMARY.year ? 'spent on what you bought' : 'spent'),
+        tile(t.days && t.hours, hoursText(t.hours / (t.days || 1)), 'on an average day at it'),
+        tile(t.everHeld, num(t.everHeld), 'put down and picked back up')
+      )}
 
-      ${t.sessions || t.spend ? `<div class="tiles">
-        ${t.sessions ? tile(num(t.sessions), `session${t.sessions === 1 ? '' : 's'}`) : ''}
-        ${t.spend ? tile(money(t.spend), SUMMARY.year ? 'spent on what you bought' : 'spent') : ''}
-        ${t.days && t.hours ? tile(hoursText(t.hours / t.days), 'on an average day at it') : ''}
-        ${t.everHeld ? tile(num(t.everHeld), `put down and picked back up`) : ''}
-      </div>` : ''}
-
-      ${section('Canvas', [
-        rec('Biggest', r.biggestSize, (_v, x) => sizeOf(x)),
-        rec('Smallest', r.smallestSize, (_v, x) => sizeOf(x)),
-        rec('Most diamonds', r.mostDiamonds, (v) => bigNum(v)),
-        rec('Fewest diamonds', r.fewestDiamonds, (v) => bigNum(v))
-      ])}
-
-      ${section('How long it took', [
-        rec('Longest, start to finish', r.longestDays, spanText),
-        rec('Longest, not counting time put down', r.longestDaysNet, spanText),
-        rec('Quickest, start to finish', r.shortestDays, spanText),
-        rec('Quickest, not counting time put down', r.shortestDaysNet, spanText),
-        rec('Longest put down', r.longestHeld, spanText)
-      ], 'Calendar days between starting and finishing. The second of each pair takes off the days it spent on hold.')}
-
-      ${section('Time at the board', [
-        rec('Most hours', r.mostHours, hoursText),
-        rec('Fewest hours', r.fewestHours, hoursText),
-        rec('Most sessions', r.mostSessions, (v) => num(v)),
-        rec('Longest single sitting', r.longestSession, (v) => hoursText(v / 60))
-      ], 'Hours come from the sessions you logged, so a hold cannot change them \u2014 nothing is logged while a canvas is put down.')}
-
-      ${section('Pace', [
-        rec('Fastest placing', r.fastest, (v) => bigNum(v) + '/h'),
-        rec('Most unhurried', r.slowest, (v) => bigNum(v) + '/h')
-      ], 'Diamonds an hour, across canvases you both finished and timed.')}
-
-      ${section('Money', [
+      ${section('Your stash', [
+        pair('Canvas', 'Biggest', r.biggestSize, 'Smallest', r.smallestSize, (_v, x) => sizeOf(x)),
+        pair('Diamonds', 'Most diamonds', r.mostDiamonds, 'Fewest diamonds', r.fewestDiamonds, (v) => bigNum(v)),
         rec('Dearest', r.dearest, (v) => money(v)),
         rec('Best value', r.bestValue, (v) => money(v) + '/1k')
-      ], 'Best value is what a canvas cost per thousand diamonds \u2014 the only fair way to hold a small dear kit against a big cheap one.')}
+      ], 'Across everything you own. Best value is what a canvas cost per thousand diamonds \u2014 the only fair way to hold a small dear kit against a big cheap one.')}
+
+      ${section('What you have finished', [
+        pair('Canvas', 'Biggest', r.biggestFinished, 'Smallest', r.smallestFinished, (_v, x) => sizeOf(x)),
+        pair('Diamonds', 'Most diamonds', r.mostDiamondsFinished, 'Fewest diamonds', r.fewestDiamondsFinished, (v) => bigNum(v)),
+        pair('Start to finish', 'Longest, start to finish', r.longestDays,
+             'Quickest, start to finish', r.shortestDays, spanText),
+        /* Only worth their own lines when a hold could have made them differ:
+           with nothing ever put down they are the same numbers again. */
+        held ? pair('Not counting time put down', 'Longest, not counting time put down', r.longestDaysNet,
+                    'Quickest, not counting time put down', r.shortestDaysNet, spanText) : '',
+        pair('Placing', 'Fastest placing', r.fastest, 'Most unhurried', r.slowest, (v) => bigNum(v) + '/h')
+      ], 'Calendar days between starting and finishing, and diamonds an hour across the ones you also timed.')}
+
+      ${section('Time at the board', [
+        pair('Hours', 'Most hours', r.mostHours, 'Fewest hours', r.fewestHours, hoursText),
+        rec('Most sessions', r.mostSessions, (v) => num(v)),
+        rec('Longest single sitting', r.longestSession, (v) => hoursText(v / 60)),
+        rec('Longest put down', r.longestHeld, spanText)
+      ], 'Hours come from the sessions you logged, so a hold cannot change them \u2014 nothing is logged while a canvas is put down.')}
 
       ${(s.favourites.artist || s.favourites.shop) ? `<div>
         <h3 class="label">Most of all</h3>
@@ -2472,8 +2480,10 @@ route(/^#\/settings$/, async () => {
     <div class="topbar">${topbar('Settings', { back: '#/', sub: true })}</div>
     <div class="scroll pad stack" style="padding-top:18px;padding-bottom:26px">
       <p id="buildline" style="margin:0;font-size:11px;color:var(--ink-faint);text-align:center"></p>
-      <button class="btn ghost wide" data-go="#/summary" style="justify-content:space-between">
-        <span style="display:flex;align-items:center;gap:9px">${svg('gem', 18, 1.4)} Summary and records</span>
+      <button class="navcard" data-go="#/summary">
+        ${svg('gem', 22, 1.3)}
+        <span class="t"><b>Summary and records</b>
+          <span>Totals and records, for all time or one month</span></span>
         ${svg('chev', 16, 2.2)}</button>
 
       <div class="tiles">

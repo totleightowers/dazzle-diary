@@ -560,3 +560,20 @@ test('the things you place diamonds on are kits, and the supplies are not', () =
   assert.equal(row.width_in, 4);
   assert.equal(row.shape, 'Round');
 });
+
+/* The Android shell will only fetch from hosts on a list compiled into it. A
+   shop added to shops.js and not to that list cannot be reached at all, and the
+   app reports only "HTTP 500" while failing — which is exactly what happened
+   when Munimade shipped. The two lists are held in step here rather than by
+   remembering. */
+const SHELL = _read(new URL('../android/src/org/logbook/solo/MainActivity.java', import.meta.url), 'utf8');
+
+test('the shell is allowed to reach every shop the app knows about', () => {
+  const allowed = (SHELL.match(/private static final String\[\] ALLOWED = \{([\s\S]*?)\};/) || [])[1];
+  assert.ok(allowed, 'could not find the allow-list in the Android shell');
+  const hosts = [...allowed.matchAll(/"([^"]+)"/g)].map(m => m[1].toLowerCase());
+  const reachable = (domain) => hosts.some(h => domain === h || domain.endsWith('.' + h));
+  const unreachable = SHOPS.filter(s => !reachable(s.domain.toLowerCase()))
+                           .map(s => `${s.name} (${s.domain})`);
+  assert.deepEqual(unreachable, [], 'these shops cannot be reached from the app at all');
+});
