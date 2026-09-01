@@ -617,16 +617,23 @@ const SPEC_HTML = `<ul>
   <li><b>Diamond Amount:</b> 95,200</li>
   <li><b>Image Size:</b> 60cm x 85cm (23.6" x 33.5")</li>
   <li><b>Color Amount:</b> 80 Colors Including 3 AB, 5 Shimmer, 2 Metallic</li></ul>`;
+/* Each test gets its own handle. The whole file shares one database, and a
+   catalogue row that another test has already filled in and had cached is
+   indistinguishable from one this test's own fetch filled in — which is how a
+   test asserting that an empty page yields nothing came back with 95,200. */
+let muniN = 0;
 const muniProduct = (over = {}) => ({
   id: 42, title: "'The Underwater Castle' by Femke Deborah, Diamond Painting Canvas Kit (128)",
-  vendor: 'Vancy Arts', handle: 'underwater-castle-128', product_type: 'Diamond Painting Kit',
+  vendor: 'Vancy Arts', handle: 'underwater-castle-' + (++muniN),
+  product_type: 'Diamond Painting Kit',
   tags: ['square', 'square drill'], specHtml: SPEC_HTML,
   images: [{ src: 'https://cdn.shopify.com/a.jpg' }],
   variants: [{ title: 'Default Title', price: '85.00', available: true }], ...over
 });
 
 test('a kit whose spec is only on the shop page gets it when you own it', async () => {
-  const m = await mount({ products: [muniProduct()], shop: 'muni' });
+  const kit = muniProduct();
+  const m = await mount({ products: [kit], shop: 'muni' });
   await m.sync();
 
   /* Ask for this shop by name. An earlier test walks Settings and taps every
@@ -638,7 +645,7 @@ test('a kit whose spec is only on the shop page gets it when you own it', async 
   assert.equal(listed[0].width_in, null, 'the feed itself carries no size');
   assert.equal(listed[0].drills, null);
 
-  const row = await m.api('/catalogue/product?shop=muni&handle=underwater-castle-128');
+  const row = await m.api('/catalogue/product?shop=muni&handle=' + kit.handle);
   assert.equal(row.width_in, 23.6, 'the inches on the page are used rather than converted from cm');
   assert.equal(row.height_in, 33.5);
   assert.equal(row.drills, 95200);
@@ -648,15 +655,16 @@ test('a kit whose spec is only on the shop page gets it when you own it', async 
 });
 
 test('the backfill fills owned projects and never overwrites what you typed', async () => {
-  const m = await mount({ products: [muniProduct()], shop: 'muni' });
+  const kit = muniProduct();
+  const m = await mount({ products: [kit], shop: 'muni' });
   await m.sync();
   for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
 
   const mine = await m.seed({ title: 'The Underwater Castle', status: 'started',
-                              shop: 'muni', dac_handle: 'underwater-castle-128' });
+                              shop: 'muni', dac_handle: kit.handle });
   // a count you corrected by hand is yours and must survive
   const typed = await m.seed({ title: 'Corrected', status: 'started', shop: 'muni',
-                               dac_handle: 'underwater-castle-128', drills: 1234, colors: 7 });
+                               dac_handle: kit.handle, drills: 1234, colors: 7 });
   await m.sync();
 
   const filled = await m.api('/projects/' + mine.id);
@@ -671,19 +679,21 @@ test('the backfill fills owned projects and never overwrites what you typed', as
 });
 
 test('a shop page with nothing on it is not asked about twice', async () => {
-  const m = await mount({ products: [muniProduct({ specHtml: '<html><body>nothing here</body></html>' })], shop: 'muni' });
+  const kit = muniProduct({ specHtml: '<html><body>nothing here</body></html>' });
+  const m = await mount({ products: [kit], shop: 'muni' });
   await m.sync();
-  const row = await m.api('/catalogue/product?shop=muni&handle=underwater-castle-128');
+  const row = await m.api('/catalogue/product?shop=muni&handle=' + kit.handle);
   assert.equal(row.drills, null);
   assert.equal(row.spec_checked, 1, 'an empty page must still be marked as read');
 });
 
 test('a counted diamond number stops being an estimate', async () => {
-  const m = await mount({ products: [muniProduct()], shop: 'muni' });
+  const kit = muniProduct();
+  const m = await mount({ products: [kit], shop: 'muni' });
   await m.sync();
   for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
   const p = await m.seed({ title: 'Estimated', status: 'started', shop: 'muni',
-                           dac_handle: 'underwater-castle-128' });
+                           dac_handle: kit.handle });
   await m.api('/projects/' + p.id, { method: 'PATCH',
     headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ drills_estimated: 1 }) });
   await m.sync();

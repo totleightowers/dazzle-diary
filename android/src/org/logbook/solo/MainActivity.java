@@ -194,11 +194,13 @@ public class MainActivity extends Activity {
     }
 
     /* The shops this app knows about, and the CDN they serve pictures from.
-       Kept in step with app/core/shops.js by hand — a shop added there and not
-       here fails loudly with "host not allowed" rather than quietly. */
+       This list and app/core/shops.js have to agree: a shop added there and not
+       here cannot be reached at all, and says only "HTTP 500" while doing it.
+       That happened with Munimade, so a test now holds the two in step. */
     private static final String[] ALLOWED = {
         "diamondartclub.com", "mysticaldreamdiamonds.com", "pressedandplaced.com",
         "diamondartuk.co.uk", "fallongems.com", "diamondartstudio.co.uk",
+        "munimade.com",
         "cdn.shopify.com", "myshopify.com", "wp.com"
     };
 

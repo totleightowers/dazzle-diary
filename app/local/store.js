@@ -201,7 +201,13 @@ const newJob = (id) => {
 /* ------------------------------------------------------------------- sync */
 async function fetchJson(url) {
   const res = await fetch(via(url), { headers: { Accept: 'application/json' } });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) {
+    /* The shell puts the real reason in the body — "host not allowed:
+       munimade.com" is a fixable thing to be told, and "HTTP 500" is not. */
+    let why = '';
+    try { why = (await res.text()).trim().slice(0, 120); } catch { /* no body to read */ }
+    throw new Error(why && !/^\s*</.test(why) ? `${why} (HTTP ${res.status})` : `HTTP ${res.status}`);
+  }
   return res.json();
 }
 
@@ -215,7 +221,7 @@ async function syncOne(shop, job, want) {
     const perPage = shop.platform === 'woo' ? 100 : 250;
     let json;
     try { json = await fetchJson(url); }
-    catch (e) { if (page > 1) break; throw new Error(`${shop.name}: ${e.message}`); }
+    catch (e) { if (page > 1) break; throw e; }
     const batch = Array.isArray(json) ? json : (json.products || []);
     if (!batch.length) break;
     products.push(...batch);
