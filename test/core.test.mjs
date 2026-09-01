@@ -405,7 +405,7 @@ test('every status still reads back as itself', () => {
    worse, half-coloured — which is not the kind of thing a person notices in a
    diff. So the stylesheet is checked against the list of shops rather than
    trusted. */
-import { readFileSync as _read } from 'node:fs';
+import { readFileSync as _read, existsSync } from 'node:fs';
 const CSS = _read(new URL('../app/styles.css', import.meta.url), 'utf8');
 
 test('every shop has the colours the stylesheet promises it', () => {
@@ -471,4 +471,92 @@ test('Munimade titles yield the name, the artist and the shape', () => {
 test('Munimade links back to the right product page', () => {
   assert.equal(productUrl('muni', 'sand-and-spells-029'),
                'https://munimade.com/products/sand-and-spells-029');
+});
+
+test('a canvas size with decimals in it is still a size', () => {
+  // Pressed and Placed lists 55.9x76.2, which an integers-only pattern read as
+  // no size at all — and no size means no estimated diamond count either
+  const pnp = shopById('pnp');
+  const row = toRow(pnp, {
+    handle: 'x', title: 'Forest Spooks', vendor: 'PnP', product_type: 'Diamond Painting',
+    images: [{ src: 'https://cdn.shopify.com/a.jpg' }],
+    variants: [{ title: 'Square / 55.9x76.2 / Basic Toolkit', price: '50.00', available: true }]
+  });
+  assert.ok(row.width_in > 21 && row.width_in < 23, `width came out as ${row.width_in}`);
+  assert.ok(row.height_in > 29 && row.height_in < 31, `height came out as ${row.height_in}`);
+});
+
+test('Munimade reads its spec off the product page', () => {
+  const spec = shopById('muni').spec(`<ul>
+    <li><b>Diamond Amount:</b> 95,200</li>
+    <li><b>Image Size:</b> 60cm x 85cm (23.6" x 33.5")</li>
+    <li><b>Color Amount:</b> 80 Colors Including 3 AB, 5 Shimmer, 2 Metallic</li></ul>`);
+  assert.equal(spec.drills, 95200);
+  assert.equal(spec.width_in, 23.6);
+  assert.equal(spec.height_in, 33.5);
+  assert.equal(spec.colors, 80);
+  assert.equal(spec.special, '3 AB, 5 Shimmer, 2 Metallic');
+
+  // a colour line with no "including" clause is a count and nothing more
+  const plain = shopById('muni').spec('<li><b>Color Amount:</b> 52 Shimmer Drill Colors</li>');
+  assert.equal(plain.colors, 52);
+
+  // and a page that says none of it yields nothing rather than nonsense
+  assert.deepEqual(shopById('muni').spec('<p>no spec here</p>'), {});
+});
+
+/* The README listed six shops while the code had seven, because adding a shop
+   and remembering to say so are two different acts. It is checked rather than
+   trusted, the same way the stylesheet is. */
+const README = _read(new URL('../README.md', import.meta.url), 'utf8');
+
+test('the README names every shop the app supports', () => {
+  const missing = SHOPS.filter(s => !README.includes(s.name)).map(s => s.name);
+  assert.deepEqual(missing, [], 'these shops exist in the code but not in the README');
+});
+
+test('the README does not link to files that are not there', () => {
+  const bad = [];
+  for (const m of README.matchAll(/\]\(([^)]+)\)/g)) {
+    const target = m[1].split('#')[0];
+    if (!target || /^(https?:|mailto:)/.test(target)) continue;
+    if (!existsSync(new URL('../' + target, import.meta.url))) bad.push(target);
+  }
+  assert.deepEqual(bad, []);
+});
+
+test('the things you place diamonds on are kits, and the supplies are not', () => {
+  const dac = shopById('dac');
+  const p = (title, product_type, variant) => ({
+    handle: 'x', title, vendor: 'By Someone', product_type,
+    images: [{ src: 'https://cdn.shopify.com/a.jpg' }],
+    variants: [{ title: variant, price: '17.99', available: true }]
+  });
+  const SPEC = '4" x 4" (10cm x 10cm) / Round with 19 Colors including 19 Iridescent Diamonds / 5,730';
+
+  // coasters, keychains and the rest are projects people own and finish
+  for (const type of ['Coasters', 'Keychains', 'Gem Houses', 'Sparkle Boards', 'Bookmarks'])
+    assert.equal(dac.isKit(p('Thing', type, SPEC)), true, `${type} should be a kit`);
+
+  // a bundle carries no per-item spec, and is still a kit by its type
+  assert.equal(dac.isKit(p('Sparkle Pals™ Complete Set', 'Sparkle Pals', 'Default Title')), true);
+
+  // something filed oddly is caught by its diamond count alone
+  assert.equal(dac.isKit(p('Mini Tumblr - Holly Jolly', 'Accessories',
+    '5.3" x 3.1" (13.4cm x 8cm) / Round with 14 Colors / 3,000')), true);
+
+  // supplies are not
+  for (const [title, type] of [['Twist And Pick Premium Pen', 'Accessories'],
+                               ['Bling Diamonds – Square (Set of 10)', 'Diamonds'],
+                               ['Mystery Box', 'Mystery Box'], ['Wall Calendar', 'Calendar'],
+                               ['Diamond Painting Table', 'Tables']])
+    assert.equal(dac.isKit(p(title, type, 'Default Title')), false, `${type} should not be a kit`);
+
+  // and a coaster's spec comes through like any other canvas
+  const row = toRow(dac, p('Coasters - The Grinch™', 'Coasters', SPEC));
+  assert.equal(row.kind, 'kit');
+  assert.equal(row.drills, 5730);
+  assert.equal(row.colors, 19);
+  assert.equal(row.width_in, 4);
+  assert.equal(row.shape, 'Round');
 });

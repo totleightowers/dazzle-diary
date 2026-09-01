@@ -12,7 +12,7 @@ import { makeDocument, matches } from './dom.mjs';
 
 const IMAGE = 'https://cdn.shopify.com/kit.jpg';
 
-export async function mount({ width = 390, products = null, catalogue = true } = {}) {
+export async function mount({ width = 390, products = null, catalogue = true, shop = 'dac' } = {}) {
   const document = makeDocument();
   const files = new Map();          // the native file store
   const downloads = [];
@@ -58,6 +58,10 @@ export async function mount({ width = 390, products = null, catalogue = true } =
                  price: '169.00', available: true }]
   };
   const feed = products || [DEFAULT_PRODUCT];
+  /* Which shop's domain answers with that feed. Tests that care about one
+     shop's adapter stand that shop up rather than pretending it is DAC. */
+  const { SHOPS: _SHOPS } = await import('../app/core/shops.js');
+  const FEED_HOST = (_SHOPS.find((s) => s.id === shop) || {}).domain || 'diamondartclub.com';
 
   globalThis.window = win;
   globalThis.document = document;
@@ -128,6 +132,15 @@ export async function mount({ width = 390, products = null, catalogue = true } =
     if (/OFL\.txt$/.test(raw)) return { ok: true, status: 200, text: async () => 'SIL OPEN FONT LICENSE Version 1.1' };
     let url;
     try { url = new URL(real); } catch { return { ok: false, status: 400 }; }
+    /* A product PAGE, which is where some shops put the canvas size, diamond
+       count and colour count that never appear in the feed. Answering it here
+       is what makes the lazy spec fetch testable at all. */
+    const productPage = url.pathname.match(/^\/products\/([^/.]+)$/);
+    if (productPage) {
+      const p = feed.find((x) => x.handle === decodeURIComponent(productPage[1]));
+      if (!p) return { ok: false, status: 404 };
+      return { ok: true, status: 200, text: async () => p.specHtml || '<html></html>' };
+    }
     /* One product, the way a Shopify shop answers for it. The app falls back to
        this when a catalogue row carries no picture, so the stub has to answer
        it honestly or the fallback looks broken when it works. */
@@ -140,7 +153,7 @@ export async function mount({ width = 390, products = null, catalogue = true } =
                json: async () => ({ handle: p.handle, featured_image: shots[0] || null, images: shots }) };
     }
     const page = Number(url.searchParams.get('page') || 1);
-    if (!catalogue || url.hostname !== 'diamondartclub.com' || page > 1)
+    if (!catalogue || url.hostname !== FEED_HOST || page > 1)
       return { ok: true, status: 200, json: async () => ({ products: [] }) };
     return { ok: true, status: 200, json: async () => ({ products: feed }) };
   };
