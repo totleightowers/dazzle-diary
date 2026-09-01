@@ -537,7 +537,8 @@ test('the summary counts what happened, and a wish-list kit is not a fact', asyn
   assert.equal(s.totals.hours, 8.5);
   assert.equal(s.totals.days, 4, 'four distinct days had a session');
   assert.equal(s.totals.streak, 3, '2, 3 and 4 February are a run of three');
-  assert.equal(s.totals.spend, 105, 'the wished-for £999 was counted as spent');
+  assert.deepEqual(s.totals.spendBy, [{ currency: 'GBP', total: 105 }],
+                   'the wished-for £999 was counted as spent');
   assert.equal(s.records.biggestSize.title, 'Moon Eater');
   assert.equal(s.records.smallestSize.title, 'Tiny', 'the wish-list kit won "biggest"');
 
@@ -792,4 +793,38 @@ test('a most-and-least pair that lands on one canvas becomes one line', async ()
   // but the stash has two, so its pairs stay pairs
   assert.ok(rows.some((x) => /^Biggest /.test(x)), rows.join(' | '));
   assert.ok(rows.some((x) => /^Smallest /.test(x)), rows.join(' | '));
+});
+
+test('money is never added across currencies', async () => {
+  const m = await mount();
+  for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
+  await m.seed({ title: 'Pounds One', status: 'received', price: 80, currency: 'GBP',
+                 drills: 40000, date_ordered: '2026-01-02' });
+  await m.seed({ title: 'Pounds Two', status: 'received', price: 60, currency: 'GBP',
+                 drills: 60000, date_ordered: '2026-01-03' });
+  await m.seed({ title: 'Dollars', status: 'received', price: 90, currency: 'USD',
+                 drills: 30000, date_ordered: '2026-01-04' });
+
+  const s = await m.api('/summary');
+  // £140 and $90 are two facts, not one number
+  assert.deepEqual(s.totals.spendBy,
+                   [{ currency: 'GBP', total: 140 }, { currency: 'USD', total: 90 }]);
+  assert.equal(s.totals.spend, undefined, 'a single mixed-currency total should not exist');
+  assert.equal(s.mainCurrency, 'GBP');
+  assert.equal(s.currencies, 2);
+
+  // the $90 kit is the largest number, but it is not the dearest thing in pounds
+  assert.equal(s.records.dearest.title, 'Pounds One');
+  assert.equal(s.records.dearest.currency, 'GBP');
+  assert.equal(s.records.bestValue.title, 'Pounds Two');
+
+  await m.go('#/summary');
+  const tiles = m.all('.tile').map((x) => x.textContent.replace(/\s+/g, ' ').trim());
+  const spent = tiles.find((x) => /spent/.test(x));
+  assert.match(spent, /£140\.00/);
+  assert.match(spent, /\$90\.00/, 'the dollars were folded into the pounds');
+  assert.ok(!/£230/.test(spent), 'currencies were added together');
+
+  const rows = m.all('.panel .row').map((x) => x.textContent.replace(/\s+/g, ' ').trim());
+  assert.ok(rows.some((x) => /Dearest .*£80\.00/.test(x)), rows.join(' | '));
 });
