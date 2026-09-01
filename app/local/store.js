@@ -1015,7 +1015,8 @@ export async function localApi(path, opts = {}) {
       if (!cand.length) return null;
       const best = cand.reduce((a, b) => pick(a.v, b.v) ? a : b);
       return { id: best.r.id, title: best.r.title, value: best.v, shop: best.r.shop || null,
-               width_in: best.r.width_in ?? null, height_in: best.r.height_in ?? null };
+               width_in: best.r.width_in ?? null, height_in: best.r.height_in ?? null,
+               currency: best.r.currency || null };
     };
     const most = (list, f) => one(list, f, (a, b) => a >= b);
     const least = (list, f) => one(list, f, (a, b) => a <= b);
@@ -1050,9 +1051,17 @@ export async function localApi(path, opts = {}) {
     }, {})).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0] || null;
 
     const bought = acquiredInPeriod;
+    const spentPer = bought.filter(r => r.price != null).reduce((a, r) => {
+      const c = r.currency || 'GBP';
+      a[c] = (a[c] || 0) + (Number(r.price) || 0);
+      return a;
+    }, {});
+    const mainCurrency = Object.entries(spentPer).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+    const inMainCurrency = (r) => !mainCurrency || (r.currency || 'GBP') === mainCurrency;
 
     return {
-      period: period || null, years, months,
+      period: period || null, years, months, mainCurrency,
+      currencies: Object.keys(spentPer).length,
       totals: {
         done: period ? finished.length : rows.filter(r => r.status === 'completed').length,
         bought: period ? bought.length : owned.length,
@@ -1060,7 +1069,14 @@ export async function localApi(path, opts = {}) {
         days: dayset.size,
         hours: Math.round(mins / 60 * 10) / 10,
         streak,
-        spend: Math.round(bought.reduce((n, r) => n + (Number(r.price) || 0), 0) * 100) / 100,
+        /* Adding dollars to pounds gives a number that is not money. Grouped by
+           currency, the way the figures in Settings already are. */
+        spendBy: Object.values(bought.filter(r => r.price != null).reduce((a, r) => {
+          const c = r.currency || 'GBP';
+          (a[c] = a[c] || { currency: c, total: 0 }).total += Number(r.price) || 0;
+          return a;
+        }, {})).map(v => ({ ...v, total: Math.round(v.total * 100) / 100 }))
+          .sort((a, b) => b.total - a.total),
         sessions: sessions.filter(x => inPeriod(x.on)).length,
         everHeld
       },
@@ -1086,10 +1102,15 @@ export async function localApi(path, opts = {}) {
           const m = byProject(r.id).map(x => Number(x.minutes) || 0);
           return m.length ? Math.max(...m) : null;
         }),
-        dearest: most(bought, r => Number(r.price) || null),
+        /* Ranked within one currency, because the app has no exchange rates and
+           never will offline — comparing a $90 kit with an £80 one would be a
+           guess dressed as a fact. The currency chosen is the one you have
+           spent the most in; anything bought in another is left out of these
+           two, and the page says so. */
+        dearest: most(bought.filter(inMainCurrency), r => Number(r.price) || null),
         // what a canvas cost per thousand diamonds — the only honest way to
         // compare a small dear kit with a big cheap one
-        bestValue: least(bought, r => (r.price > 0 && r.drills > 0)
+        bestValue: least(bought.filter(inMainCurrency), r => (r.price > 0 && r.drills > 0)
           ? Math.round(r.price / (r.drills / 1000) * 100) / 100 : null),
         longestHeld: most(scope, r => held(r) || null)
       },

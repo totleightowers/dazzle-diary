@@ -2398,7 +2398,10 @@ route(/^#\/summary$/, async () => {
         tile(t.hours, hoursText(t.hours), 'hours logged'),
         tile(t.streak, num(t.streak), `day${t.streak === 1 ? '' : 's'} in a row — your longest run`),
         tile(t.sessions, num(t.sessions), `session${t.sessions === 1 ? '' : 's'}`),
-        tile(t.spend, money(t.spend), SUMMARY.year ? 'spent on what you bought' : 'spent'),
+        tile((t.spendBy || []).length, (t.spendBy || []).length
+          ? money(t.spendBy[0].total, t.spendBy[0].currency) : '',
+          `${SUMMARY.year ? 'spent on what you bought' : 'spent'}${(t.spendBy || []).length > 1
+            ? ' · plus ' + t.spendBy.slice(1).map((x) => money(x.total, x.currency)).join(', ') : ''}`),
         tile(t.days && t.hours, hoursText(t.hours / (t.days || 1)), 'on an average day at it'),
         tile(t.everHeld, num(t.everHeld), 'put down and picked back up')
       )}
@@ -2406,9 +2409,10 @@ route(/^#\/summary$/, async () => {
       ${section('Your stash', [
         pair('Canvas', 'Biggest', r.biggestSize, 'Smallest', r.smallestSize, (_v, x) => sizeOf(x)),
         pair('Diamonds', 'Most diamonds', r.mostDiamonds, 'Fewest diamonds', r.fewestDiamonds, (v) => bigNum(v)),
-        rec('Dearest', r.dearest, (v) => money(v)),
-        rec('Best value', r.bestValue, (v) => money(v) + '/1k')
-      ], 'Across everything you own. Best value is what a canvas cost per thousand diamonds \u2014 the only fair way to hold a small dear kit against a big cheap one.')}
+        rec('Dearest', r.dearest, (v, x) => money(v, x.currency)),
+        rec('Best value', r.bestValue, (v, x) => money(v, x.currency) + '/1k')
+      ], `Across everything you own. Best value is what a canvas cost per thousand diamonds \u2014 the only fair way to hold a small dear kit against a big cheap one.${
+        s.currencies > 1 ? ` Dearest and best value are ranked among the kits you paid for in ${h(s.mainCurrency)}: without exchange rates, holding those against a price in another currency would be a guess.` : ''}`)}
 
       ${section('What you have finished', [
         pair('Canvas', 'Biggest', r.biggestFinished, 'Smallest', r.smallestFinished, (_v, x) => sizeOf(x)),
