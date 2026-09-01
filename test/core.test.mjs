@@ -405,7 +405,7 @@ test('every status still reads back as itself', () => {
    worse, half-coloured — which is not the kind of thing a person notices in a
    diff. So the stylesheet is checked against the list of shops rather than
    trusted. */
-import { readFileSync as _read } from 'node:fs';
+import { readFileSync as _read, existsSync } from 'node:fs';
 const CSS = _read(new URL('../app/styles.css', import.meta.url), 'utf8');
 
 test('every shop has the colours the stylesheet promises it', () => {
@@ -503,4 +503,24 @@ test('Munimade reads its spec off the product page', () => {
 
   // and a page that says none of it yields nothing rather than nonsense
   assert.deepEqual(shopById('muni').spec('<p>no spec here</p>'), {});
+});
+
+/* The README listed six shops while the code had seven, because adding a shop
+   and remembering to say so are two different acts. It is checked rather than
+   trusted, the same way the stylesheet is. */
+const README = _read(new URL('../README.md', import.meta.url), 'utf8');
+
+test('the README names every shop the app supports', () => {
+  const missing = SHOPS.filter(s => !README.includes(s.name)).map(s => s.name);
+  assert.deepEqual(missing, [], 'these shops exist in the code but not in the README');
+});
+
+test('the README does not link to files that are not there', () => {
+  const bad = [];
+  for (const m of README.matchAll(/\]\(([^)]+)\)/g)) {
+    const target = m[1].split('#')[0];
+    if (!target || /^(https?:|mailto:)/.test(target)) continue;
+    if (!existsSync(new URL('../' + target, import.meta.url))) bad.push(target);
+  }
+  assert.deepEqual(bad, []);
 });

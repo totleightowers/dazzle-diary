@@ -629,10 +629,14 @@ test('a kit whose spec is only on the shop page gets it when you own it', async 
   const m = await mount({ products: [muniProduct()], shop: 'muni' });
   await m.sync();
 
-  // the feed itself carries none of it
-  const [listed] = await m.api('/catalogue/browse?limit=5');
-  assert.equal(listed.width_in, null);
-  assert.equal(listed.drills, null);
+  /* Ask for this shop by name. An earlier test walks Settings and taps every
+     control, which switches shops off, and that preference outlives it in the
+     one database this file shares — so an unqualified browse can legitimately
+     come back empty and has nothing to do with what is being tested here. */
+  const listed = await m.api('/catalogue/browse?shop=muni&limit=5');
+  assert.equal(listed.length, 1, 'the catalogue did not come back');
+  assert.equal(listed[0].width_in, null, 'the feed itself carries no size');
+  assert.equal(listed[0].drills, null);
 
   const row = await m.api('/catalogue/product?shop=muni&handle=underwater-castle-128');
   assert.equal(row.width_in, 23.6, 'the inches on the page are used rather than converted from cm');

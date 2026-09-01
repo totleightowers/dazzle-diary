@@ -1,246 +1,250 @@
 # Dazzle Diary
 
-**Dazzle Diary** is an Android app for keeping track of a diamond painting
-stash — what you own, what you have finished, how far through you are, and what
-it all cost.
+Dazzle Diary is an offline-first Android logbook for diamond painting.
 
-It reads the public product listings of six shops, so a kit you have bought
-arrives with its cover image, artist, canvas size, drill shape, colour count and
-diamond count already filled in. There is no account, no cloud and no server:
-everything lives in the app's own storage on the phone.
+It keeps track of the kits you own, what has arrived, what you are working on,
+what you have finished, how long you spent, what you paid, and the photos you
+take along the way.
 
-Supported shops: **Diamond Art Club**, **Mystical Dream Diamonds**,
-**Pressed and Placed**, **Diamond Art UK**, **Fallon Gems**,
-**Diamond Art Studio** and **Munimade**.
+The app can also read product listings from supported diamond-art shops, so
+adding a kit brings in its cover image, artist and published specification
+instead of making you type everything by hand.
 
-What each shop publishes differs, and some of it is on the product page rather
-than in the feed. Fetching a page for every kit would add megabytes to every
-sync, so it happens once, only for a kit you actually own, and only where there
-is something to find — Munimade's page carries the canvas size, diamond count
-and colour count that its feed does not. Anything you have typed yourself is
-left alone.
+There is no Dazzle Diary account, cloud service, analytics backend or central
+copy of your collection. Your logbook lives on your phone.
 
-## Features
+## What it does
 
 ### Your stash
 
-Everything about a project is changed on the project itself: tap the status to
-move it on, tap the stars to rate it, drag the slider for progress, log a
-session, record a hold, correct the cost or a date. **Project details** is
-there for the underlying record — the kit's measurements, its catalogue
-listing, the fields you rarely touch.
+- Organises projects across seven states: **Wish list**, **Not received**,
+  **Received**, **Started**, **On hold**, **Completed** and **Abandoned**
+- Long-press a project to drag it between sections; the dates it implies fill
+  themselves in
+- Keeps status and milestone dates in step in both directions — set a
+  completion date and the project is completed, and the reverse
+- Records **hold periods**: each time a canvas is put down and picked back up
+  is kept, so "how long did that take" can be answered with or without the
+  time it spent waiting
+- Filters and sorts the logbook by shop, drill shape, canvas size and rating,
+  and sorts within each section by name, progress, rating, size or diamonds
+- Rate a finished piece out of five
 
-- Projects grouped into **Not received → Received → Started → Completed**, with
-  a cover thumbnail, artist, size, drill shape and diamond count on every card.
-- **Drag a project between groups** to change its status.
-- **Status and dates stay in agreement, in both directions.** Marking a project
-  *received* fills in any blank dates up to that point and clears the later
-  ones; typing a completion date moves it to *completed* on its own.
-- **Progress percentage** with a bar on anything in progress, **hours logged**,
-  free-text **notes**, and a **sold price** for kits that move on.
-- Search across titles and artists, filter by status, and see at a glance which
-  shop a project came from — each shop has its own colour throughout the app.
+### While you work
+
+- Time a session with a **timer**, or add one by hand; hours are the sum of
+  your sessions rather than a number you maintain
+- Logging time on a kit you have not started starts it
+- Track progress as a percentage, with the diamonds placed worked out from it
+- Keep notes, cost, shipping, tax and sold price, in any of six currencies
+- Add progress photos from the camera or the gallery; photos are downscaled on
+  the way in so a backup stays a sensible size
+- Swipe through a project's pictures, tap to open one full screen, pinch to
+  zoom, and share one out to another app
 
 ### Catalogues
 
-- **Browse all six shops offline.** Catalogues are cached on the phone, so
-  adding a kit needs no network once they are synced.
-- Filter by shop, drill shape, canvas size (up to 40 cm, 40–60, 60–80, 80+) and
-  a maximum price; sort by best match, A–Z, cheapest, dearest, biggest or most
-  drills. A clear button resets the lot.
-- **Choose which shops to sync.** Turn off the ones you do not buy from and they
-  are neither fetched nor shown.
-- Every project keeps a link back to its product page.
+- Search and filter cached shop catalogues offline, by shop, shape, canvas
+  size, price and stock
+- Pull the catalogue down to refresh it
+- Where a shop publishes a kit's canvas size, diamond count or colour count on
+  its product page rather than in its feed, that page is fetched **once, only
+  for a kit you own** — never for the whole catalogue
+- Imports order-history CSVs and matches purchases against the catalogue
+- Asks about ambiguous matches instead of silently attaching an order to the
+  wrong kit
 
-### Importing an order history
+### Looking back
 
-- **Load an order-history CSV** and have each line matched against the shops'
-  own catalogues. Tools, coasters and accessories are recognised and skipped by
-  product type rather than by guessing at keywords.
-- **Prices are worked out, not invented.** A kit ordered on its own takes the
-  order total exactly; several kits with no accessories split it in proportion
-  to list price; otherwise it falls back to the current list price. Each project
-  records which of the three it got, so an estimate never passes for a fact.
-- Where a title is ambiguous the importer **asks instead of guessing**, and
-  remembers the answer for future imports.
-
-### Photos
-
-- Attach **progress photos** to any project, several at a time, and swipe
-  through them alongside the shop's own listing images in a carousel.
-- Photos are downscaled on the way in, so a few hundred of them stay a sensible
-  size rather than filling the phone with camera-resolution originals.
-
-### Statistics
-
-- Projects, completed count and hours logged.
-- **Diamonds placed so far** — every finished canvas plus how far through you
-  are on the ones on the go — and how many are **still to place** across the
-  rest of the stash.
-- Most collected artists and most bought-from shops.
-
-### Missing diamond counts
-
-Shops do not always publish a drill count. Where one is missing it is estimated
-from the canvas size, at **12.78/cm² round** and **16.08/cm² square**. Those
-densities were measured across 3,595 kits that publish both a size and a real
-count, and land within 5% for over 95% of them. (Square drills are 2.5 mm,
-which is exactly 16 per cm².) Estimated counts are always shown with a `≈`.
+- A **summary page** with totals and records — canvases finished, diamonds
+  placed, days at the board, hours logged, longest run of consecutive days,
+  biggest and smallest canvas, longest and quickest to finish (with and
+  without time on hold), fastest placing, best value per thousand diamonds —
+  filterable by year and by month
+- Collection statistics in Settings: spend by currency, most collected
+  artists, most bought from
 
 ### Your data
 
-- **Everything stays on the phone.** The only network requests are to the shops'
-  own public product listings.
-- **Back up to a single JSON file** — projects, photos and all — and restore it
-  on another phone. Restoring merges rather than overwrites: it will not clobber
-  progress, hours, notes or a sold price you have already entered, and covers
-  are re-fetched from the catalogue so they are never broken links.
-- Dark mode follows the phone's own setting.
+- Exports CSV
+- Creates a full JSON backup containing projects, sessions, hold periods and
+  progress photos
+- Restores by merging with the collection already on the device, rather than
+  replacing it
+- Follows the phone's light/dark mode, and lays out as two panes on a tablet
+  or an unfolded foldable
 
-## Installing
+## Supported shops
 
-Download `dazzle-diary.apk` from the [releases page][releases] and open it on
-the phone. Android will ask you to allow installing from this source.
+Dazzle Diary currently has catalogue adapters for:
 
-Android 7.0 (API 24) or newer.
+| Shop | Platform |
+| --- | --- |
+| Diamond Art Club | Shopify |
+| Mystical Dream Diamonds | Shopify |
+| Pressed and Placed | Shopify |
+| Diamond Art UK | Shopify |
+| Fallon Gems | Shopify |
+| Diamond Art Studio | WooCommerce |
+| Munimade | Shopify |
 
-[releases]: https://github.com/totleightowers/dazzle-diary/releases
+You can switch off shops you do not use. Disabled shops are left out of
+catalogue syncs and browsing.
 
-> Each build must be signed with the same key as the one before it, or Android
-> refuses to install it over the top. If you build your own, keep your keystore.
+What each shop publishes differs, and every adapter is written against the real
+feed rather than a specification. Diamond Art Club packs the whole spec into
+the variant title; Mystical Dream Diamonds puts sizes in description prose;
+Munimade keeps the artist in the product title and the specification on the
+product page. Where a shop publishes no diamond count at all, Dazzle Diary
+estimates one from the canvas size and marks it as an estimate.
 
-## Using it
+## Install
 
-**Start with the catalogues.** Open **Settings → Shop catalogues**, turn off any
-shop you do not buy from, and sync. This is the only step that needs a network.
+Download the APK from the repository's **Releases** page and open it on your
+Android device.
 
-**Add what you own**, either way round:
+Dazzle Diary supports **Android 7.0 (API 24)** and later, and targets API 34.
 
-- *One at a time* — **Browse**, filter down to the kit, and add it. Everything
-  the shop publishes comes with it.
-- *All at once* — **Import**, and give it an order-history CSV. Each line is
-  matched against the catalogues; anything ambiguous is put to you rather than
-  guessed at. This is much the faster route for an established stash.
+Android may ask you to allow installation from the browser or file manager you
+used to download the APK.
 
-**Then just use it.** Drag projects between groups as they arrive and get
-started, set a progress percentage and log hours as you go, and add photos.
-Dates fill themselves in as the status changes, and can be corrected by hand at
-any point.
+> Android requires app updates to be signed by the same key as the installed
+> version. If you build your own copy, keep the signing keystore.
 
-**Back up now and then** from **Settings → Backup**. It is one file, it contains
-the photos, and it is the only copy of your logbook that exists anywhere.
+## First five minutes
 
-## Building from source
+1. Open **Settings → Shop catalogues**.
+2. Switch off any shops you do not buy from.
+3. Sync the catalogues. Nothing works properly until this has been done once:
+   no covers, no sizes, no drill counts, and an order import has nothing to
+   match against.
+4. Add a kit from **Add from catalogue**, or import an order-history CSV from
+   **Import**.
+5. Open the project and fill in anything the shop did not publish.
+6. As you work, start a session, update progress, and add photos.
+7. Make a backup from **Settings → Backup**.
 
-You need **JDK 17+**, **Node 20+**, `zip`, and the Android SDK's
-`platforms;android-34` and `build-tools;34.0.0`.
+Once a catalogue has been synced, browsing and everyday use work entirely from
+the local copy. The network is only needed to refresh shop data or fetch an
+image.
 
-With the SDK command-line tools installed and `$ANDROID_HOME` set:
+## Privacy
 
-```sh
+The app asks for two permissions: `INTERNET` and `ACCESS_NETWORK_STATE`. They
+are used to reach the shops whose catalogues you have enabled, and nothing
+else. There is no analytics, no telemetry and no Dazzle Diary server. Projects,
+photos, sessions and preferences are stored in the app's own storage on the
+device, and leave it only when you make a backup or share a photo yourself.
+
+## Build from source
+
+The app has no runtime package dependencies and no JavaScript bundling step.
+
+You need:
+
+- JDK 17+
+- Node.js 20+
+- `zip`
+- Android SDK platform 34
+- Android build-tools 34.0.0
+
+With `$ANDROID_HOME` set:
+
+```bash
 sdkmanager 'platforms;android-34' 'build-tools;34.0.0'
 export PATH="$ANDROID_HOME/build-tools/34.0.0:$PATH"
 
 git clone https://github.com/totleightowers/dazzle-diary
 cd dazzle-diary
+
 mkdir -p android/sdk
 cp "$ANDROID_HOME/platforms/android-34/android.jar" android/sdk/android.jar
 
-cd android && ./build.sh
+cd android
+./build.sh
 ```
 
-That writes `android/dazzle-diary.apk`, and prints its size and signature.
-There is nothing to install first — the app has no dependencies, and no build
-step beyond packaging.
+The APK is written to `android/dazzle-diary.apk`.
 
-The build script takes these from the environment:
+`build.sh` runs `aapt2`, `d8` and `apksigner` directly, with a small
+`zipalign.mjs` standing in for `zipalign`. There is no Gradle.
 
-| Variable        | Default            | What it is                        |
-| --------------- | ------------------ | --------------------------------- |
-| `SDK_JAR`       | `sdk/android.jar`  | API 34 `android.jar`              |
-| `KEYSTORE`      | `keystore.jks`     | signing keystore, made on first build |
-| `KEYSTORE_PASS` | `changeit`         | its password                      |
-| `KEY_ALIAS`     | `logbook`          | key alias within it               |
-| `OUT`           | `dazzle-diary.apk` | where to write the APK            |
+## Tests
 
-`android/zipalign.mjs` does the 4-byte alignment `resources.arsc` needs, so the
-build does not depend on a `zipalign` binary being on `PATH`.
+```bash
+npm test        # the whole suite
+npm run check   # every tracked JavaScript file parses
+```
 
-### Tests
+There is no browser on the machine this was built on, so the suite provides its
+own: `test/dom.mjs` is a hand-written DOM and `test/mount.mjs` boots the real
+`app.js` against it, with the native bridge and the shops stubbed. Tests drive
+the app by tapping what is on screen rather than by calling internals.
+
+`tools/layout-probe.mjs` resolves the CSS cascade at a given viewport width —
+not a renderer, but enough to answer "at this width, which rules win, and what
+do the layout properties come out as?" `tools/preview.mjs` serves `app/` over
+HTTP so the same code can be opened in an ordinary browser.
+
+CI runs the suite, `actionlint`, `semgrep`, `gitleaks` and CodeQL on every pull
+request, and builds the APK. Every action is pinned to a commit SHA.
+
+`main` is written to by merging a pull request, never by committing to it.
+Branch protection applies to administrators too, and `tools/hooks` catches it
+a step earlier:
 
 ```sh
-npm test     # node --test over core/
-npm run check   # every tracked .js/.mjs parses
+git config core.hooksPath tools/hooks
 ```
 
-The tests cover the parts where being wrong is quiet: comma-in-title CSV
-parsing, order reconciliation, the refusal to guess between candidates, the
-status/date rules agreeing in both directions, and the drill estimate against
-kits whose real counts are published.
+## Repository layout
 
-CI runs those on every push, along with semgrep, CodeQL, a secret scan and a
-guard against committing a keystore or personal data, and builds the APK to
-prove it still packages.
+```text
+app/
+  core/       pure logic: CSV, matching, drill estimates, status rules, shop adapters
+  local/      IndexedDB store and the app's own API
+  fonts/      bundled Karla and Newsreader plus their OFL notices
+  api.js      picks the local API in the standalone Android build
+  app.js      the whole client
+  index.html  application shell
+  styles.css  styling
 
-## How it is put together
+android/
+  src/        the WebView host and the JavaScript bridge
+  res/        Android resources
+  build.sh    dependency-light APK build
+  zipalign.mjs
 
+test/         the DOM, the IndexedDB shim, and the suite
+tools/        layout probe, preview server, icon generator, git hooks
+.github/      CI, CodeQL, release and Dependabot configuration
 ```
-app/          the whole application — plain ES modules, no build step
-  core/       pure logic: CSV, matching, pricing, status rules, shop adapters
-  local/      IndexedDB storage and the API the UI talks to
-android/      the APK: one Activity, ~370 lines of Java
-test/         node --test over core/
-```
 
-The page is served from the APK's own assets over a private `https://` origin,
-so it gets a secure context — IndexedDB and the rest — and ordinary relative
-URLs. A small Java layer covers the three things a web page cannot do for
-itself: read cover images and photos out of the app's private storage, write
-them back, and fetch another origin — the shops send no CORS headers.
+## Design principles
 
-There are no dependencies. Nothing is downloaded at build or run time beyond the
-Android SDK itself.
+**Local-first.** Your collection is not stored on a Dazzle Diary server.
 
-## The interesting problems
+**Low-dependency.** Plain JavaScript and a small Android shell. Nothing is
+installed at build or run time, which is what makes it buildable on a phone.
 
-**Titles are not unique.** One shop sells four different "Alice in Wonderland"
-canvases. A CSV line gives only a title, so the importer prices out every
-combination of candidates against what the order actually charged —
-accessories included, which is why those stay in the catalogue — and takes the
-closest fit. When the runner-up is within £4 it refuses to guess and asks.
+**Conservative about guesses.** An import would rather ask than attach an order
+to the wrong kit, and an estimated diamond count says that it is estimated.
 
-**Products get renamed.** "Old Masters" became "Old Masters - MEGA Dazzles™".
-Exact matches and prefix variants are both collected, so a renamed kit is still
-offered even when the plain title also matches something else.
+**Durable.** A project is a record in its own right. The catalogue exists to
+make creating that record easier, and unlinking one leaves it intact.
 
-**Titles can contain commas.** The products column is a comma-joined list inside
-one quoted CSV field, so *Frejya, Goddess of Beauty & War* arrives as two
-fragments. They are rejoined by testing the combination against the catalogue
-and preferring the longest match that exists.
-
-**Currency.** Shopify's product feed accepts `?currency=`, which returns that
-market's real prices rather than a conversion invented locally. Without it a
-Canadian shop's CA$225 kit reads as £225.
-
-## A note on the shops
-
-The app reads each shop's public product listing — the same JSON their own
-storefront uses — and caches cover images locally for kits you own, which is
-what a shop's own logbook does. Artwork remains the copyright of the artists and
-the shops. Don't redistribute it.
-
-## Contributing to this repository
-
-`main` is protected: every change arrives by pull request, the checks have to
-pass, and **there is no administrator override** — a direct push is refused for
-everyone. `git config core.hooksPath tools/hooks` makes a local clone refuse to
-commit on `main` in the first place.
+**Recoverable.** Backup and restore include progress photos and sessions, and
+merge with what is already on the device rather than replacing it.
 
 ## Licence
 
-MIT — see [LICENSE](LICENSE).
+Dazzle Diary is licensed under the MIT Licence. See [`LICENSE`](LICENSE).
 
-The app embeds two typefaces, Karla and Newsreader, both under the SIL Open
-Font License 1.1. Their notices and the full licence text are in
-[THIRD_PARTY_LICENCES.md](THIRD_PARTY_LICENCES.md), bundled with the app, and
-shown under **Settings → Open-source licences**.
+The app bundles Karla and Newsreader under the SIL Open Font License 1.1. The
+notices and licence text are in
+[`THIRD_PARTY_LICENCES.md`](THIRD_PARTY_LICENCES.md), with the individual OFL
+files under `app/fonts/`.
+
+Product names, images, artwork and merchant branding remain the property of
+their respective owners. Dazzle Diary is an independent application and is not
+presented as an official app of any of the shops it reads.
