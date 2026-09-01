@@ -2295,6 +2295,152 @@ async function loadBrowse(reset) {
   paintBrowseBody();
 }
 
+/* ========================================================== #/summary */
+const MONTHS = ['January','February','March','April','May','June',
+                'July','August','September','October','November','December'];
+const SUMMARY = { year: null, month: null };
+
+const hoursText = (h) => {
+  const n = Number(h) || 0;
+  if (n < 1) return Math.round(n * 60) + 'm';
+  return (Math.round(n * 10) / 10).toLocaleString('en-GB') + 'h';
+};
+// the app already reads a span as "9 days", "3 weeks", "2 months" — same voice here
+const spanText = (d) => daysText(null, null, d);
+
+route(/^#\/summary$/, async () => {
+  const params = new URLSearchParams();
+  if (SUMMARY.year) params.set('year', SUMMARY.year);
+  if (SUMMARY.year && SUMMARY.month) params.set('month', SUMMARY.month);
+  const s = await api('/summary' + (params.toString() ? '?' + params : ''));
+  const t = s.totals, r = s.records;
+
+  const periodName = !SUMMARY.year ? 'All time'
+    : SUMMARY.month ? `${MONTHS[Number(SUMMARY.month) - 1]} ${SUMMARY.year}`
+    : String(SUMMARY.year);
+
+  const tile = (value, cap, bg) =>
+    `<div class="tile"${bg ? ` style="background:${bg}"` : ''}>
+       <div class="big tnum">${value}</div><div class="cap">${cap}</div></div>`;
+
+  /* A record is worth nothing if you cannot get to the canvas it is about, so
+     every row opens the project. */
+  /* A canvas is recognised by its dimensions, not by its area in square
+     centimetres — the area is only how the biggest and smallest were picked. */
+  const sizeOf = (x) => (x.width_in && x.height_in)
+    ? `${cm(x.width_in)} \u00d7 ${cm(x.height_in)} cm` : '\u2014';
+
+  const rec = (label, x, fmt) => x ? `
+    <button class="row" data-go="#/p/${x.id}" style="width:100%;text-align:left">
+      <span class="k" style="color:var(--ink-mute);flex:1 1 auto;min-width:0;display:block">
+        <span style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:.04em">${h(label)}</span>
+        <span style="display:flex;align-items:center;gap:7px;color:var(--ink);font-size:14px;margin-top:3px">
+          ${x.shop ? `<span class="pip" data-shop="${h(x.shop)}"></span>` : ''}
+          <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${h(x.title)}</span></span>
+      </span>
+      <span class="v tnum" style="white-space:nowrap;font-weight:700">${fmt(x.value, x)}</span>
+    </button>` : '';
+
+  const section = (title, rows, note) => {
+    const body = rows.filter(Boolean).join('');
+    return body ? `<div><h3 class="label">${h(title)}</h3>
+      <div class="panel pad-in">${body}</div>
+      ${note ? `<p style="margin:8px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">${note}</p>` : ''}
+    </div>` : '';
+  };
+
+  const chip = (label, on, act, k) =>
+    `<button class="chip" style="height:36px;padding:0 12px" data-act="${act}"${
+      k == null ? '' : ` data-k="${h(k)}"`} aria-pressed="${on}">${h(label)}</button>`;
+
+  $out.innerHTML = `
+  <div class="screen reading">
+    <div class="topbar">${topbar('Summary', { back: '#/settings', sub: true })}</div>
+    <div class="scroll pad stack" style="padding-top:18px;padding-bottom:26px">
+
+      <div>
+        <div class="chiprow" style="margin:0;padding:0;flex-wrap:wrap;gap:6px">
+          ${chip('All time', !SUMMARY.year, 'sumyear', '')}
+          ${s.years.map((y) => chip(y, SUMMARY.year === y, 'sumyear', y)).join('')}
+        </div>
+        ${SUMMARY.year && s.months.length ? `
+        <div class="chiprow" style="margin:8px 0 0;padding:0;flex-wrap:wrap;gap:6px">
+          ${chip('Whole year', !SUMMARY.month, 'summonth', '')}
+          ${s.months.map((mm) => chip(MONTHS[Number(mm) - 1].slice(0, 3), SUMMARY.month === mm, 'summonth', mm)).join('')}
+        </div>` : ''}
+        <p style="margin:10px 2px 0;font-size:13px;font-weight:600;color:var(--ink-mid)">${h(periodName)}</p>
+      </div>
+
+      <div class="tiles">
+        ${tile(num(t.done), 'paintings finished', 'var(--st-completed)')}
+        ${tile(num(t.bought), SUMMARY.year ? 'paintings bought' : 'paintings owned')}
+        ${tile(bigNum(t.placed), t.partial
+          ? 'diamonds placed — finished canvases plus how far you are through the rest'
+          : 'diamonds in what you finished', 'var(--st-started)')}
+        ${tile(num(t.days), `day${t.days === 1 ? '' : 's'} at the board`)}
+        ${tile(hoursText(t.hours), 'hours logged')}
+        ${tile(num(t.streak), `day${t.streak === 1 ? '' : 's'} in a row — your longest run`)}
+      </div>
+
+      ${t.sessions || t.spend ? `<div class="tiles">
+        ${t.sessions ? tile(num(t.sessions), `session${t.sessions === 1 ? '' : 's'}`) : ''}
+        ${t.spend ? tile(money(t.spend), SUMMARY.year ? 'spent on what you bought' : 'spent') : ''}
+        ${t.days && t.hours ? tile(hoursText(t.hours / t.days), 'on an average day at it') : ''}
+        ${t.everHeld ? tile(num(t.everHeld), `put down and picked back up`) : ''}
+      </div>` : ''}
+
+      ${section('Canvas', [
+        rec('Biggest', r.biggestSize, (_v, x) => sizeOf(x)),
+        rec('Smallest', r.smallestSize, (_v, x) => sizeOf(x)),
+        rec('Most diamonds', r.mostDiamonds, (v) => bigNum(v)),
+        rec('Fewest diamonds', r.fewestDiamonds, (v) => bigNum(v))
+      ])}
+
+      ${section('How long it took', [
+        rec('Longest, start to finish', r.longestDays, spanText),
+        rec('Longest, not counting time put down', r.longestDaysNet, spanText),
+        rec('Quickest, start to finish', r.shortestDays, spanText),
+        rec('Quickest, not counting time put down', r.shortestDaysNet, spanText),
+        rec('Longest put down', r.longestHeld, spanText)
+      ], 'Calendar days between starting and finishing. The second of each pair takes off the days it spent on hold.')}
+
+      ${section('Time at the board', [
+        rec('Most hours', r.mostHours, hoursText),
+        rec('Fewest hours', r.fewestHours, hoursText),
+        rec('Most sessions', r.mostSessions, (v) => num(v)),
+        rec('Longest single sitting', r.longestSession, (v) => hoursText(v / 60))
+      ], 'Hours come from the sessions you logged, so a hold cannot change them \u2014 nothing is logged while a canvas is put down.')}
+
+      ${section('Pace', [
+        rec('Fastest placing', r.fastest, (v) => bigNum(v) + '/h'),
+        rec('Most unhurried', r.slowest, (v) => bigNum(v) + '/h')
+      ], 'Diamonds an hour, across canvases you both finished and timed.')}
+
+      ${section('Money', [
+        rec('Dearest', r.dearest, (v) => money(v)),
+        rec('Best value', r.bestValue, (v) => money(v) + '/1k')
+      ], 'Best value is what a canvas cost per thousand diamonds \u2014 the only fair way to hold a small dear kit against a big cheap one.')}
+
+      ${(s.favourites.artist || s.favourites.shop) ? `<div>
+        <h3 class="label">Most of all</h3>
+        <div class="panel pad-in">
+          ${s.favourites.artist ? `<div class="row"><span class="k">Artist</span>
+            <span class="v">${h(s.favourites.artist[0])} <span class="tnum" style="color:var(--ink-mute)">\u00d7${s.favourites.artist[1]}</span></span></div>` : ''}
+          ${s.favourites.shop ? `<div class="row"><span class="k">Shop</span>
+            <span class="v" style="display:flex;align-items:center;gap:7px">
+              <span class="pip" data-shop="${h(s.favourites.shop[0])}"></span>
+              ${h((shopById(s.favourites.shop[0]) || {}).name || s.favourites.shop[0])}
+              <span class="tnum" style="color:var(--ink-mute)">\u00d7${s.favourites.shop[1]}</span></span></div>` : ''}
+        </div>
+      </div>` : ''}
+
+      ${!t.done && !t.bought && !t.hours ? `<div class="empty">${svg('gem', 36, 1.4)}
+        <h2>Nothing in ${h(periodName.toLowerCase())}</h2>
+        <p>Pick another month, or a whole year.</p></div>` : ''}
+    </div>
+  </div>`;
+});
+
 /* ========================================================== #/settings */
 route(/^#\/settings$/, async () => {
   const [state, stats] = await Promise.all([api('/state'), api('/stats')]);
@@ -2326,6 +2472,10 @@ route(/^#\/settings$/, async () => {
     <div class="topbar">${topbar('Settings', { back: '#/', sub: true })}</div>
     <div class="scroll pad stack" style="padding-top:18px;padding-bottom:26px">
       <p id="buildline" style="margin:0;font-size:11px;color:var(--ink-faint);text-align:center"></p>
+      <button class="btn ghost wide" data-go="#/summary" style="justify-content:space-between">
+        <span style="display:flex;align-items:center;gap:9px">${svg('gem', 18, 1.4)} Summary and records</span>
+        ${svg('chev', 16, 2.2)}</button>
+
       <div class="tiles">
         <div class="tile"><div class="big tnum">${num(stats.projects)}</div>
           <div class="cap">projects${stats.wishlist ? ` · ${num(stats.wishlist)} wished for` : ''}</div></div>
@@ -2672,6 +2822,12 @@ async function handleClick(e) {
 
   if (act === 'filter') { S.filter = el.dataset.k; repaintLogbook(); }
   else if (act === 'lbfilters') { S.lb.open = !S.lb.open; paintLogbook(); }
+  else if (act === 'sumyear') {
+    SUMMARY.year = el.dataset.k || null;
+    SUMMARY.month = null;          // a year you have just picked has no month yet
+    forgetScroll('#/summary'); render();
+  }
+  else if (act === 'summonth') { SUMMARY.month = el.dataset.k || null; forgetScroll('#/summary'); render(); }
   else if (act === 'lbclear') {
     S.lb = { ...S.lb, shop: null, shape: null, size: null, rating: 0, sort: 'recent' };
     repaintLogbook();

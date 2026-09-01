@@ -506,3 +506,105 @@ test('filtering the logbook puts you back at the top of it', async () => {
   await m.tap('[data-act="lbshape"][data-k="Round"]');
   assert.equal(list().scrollTop, 0, 'a smaller list kept a scroll position from a bigger one');
 });
+
+/* The summary is arithmetic over dates, and dates are where this app has always
+   got things subtly wrong, so the numbers are checked rather than the markup. */
+const summarySeed = async (m) => {
+  for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
+  const big = await m.seed({ title: 'Moon Eater', status: 'completed', drills: 90000,
+    width_in: 24, height_in: 32, price: 85, shop: 'dac', artist: 'Yuumei Art',
+    date_ordered: '2026-01-05', date_started: '2026-02-01', date_completed: '2026-04-01',
+    holds: JSON.stringify([{ held: '2026-02-10', restarted: '2026-03-02' }]) });
+  const small = await m.seed({ title: 'Tiny', status: 'completed', drills: 9000,
+    width_in: 8, height_in: 8, price: 20, shop: 'dac', artist: 'Yuumei Art',
+    date_ordered: '2026-03-01', date_started: '2026-03-10', date_completed: '2026-03-20' });
+  // a wish-list kit is not owned, so nothing about it is a fact yet
+  await m.seed({ title: 'Wished', status: 'wishlist', drills: 500000, price: 999, width_in: 60, height_in: 60 });
+  for (const [id, on, minutes] of [[big.id, '2026-02-02', 120], [big.id, '2026-02-03', 90],
+                                   [big.id, '2026-02-04', 60], [small.id, '2026-03-11', 240]])
+    await m.api(`/projects/${id}/sessions`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on, minutes }) });
+  return { big, small };
+};
+
+test('the summary counts what happened, and a wish-list kit is not a fact', async () => {
+  const m = await mount();
+  const { big } = await summarySeed(m);
+  const s = await m.api('/summary');
+
+  assert.equal(s.totals.done, 2);
+  assert.equal(s.totals.bought, 2, 'the wish-list kit was counted as owned');
+  assert.equal(s.totals.hours, 8.5);
+  assert.equal(s.totals.days, 4, 'four distinct days had a session');
+  assert.equal(s.totals.streak, 3, '2, 3 and 4 February are a run of three');
+  assert.equal(s.totals.spend, 105, 'the wished-for £999 was counted as spent');
+  assert.equal(s.records.biggestSize.title, 'Moon Eater');
+  assert.equal(s.records.smallestSize.title, 'Tiny', 'the wish-list kit won "biggest"');
+
+  // 1 Feb to 1 Apr is 59 days; 20 of them were spent put down
+  assert.equal(s.records.longestDays.value, 59);
+  assert.equal(s.records.longestDaysNet.value, 39);
+  assert.equal(s.records.longestHeld.value, 20);
+  assert.equal(s.records.longestDays.id, big.id);
+});
+
+test('the summary can be narrowed to a year and to a month', async () => {
+  const m = await mount();
+  await summarySeed(m);
+
+  const year = await m.api('/summary?year=2026');
+  assert.deepEqual(year.years, ['2026']);
+  assert.deepEqual(year.months, ['01', '02', '03', '04'], 'only months with something in them');
+  assert.equal(year.totals.done, 2);
+
+  const march = await m.api('/summary?year=2026&month=03');
+  assert.equal(march.totals.done, 1, 'only Tiny was finished in March');
+  assert.equal(march.totals.bought, 1);
+  assert.equal(march.totals.hours, 4, 'only the March session counts');
+  assert.equal(march.totals.days, 1);
+  assert.equal(march.totals.placed, 9000, 'diamonds should be those of what was finished');
+  assert.equal(march.records.biggestSize.title, 'Tiny',
+               'a record in March should be about March, not the whole stash');
+
+  const february = await m.api('/summary?year=2026&month=02');
+  assert.equal(february.totals.done, 0, 'nothing was finished in February');
+  assert.equal(february.totals.hours, 4.5, 'but 4.5 hours were worked');
+});
+
+test('the summary page shows the figures and narrows when a month is tapped', async () => {
+  const m = await mount();
+  await summarySeed(m);
+  await m.go('#/summary');
+
+  const tiles = () => m.all('.tile').map((t) => t.textContent.replace(/\s+/g, ' ').trim());
+  assert.ok(tiles().some((t) => /2paintings finished/.test(t)), tiles().join(' | '));
+  assert.ok(m.all('.panel .row').length > 8, 'the records are missing');
+
+  // every record opens the canvas it is about
+  const row = m.find('.panel .row[data-go]');
+  assert.match(row.getAttribute('data-go'), /^#\/p\/\d+$/);
+
+  await m.tap('[data-act="sumyear"][data-k="2026"]');
+  assert.ok(m.find('[data-act="summonth"][data-k="03"]'), 'the month chips did not appear');
+  await m.tap('[data-act="summonth"][data-k="03"]');
+  assert.ok(tiles().some((t) => /1paintings finished/.test(t)), tiles().join(' | '));
+
+  // and back out again
+  await m.tap('[data-act="sumyear"][data-k=""]');
+  assert.equal(m.find('[data-act="summonth"]'), null, 'All time should have no months');
+  assert.ok(tiles().some((t) => /2paintings finished/.test(t)));
+});
+
+test('deleting a project takes its sessions with it', async () => {
+  const m = await mount();
+  for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
+  const p = await m.seed({ title: 'Doomed', status: 'started' });
+  await m.api(`/projects/${p.id}/sessions`, { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: '2026-05-01', minutes: 300 }) });
+  assert.equal((await m.api('/summary')).totals.hours, 5);
+
+  await m.api('/projects/' + p.id, { method: 'DELETE' });
+  // hours worked on a canvas you deleted are not hours you worked
+  assert.equal((await m.api('/summary')).totals.hours, 0);
+  assert.equal((await m.api('/summary')).totals.days, 0);
+});
