@@ -472,3 +472,35 @@ test('Munimade links back to the right product page', () => {
   assert.equal(productUrl('muni', 'sand-and-spells-029'),
                'https://munimade.com/products/sand-and-spells-029');
 });
+
+test('a canvas size with decimals in it is still a size', () => {
+  // Pressed and Placed lists 55.9x76.2, which an integers-only pattern read as
+  // no size at all — and no size means no estimated diamond count either
+  const pnp = shopById('pnp');
+  const row = toRow(pnp, {
+    handle: 'x', title: 'Forest Spooks', vendor: 'PnP', product_type: 'Diamond Painting',
+    images: [{ src: 'https://cdn.shopify.com/a.jpg' }],
+    variants: [{ title: 'Square / 55.9x76.2 / Basic Toolkit', price: '50.00', available: true }]
+  });
+  assert.ok(row.width_in > 21 && row.width_in < 23, `width came out as ${row.width_in}`);
+  assert.ok(row.height_in > 29 && row.height_in < 31, `height came out as ${row.height_in}`);
+});
+
+test('Munimade reads its spec off the product page', () => {
+  const spec = shopById('muni').spec(`<ul>
+    <li><b>Diamond Amount:</b> 95,200</li>
+    <li><b>Image Size:</b> 60cm x 85cm (23.6" x 33.5")</li>
+    <li><b>Color Amount:</b> 80 Colors Including 3 AB, 5 Shimmer, 2 Metallic</li></ul>`);
+  assert.equal(spec.drills, 95200);
+  assert.equal(spec.width_in, 23.6);
+  assert.equal(spec.height_in, 33.5);
+  assert.equal(spec.colors, 80);
+  assert.equal(spec.special, '3 AB, 5 Shimmer, 2 Metallic');
+
+  // a colour line with no "including" clause is a count and nothing more
+  const plain = shopById('muni').spec('<li><b>Color Amount:</b> 52 Shimmer Drill Colors</li>');
+  assert.equal(plain.colors, 52);
+
+  // and a page that says none of it yields nothing rather than nonsense
+  assert.deepEqual(shopById('muni').spec('<p>no spec here</p>'), {});
+});

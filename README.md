@@ -13,10 +13,12 @@ Supported shops: **Diamond Art Club**, **Mystical Dream Diamonds**,
 **Pressed and Placed**, **Diamond Art UK**, **Fallon Gems**,
 **Diamond Art Studio** and **Munimade**.
 
-What each shop publishes differs. Munimade lists its canvas size, diamond count
-and colour count on the product page rather than in its product feed, so those
-three arrive empty and can be typed in; everything else — cover, artist, drill
-shape, price — comes across.
+What each shop publishes differs, and some of it is on the product page rather
+than in the feed. Fetching a page for every kit would add megabytes to every
+sync, so it happens once, only for a kit you actually own, and only where there
+is something to find — Munimade's page carries the canvas size, diamond count
+and colour count that its feed does not. Anything you have typed yourself is
+left alone.
 
 ## Features
 

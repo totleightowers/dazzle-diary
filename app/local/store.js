@@ -81,6 +81,38 @@ async function liveImages(shopId, handle) {
   } catch { return []; }
 }
 
+/* Some shops publish the canvas size, the diamond count and the colour count on
+   the product page and nowhere in the feed. The page is far too heavy to fetch
+   for every kit at sync time — Munimade's is over 100KB and it has 133 kits —
+   so it is fetched only for a kit you actually own, once, and the answer is
+   written onto the catalogue row so it is never asked for twice. */
+async function liveSpec(shopId, handle) {
+  const shop = shopById(shopId);
+  if (!shop || !shop.spec || !handle) return null;
+  try {
+    const res = await fetch(via(`https://${shop.domain}/products/${encodeURIComponent(handle)}`));
+    if (!res.ok) return null;
+    const found = shop.spec(await res.text()) || {};
+    return Object.keys(found).length ? found : {};
+  } catch { return null; }
+}
+
+const SPEC_FIELDS = ['width_in', 'height_in', 'drills', 'colors', 'special'];
+const needsSpec = (r) => !!r && SPEC_FIELDS.some(f => r[f] == null);
+
+/** Fill a catalogue row's spec from the shop's own page. Returns the row. */
+async function specForRow(row) {
+  if (!row || row.spec_checked || !needsSpec(row)) return row;
+  const shop = shopById(row.shop);
+  if (!shop || !shop.spec) return row;
+  const found = await liveSpec(row.shop, row.handle);
+  if (!found) return row;                 // offline: ask again next time
+  for (const f of SPEC_FIELDS) if (row[f] == null && found[f] != null) row[f] = found[f];
+  row.spec_checked = 1;                   // a page with nothing on it is not re-read
+  try { await idb.put('catalogue', row); } catch { /* memory is enough for now */ }
+  return row;
+}
+
 /** The row's pictures, going to the shop if the row itself has none. */
 async function listingImages(shopId, handle) {
   const c = (cache && cache.rows || []).find(r => r.shop === shopId && r.handle === handle);
@@ -100,6 +132,36 @@ async function listingCovers(row) {
   const urls = await listingImages(row.shop || 'dac', row.dac_handle);
   if (!urls.length) return [];
   return cacheGallery(`${row.shop || 'dac'}-${row.dac_handle}`, urls);
+}
+
+/* Fill in the blanks on projects you own, from the shops that publish more on
+   their product page than in their feed. One request per project that is still
+   missing something, once — a kit whose page turns out to say nothing is marked
+   so it is never asked about again. Anything you typed yourself is left alone:
+   only fields that are still empty get filled. */
+export async function backfillSpec(onProgress) {
+  await catalogue();
+  const rows = await idb.all('projects');
+  let done = 0;
+  for (const row of rows) {
+    if (!row.dac_handle || !needsSpec(row)) continue;
+    const shop = shopById(row.shop || 'dac');
+    if (!shop || !shop.spec) continue;
+    const listing = (cache && cache.rows || []).find(r => r.shop === shop.id && r.handle === row.dac_handle);
+    const found = listing ? await specForRow(listing) : null;
+    if (!found) continue;
+    let changed = false;
+    for (const f of SPEC_FIELDS) {
+      if (row[f] == null && found[f] != null) { row[f] = found[f]; changed = true; }
+    }
+    // a counted number is not an estimate any more
+    if (changed && row.drills && row.drills_estimated) row.drills_estimated = 0;
+    if (changed) {
+      row.updated_at = nowIso();
+      await idb.put('projects', row); done++; onProgress?.(done);
+    }
+  }
+  return done;
 }
 
 /** Fetch covers for any project still missing one. Safe to call repeatedly. */
@@ -370,6 +432,11 @@ export async function localApi(path, opts = {}) {
         const filled = await backfillCovers((n) => { job.message = `Fetching covers · ${n}`; });
         if (filled) job.coversFilled = filled;
       } catch { /* covers are cosmetic; never fail a sync over them */ }
+      // and the sizes and diamond counts the feeds do not carry
+      try {
+        const spec = await backfillSpec((n) => { job.message = `Filling in details · ${n}`; });
+        if (spec) job.specFilled = spec;
+      } catch { /* same: a sync is not a failure for want of a drill count */ }
       job.result = { shops: results, failed };
       job.state = results.length ? 'done' : 'error';
       if (!results.length) job.error = failed.map(f => `${f.shop}: ${f.error}`).join('; ');
@@ -409,7 +476,7 @@ export async function localApi(path, opts = {}) {
     if (!shop || !handle) return null;
     const row = (cache && cache.rows || []).find(r => r.shop === shop && r.handle === handle);
     if (row && !row.image) await listingImages(shop, handle);   // fills the row in place
-    if (row) return row;
+    if (row) return specForRow(row);
     // not in the catalogue at all — the pictures are still worth having
     const live = await liveImages(shop, handle);
     return live.length ? { shop, handle, image: live[0], images: JSON.stringify(live) } : null;

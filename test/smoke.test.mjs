@@ -608,3 +608,82 @@ test('deleting a project takes its sessions with it', async () => {
   assert.equal((await m.api('/summary')).totals.hours, 0);
   assert.equal((await m.api('/summary')).totals.days, 0);
 });
+
+/* Some shops publish the canvas size, diamond count and colour count on the
+   product page and nowhere in the feed. Fetching that page for every kit at
+   sync time would add megabytes to every sync, so it happens once, for a kit
+   you actually own. */
+const SPEC_HTML = `<ul>
+  <li><b>Diamond Amount:</b> 95,200</li>
+  <li><b>Image Size:</b> 60cm x 85cm (23.6" x 33.5")</li>
+  <li><b>Color Amount:</b> 80 Colors Including 3 AB, 5 Shimmer, 2 Metallic</li></ul>`;
+const muniProduct = (over = {}) => ({
+  id: 42, title: "'The Underwater Castle' by Femke Deborah, Diamond Painting Canvas Kit (128)",
+  vendor: 'Vancy Arts', handle: 'underwater-castle-128', product_type: 'Diamond Painting Kit',
+  tags: ['square', 'square drill'], specHtml: SPEC_HTML,
+  images: [{ src: 'https://cdn.shopify.com/a.jpg' }],
+  variants: [{ title: 'Default Title', price: '85.00', available: true }], ...over
+});
+
+test('a kit whose spec is only on the shop page gets it when you own it', async () => {
+  const m = await mount({ products: [muniProduct()], shop: 'muni' });
+  await m.sync();
+
+  // the feed itself carries none of it
+  const [listed] = await m.api('/catalogue/browse?limit=5');
+  assert.equal(listed.width_in, null);
+  assert.equal(listed.drills, null);
+
+  const row = await m.api('/catalogue/product?shop=muni&handle=underwater-castle-128');
+  assert.equal(row.width_in, 23.6, 'the inches on the page are used rather than converted from cm');
+  assert.equal(row.height_in, 33.5);
+  assert.equal(row.drills, 95200);
+  assert.equal(row.colors, 80);
+  assert.equal(row.special, '3 AB, 5 Shimmer, 2 Metallic');
+  assert.equal(row.spec_checked, 1, 'the answer should be remembered, not asked for twice');
+});
+
+test('the backfill fills owned projects and never overwrites what you typed', async () => {
+  const m = await mount({ products: [muniProduct()], shop: 'muni' });
+  await m.sync();
+  for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
+
+  const mine = await m.seed({ title: 'The Underwater Castle', status: 'started',
+                              shop: 'muni', dac_handle: 'underwater-castle-128' });
+  // a count you corrected by hand is yours and must survive
+  const typed = await m.seed({ title: 'Corrected', status: 'started', shop: 'muni',
+                               dac_handle: 'underwater-castle-128', drills: 1234, colors: 7 });
+  await m.sync();
+
+  const filled = await m.api('/projects/' + mine.id);
+  assert.equal(filled.drills, 95200, 'the blank project was not filled in');
+  assert.equal(filled.width_in, 23.6);
+  assert.equal(filled.colors, 80);
+
+  const kept = await m.api('/projects/' + typed.id);
+  assert.equal(kept.drills, 1234, 'a hand-typed diamond count was overwritten');
+  assert.equal(kept.colors, 7);
+  assert.equal(kept.width_in, 23.6, 'the fields that were empty should still be filled');
+});
+
+test('a shop page with nothing on it is not asked about twice', async () => {
+  const m = await mount({ products: [muniProduct({ specHtml: '<html><body>nothing here</body></html>' })], shop: 'muni' });
+  await m.sync();
+  const row = await m.api('/catalogue/product?shop=muni&handle=underwater-castle-128');
+  assert.equal(row.drills, null);
+  assert.equal(row.spec_checked, 1, 'an empty page must still be marked as read');
+});
+
+test('a counted diamond number stops being an estimate', async () => {
+  const m = await mount({ products: [muniProduct()], shop: 'muni' });
+  await m.sync();
+  for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
+  const p = await m.seed({ title: 'Estimated', status: 'started', shop: 'muni',
+                           dac_handle: 'underwater-castle-128' });
+  await m.api('/projects/' + p.id, { method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ drills_estimated: 1 }) });
+  await m.sync();
+  const after = await m.api('/projects/' + p.id);
+  assert.equal(after.drills, 95200);
+  assert.ok(!after.drills_estimated, 'a counted number is not an estimate');
+});

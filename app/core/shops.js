@@ -22,11 +22,14 @@ const decode = (s) => String(s || '')
   .replace(/&([a-z]+);/gi, (m, n) => ENT[n.toLowerCase()] ?? m);
 const textOf = (html) => decode(String(html || '').replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
 
-/** "45x60 cm", "40x 60 cm", "50x70" -> { w, h } in centimetres */
+/** "45x60 cm", "40x 60 cm", "50x70", "55.9x76.2" -> { w, h } in centimetres.
+ *  The decimals matter: Pressed and Placed lists sizes as 55.9x76.2, and an
+ *  integers-only pattern matched no part of that, so those canvases arrived
+ *  with no size and therefore no estimated drill count either. */
 function sizeCm(s) {
-  const m = String(s || '').match(/(\d{2,3})\s*[x×]\s*(\d{2,3})/i);
+  const m = String(s || '').match(/(\d{2,3}(?:\.\d+)?)\s*[x×]\s*(\d{2,3}(?:\.\d+)?)/i);
   if (!m) return null;
-  return { w: parseInt(m[1], 10), h: parseInt(m[2], 10) };
+  return { w: parseFloat(m[1]), h: parseFloat(m[2]) };
 }
 const shapeOf = (s) => {
   const m = String(s || '').match(/\b(round|square)\b/i);
@@ -271,6 +274,46 @@ export const SHOPS = [
         colors: null, drills: null,
         special: /ultimate sparkle/i.test(raw) ? 'Ultimate Sparkle' : null
       };
+    },
+
+    /* The one thing Munimade does better than anyone: canvas size, diamond
+       count and colour count are all published — just on the product page
+       rather than in the feed, as a short list of labelled values:
+         <b>Diamond Amount:</b> 95,200
+         <b>Image Size:</b> 60cm x 85cm (23.6" x 33.5")
+         <b>Color Amount:</b> 80 Colors Including 3 AB, 5 Shimmer, 2 Metallic
+       Fetching one page per kit at sync time would add megabytes to every
+       sync, so this is only ever run for a kit you actually own. */
+    spec(html) {
+      const at = (label) => {
+        const m = String(html || '').match(new RegExp('<b>\\s*' + label + '\\s*:\\s*</b>([^<]*)', 'i'));
+        return m ? decode(m[1]).replace(/\s+/g, ' ').trim() : null;
+      };
+      const out = {};
+
+      // the inches are given alongside the centimetres, so use them rather
+      // than converting and losing a decimal to rounding
+      const size = at('Image Size');
+      const inches = size && size.match(/\(([\d.]+)\s*"?\s*[x×]\s*([\d.]+)\s*"?\)/);
+      if (inches) { out.width_in = parseFloat(inches[1]); out.height_in = parseFloat(inches[2]); }
+      else {
+        const sz = sizeCm(size);
+        if (sz) { out.width_in = cmToIn(sz.w); out.height_in = cmToIn(sz.h); }
+      }
+
+      const drills = int(at('Diamond Amount'));
+      if (drills) out.drills = drills;
+
+      // "80 Colors Including 3 AB, 5 Shimmer, 2 Metallic" is two facts
+      const colour = at('Color Amount');
+      if (colour) {
+        const n = colour.match(/^\s*(\d[\d,]*)/);
+        if (n) out.colors = int(n[1]);
+        const extra = colour.match(/includ(?:ing|es)\s+(.+)$/i);
+        if (extra) out.special = extra[1].replace(/\s*\.$/, '').trim();
+        else if (/shimmer|glow|ab\b|metallic/i.test(colour) && !n) out.special = colour;
+      }
+      return out;
     }
   }
 ];
