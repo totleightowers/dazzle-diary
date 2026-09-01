@@ -405,7 +405,7 @@ test('every status still reads back as itself', () => {
    worse, half-coloured — which is not the kind of thing a person notices in a
    diff. So the stylesheet is checked against the list of shops rather than
    trusted. */
-import { readFileSync as _read, existsSync } from 'node:fs';
+import { readFileSync as _read, existsSync, readdirSync } from 'node:fs';
 const CSS = _read(new URL('../app/styles.css', import.meta.url), 'utf8');
 
 test('every shop has the colours the stylesheet promises it', () => {
@@ -515,12 +515,19 @@ test('the README names every shop the app supports', () => {
   assert.deepEqual(missing, [], 'these shops exist in the code but not in the README');
 });
 
-test('the README does not link to files that are not there', () => {
+/* Every markdown file, not just the README: the docs cross-link heavily and a
+   moved or renamed page is invisible until someone follows the link. */
+test('no document links to a file that is not there', () => {
   const bad = [];
-  for (const m of README.matchAll(/\]\(([^)]+)\)/g)) {
-    const target = m[1].split('#')[0];
-    if (!target || /^(https?:|mailto:)/.test(target)) continue;
-    if (!existsSync(new URL('../' + target, import.meta.url))) bad.push(target);
+  const files = [...readdirSync(new URL('../', import.meta.url)).filter(f => f.endsWith('.md')).map(f => ['', f]),
+                 ...readdirSync(new URL('../docs/', import.meta.url)).filter(f => f.endsWith('.md')).map(f => ['docs/', f])];
+  for (const [dir, name] of files) {
+    const text = _read(new URL(`../${dir}${name}`, import.meta.url), 'utf8');
+    for (const m of text.matchAll(/\]\(([^)]+)\)/g)) {
+      const target = m[1].split('#')[0];
+      if (!target || /^(https?:|mailto:)/.test(target)) continue;
+      if (!existsSync(new URL(`../${dir}${target}`, import.meta.url))) bad.push(`${dir}${name} -> ${target}`);
+    }
   }
   assert.deepEqual(bad, []);
 });
