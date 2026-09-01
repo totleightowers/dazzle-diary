@@ -977,15 +977,14 @@ export async function localApi(path, opts = {}) {
     const owned = rows.filter(r => r.status !== 'wishlist');
     const acquired = (r) => r.date_ordered || r.date_received || null;
 
-    /* Which projects the records are about. "Biggest canvas I own" and "biggest
-       canvas I have actually finished" are different questions and both are
-       worth asking, so it is chosen rather than implied: everything you own, or
-       only what you finished. A period narrows whichever is chosen — by the
-       completion date for finished, by the order or delivery date for owned. */
+    /* Each record carries its own scope rather than the page carrying one for
+       all of them. "The dearest kit I finished" is not a question anybody asks;
+       "the dearest kit I own" is. So money and canvas size are about the stash,
+       duration and pace are about what you finished, and the few that are worth
+       both ways say so in their own name. */
     const finished = rows.filter(r => r.status === 'completed' && inPeriod(r.date_completed));
     const acquiredInPeriod = owned.filter(r => inPeriod(acquired(r)));
-    const onlyFinished = q(url, 'scope') === 'done';
-    const scope = onlyFinished ? finished : (period ? acquiredInPeriod : owned);
+    const scope = period ? acquiredInPeriod : owned;
 
     const mins = sessions.filter(x => inPeriod(x.on))
                          .reduce((n, x) => n + (Number(x.minutes) || 0), 0);
@@ -1053,7 +1052,7 @@ export async function localApi(path, opts = {}) {
     const bought = acquiredInPeriod;
 
     return {
-      period: period || null, years, months, scope: onlyFinished ? 'done' : 'all',
+      period: period || null, years, months,
       totals: {
         done: period ? finished.length : rows.filter(r => r.status === 'completed').length,
         bought: period ? bought.length : owned.length,
@@ -1065,10 +1064,16 @@ export async function localApi(path, opts = {}) {
         sessions: sessions.filter(x => inPeriod(x.on)).length,
         everHeld
       },
+      // whether the "not counting time put down" figures can differ at all
+      heldAmongFinished: finished.filter(r => held(r) > 0).length,
       records: {
         biggestSize: most(scope, area), smallestSize: least(scope, area),
         mostDiamonds: most(scope, r => Number(r.drills) || null),
         fewestDiamonds: least(scope, r => Number(r.drills) || null),
+        // the same four again, about the ones you actually finished
+        biggestFinished: most(finished, area), smallestFinished: least(finished, area),
+        mostDiamondsFinished: most(finished, r => Number(r.drills) || null),
+        fewestDiamondsFinished: least(finished, r => Number(r.drills) || null),
         longestDays: most(finished, takenIncl), shortestDays: least(finished, takenIncl),
         longestDaysNet: most(finished, takenExcl), shortestDaysNet: least(finished, takenExcl),
         mostHours: most(scope, r => Number(r.hours) || null),

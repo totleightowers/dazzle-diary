@@ -702,37 +702,63 @@ test('a counted diamond number stops being an estimate', async () => {
   assert.ok(!after.drills_estimated, 'a counted number is not an estimate');
 });
 
-test('the records can be asked about everything, or only what you finished', async () => {
+/* Each record carries the scope that suits it rather than the page carrying one
+   for all of them: "the dearest kit I finished" is not a question anybody asks.
+   And a record with nothing to say is left out rather than shown empty. */
+test('records use the scope that suits them, and empty ones are left out', async () => {
   const m = await mount();
   for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
-  // the biggest canvas you own is not the biggest one you have finished
+  // the biggest and dearest canvas you own is not one you have finished
   await m.seed({ title: 'Huge Unfinished', status: 'started', drills: 200000,
                  width_in: 40, height_in: 50, price: 200, date_ordered: '2026-01-02' });
   await m.seed({ title: 'Finished Medium', status: 'completed', drills: 50000,
                  width_in: 20, height_in: 24, price: 60, date_ordered: '2026-02-01',
                  date_started: '2026-02-05', date_completed: '2026-03-05' });
 
-  const all = await m.api('/summary');
-  assert.equal(all.scope, 'all');
-  assert.equal(all.records.biggestSize.title, 'Huge Unfinished');
-  assert.equal(all.records.mostDiamonds.title, 'Huge Unfinished');
-
-  const done = await m.api('/summary?scope=done');
-  assert.equal(done.scope, 'done');
-  assert.equal(done.records.biggestSize.title, 'Finished Medium', 'an unfinished canvas won a finished record');
-  assert.equal(done.records.mostDiamonds.title, 'Finished Medium');
-
-  // and it holds when a period is on too
-  const march = await m.api('/summary?year=2026&month=03&scope=done');
-  assert.equal(march.records.biggestSize.title, 'Finished Medium');
+  const s = await m.api('/summary');
+  // the stash records are about everything owned
+  assert.equal(s.records.biggestSize.title, 'Huge Unfinished');
+  assert.equal(s.records.dearest.title, 'Huge Unfinished');
+  // the finished ones are about what you finished
+  assert.equal(s.records.biggestFinished.title, 'Finished Medium');
+  assert.equal(s.records.mostDiamondsFinished.title, 'Finished Medium');
+  assert.equal(s.heldAmongFinished, 0, 'nothing was ever put down');
 
   await m.go('#/summary');
-  const first = () => m.find('.panel .row').textContent.replace(/\s+/g, ' ').trim();
-  assert.match(first(), /Huge Unfinished/);
-  await m.tap('[data-act="sumscope"][data-k="done"]');
-  assert.match(first(), /Finished Medium/, 'the switch did not change the records');
-  await m.tap('[data-act="sumscope"][data-k=""]');
-  assert.match(first(), /Huge Unfinished/);
+  const labels = () => m.all('.panel .row').map((x) => x.textContent.replace(/\s+/g, ' ').trim());
+  const shown = labels().join(' | ');
+
+  // nothing here was ever put down, so the "not counting time put down"
+  // variants would only repeat the plain ones
+  assert.ok(!/not counting time put down/i.test(shown), shown);
+  // one finished canvas, so the longest and quickest collapse to one line
+  assert.ok(/Start to finish/.test(shown), shown);
+
+  // no sessions were logged, so there is nothing to say about time at the board
+  assert.ok(!/Longest single sitting/.test(shown), shown);
+  // and no tile claims zero hours
+  const tiles = m.all('.tile').map((x) => x.textContent.replace(/\s+/g, ' ').trim());
+  assert.ok(!tiles.some((x) => /^0/.test(x)), tiles.join(' | '));
+  assert.ok(!tiles.some((x) => /hours logged/.test(x)), 'an empty hours tile was shown');
+
+  // the scope switch is gone
+  assert.equal(m.find('[data-act="sumscope"]'), null);
+});
+
+test('once a canvas has been put down, both readings of the time appear', async () => {
+  const m = await mount();
+  for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
+  await m.seed({ title: 'Paused', status: 'completed', drills: 40000, width_in: 20, height_in: 20,
+                 date_ordered: '2026-01-01', date_started: '2026-01-10', date_completed: '2026-04-10',
+                 holds: JSON.stringify([{ held: '2026-02-01', restarted: '2026-03-01' }]) });
+  const s = await m.api('/summary');
+  assert.equal(s.heldAmongFinished, 1);
+  assert.equal(s.records.longestDays.value, 90);
+  assert.equal(s.records.longestDaysNet.value, 62);
+
+  await m.go('#/summary');
+  const shown = m.all('.panel .row').map((x) => x.textContent.replace(/\s+/g, ' ').trim()).join(' | ');
+  assert.ok(/[Nn]ot counting time put down/.test(shown), shown);
 });
 
 test('the way into the summary is a card, not a stretched button', async () => {
@@ -743,4 +769,27 @@ test('the way into the summary is a card, not a stretched button', async () => {
   assert.equal(card.getAttribute('data-go'), '#/summary');
   assert.equal(m.find('.btn.ghost.wide[data-go="#/summary"]'), null,
                'the full-width button put its label at one edge and its chevron at the other');
+});
+
+test('a most-and-least pair that lands on one canvas becomes one line', async () => {
+  const m = await mount();
+  for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
+  // one finished canvas: biggest and smallest are the same fact twice
+  await m.seed({ title: 'Only One', status: 'completed', drills: 90000, width_in: 30, height_in: 40,
+                 price: 120, date_ordered: '2026-01-01', date_started: '2026-02-01',
+                 date_completed: '2026-05-01' });
+  await m.seed({ title: 'Still Going', status: 'started', drills: 40000, width_in: 20, height_in: 20,
+                 price: 50, date_ordered: '2026-01-05' });
+  await m.go('#/summary');
+  const rows = m.all('.panel .row').map((x) => x.textContent.replace(/\s+/g, ' ').trim());
+  const finished = rows.filter((x) => /Only One/.test(x));
+
+  assert.ok(finished.some((x) => /^Canvas /.test(x)), rows.join(' | '));
+  assert.ok(!finished.some((x) => /^Smallest /.test(x)),
+            'the only finished canvas was named as both biggest and smallest');
+  assert.ok(!rows.some((x) => /^Fewest diamonds Only One/.test(x)), rows.join(' | '));
+
+  // but the stash has two, so its pairs stay pairs
+  assert.ok(rows.some((x) => /^Biggest /.test(x)), rows.join(' | '));
+  assert.ok(rows.some((x) => /^Smallest /.test(x)), rows.join(' | '));
 });
