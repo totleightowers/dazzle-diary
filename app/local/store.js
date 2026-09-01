@@ -601,6 +601,11 @@ export async function localApi(path, opts = {}) {
         Native()?.remove('photos/' + ph.file);
         await idb.del('photos', ph.id);
       }
+      /* Sessions went with the photos from here on. They used to be left
+         behind, which nothing noticed while hours were only ever read off one
+         project at a time — but the summary adds them all up, and hours worked
+         on a canvas you deleted are not hours you worked. */
+      for (const x of await idb.byIndex('sessions', 'project_id', id)) await idb.del('sessions', x.id);
       await idb.del('projects', id);
       return { ok: true };
     }
@@ -877,6 +882,140 @@ export async function localApi(path, opts = {}) {
       photos, photosFailed,
       covers, coversMissing,
       catalogueEmpty: cache.rows.length === 0
+    };
+  }
+
+  /* Everything the summary page shows, for all time or for one year or month.
+     Three different questions live here and they key off three different dates,
+     which is stated on each tile rather than hidden: what you FINISHED keys off
+     date_completed, what you BOUGHT off the order or delivery date, and time
+     spent off the dates of the sessions themselves. Mixing them into one number
+     would make a tidier page and a dishonest one. */
+  if (p === '/summary') {
+    const year = q(url, 'year'), month = q(url, 'month');
+    const period = !year ? null : (month ? `${year}-${month}` : String(year));
+    const inPeriod = (d) => !period || (typeof d === 'string' && d.startsWith(period));
+
+    const rows = await projects();
+    // sessions left behind by projects deleted before they were cleaned up
+    const live = new Set(rows.map(r => r.id));
+    const sessions = (await idb.all('sessions')).filter(x => live.has(x.project_id));
+    const today = nowIso().slice(0, 10);
+    const owned = rows.filter(r => r.status !== 'wishlist');
+    const acquired = (r) => r.date_ordered || r.date_received || null;
+
+    /* Which projects this period is "about". With no period it is everything
+       you own; with one, the canvases you finished in it — otherwise a record
+       like "biggest kit" would answer from a stash that has nothing to do with
+       the month on screen. */
+    const finished = rows.filter(r => r.status === 'completed' && inPeriod(r.date_completed));
+    const scope = period ? finished : owned;
+
+    const mins = sessions.filter(x => inPeriod(x.on))
+                         .reduce((n, x) => n + (Number(x.minutes) || 0), 0);
+    const dayset = new Set(sessions.filter(x => inPeriod(x.on) && Number(x.minutes) > 0).map(x => x.on));
+
+    /* The longest run of consecutive days with a session in it. */
+    const sorted = [...dayset].sort();
+    let streak = 0, run = 0, prev = null;
+    for (const d of sorted) {
+      const gap = prev ? Math.round((Date.parse(d + 'T00:00:00Z') - Date.parse(prev + 'T00:00:00Z')) / 86400000) : null;
+      run = gap === 1 ? run + 1 : 1;
+      if (run > streak) streak = run;
+      prev = d;
+    }
+
+    const span = (a, b) => {
+      if (!a || !b) return null;
+      const x = Date.parse(a + 'T00:00:00Z'), y = Date.parse(b + 'T00:00:00Z');
+      if (!Number.isFinite(x) || !Number.isFinite(y) || y < x) return null;
+      return Math.round((y - x) / 86400000);
+    };
+    const held = (r) => parseHolds(r).reduce((n, hh) =>
+      n + (hh && hh.held ? (span(hh.held, hh.restarted || today) || 0) : 0), 0);
+
+    const area = (r) => (r.width_in && r.height_in) ? r.width_in * r.height_in : null;
+    const one = (list, value, pick) => {
+      const cand = list.map(r => ({ r, v: value(r) })).filter(x => x.v != null && Number.isFinite(x.v));
+      if (!cand.length) return null;
+      const best = cand.reduce((a, b) => pick(a.v, b.v) ? a : b);
+      return { id: best.r.id, title: best.r.title, value: best.v, shop: best.r.shop || null,
+               width_in: best.r.width_in ?? null, height_in: best.r.height_in ?? null };
+    };
+    const most = (list, f) => one(list, f, (a, b) => a >= b);
+    const least = (list, f) => one(list, f, (a, b) => a <= b);
+
+    const takenIncl = (r) => span(r.date_started, r.date_completed);
+    const takenExcl = (r) => { const t = takenIncl(r); return t == null ? null : Math.max(0, t - held(r)); };
+    const everHeld = scope.filter(r => held(r) > 0).length;
+    const byProject = (id) => sessions.filter(x => x.project_id === id);
+
+    // diamonds placed: finished canvases, plus part-done ones when nothing is
+    // filtering — partial progress carries no date, so it belongs to no month
+    const placedAll = Math.round(owned.filter(r => r.status !== 'abandoned').reduce((n, r) =>
+      n + (r.status === 'completed' ? (Number(r.drills) || 0)
+                                    : (Number(r.drills) || 0) * (Number(r.progress) || 0) / 100), 0));
+    const placed = period
+      ? finished.reduce((n, r) => n + (Number(r.drills) || 0), 0)
+      : placedAll;
+
+    const allDates = [
+      ...rows.flatMap(r => [r.date_completed, r.date_started, acquired(r)]),
+      ...sessions.map(x => x.on)
+    ].filter(d => typeof d === 'string' && /^\d{4}-\d{2}/.test(d));
+    const years = [...new Set(allDates.map(d => d.slice(0, 4)))].sort().reverse();
+    // only the months that have something in them — twelve chips where nine are
+    // empty is just noise to scroll past
+    const months = year
+      ? [...new Set(allDates.filter(d => d.startsWith(year + '-')).map(d => d.slice(5, 7)))].sort()
+      : [];
+
+    const counted = (list, key) => Object.entries(list.reduce((a, r) => {
+      const k = key(r); if (k) a[k] = (a[k] || 0) + 1; return a;
+    }, {})).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0] || null;
+
+    const bought = owned.filter(r => inPeriod(acquired(r)));
+
+    return {
+      period: period || null, years, months,
+      totals: {
+        done: period ? finished.length : rows.filter(r => r.status === 'completed').length,
+        bought: period ? bought.length : owned.length,
+        placed, partial: !period,
+        days: dayset.size,
+        hours: Math.round(mins / 60 * 10) / 10,
+        streak,
+        spend: Math.round(bought.reduce((n, r) => n + (Number(r.price) || 0), 0) * 100) / 100,
+        sessions: sessions.filter(x => inPeriod(x.on)).length,
+        everHeld
+      },
+      records: {
+        biggestSize: most(scope, area), smallestSize: least(scope, area),
+        mostDiamonds: most(scope, r => Number(r.drills) || null),
+        fewestDiamonds: least(scope, r => Number(r.drills) || null),
+        longestDays: most(finished, takenIncl), shortestDays: least(finished, takenIncl),
+        longestDaysNet: most(finished, takenExcl), shortestDaysNet: least(finished, takenExcl),
+        mostHours: most(scope, r => Number(r.hours) || null),
+        fewestHours: least(scope, r => Number(r.hours) || null),
+        // diamonds an hour, over canvases you actually finished and timed
+        fastest: most(finished, r => (r.hours > 0 && r.drills) ? Math.round(r.drills / r.hours) : null),
+        slowest: least(finished, r => (r.hours > 0 && r.drills) ? Math.round(r.drills / r.hours) : null),
+        mostSessions: most(scope, r => byProject(r.id).length || null),
+        longestSession: most(scope, r => {
+          const m = byProject(r.id).map(x => Number(x.minutes) || 0);
+          return m.length ? Math.max(...m) : null;
+        }),
+        dearest: most(bought, r => Number(r.price) || null),
+        // what a canvas cost per thousand diamonds — the only honest way to
+        // compare a small dear kit with a big cheap one
+        bestValue: least(bought, r => (r.price > 0 && r.drills > 0)
+          ? Math.round(r.price / (r.drills / 1000) * 100) / 100 : null),
+        longestHeld: most(scope, r => held(r) || null)
+      },
+      favourites: {
+        artist: counted(scope, r => r.artist),
+        shop: counted(scope, r => r.shop)
+      }
     };
   }
 
