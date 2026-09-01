@@ -691,3 +691,46 @@ test('a counted diamond number stops being an estimate', async () => {
   assert.equal(after.drills, 95200);
   assert.ok(!after.drills_estimated, 'a counted number is not an estimate');
 });
+
+test('the records can be asked about everything, or only what you finished', async () => {
+  const m = await mount();
+  for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
+  // the biggest canvas you own is not the biggest one you have finished
+  await m.seed({ title: 'Huge Unfinished', status: 'started', drills: 200000,
+                 width_in: 40, height_in: 50, price: 200, date_ordered: '2026-01-02' });
+  await m.seed({ title: 'Finished Medium', status: 'completed', drills: 50000,
+                 width_in: 20, height_in: 24, price: 60, date_ordered: '2026-02-01',
+                 date_started: '2026-02-05', date_completed: '2026-03-05' });
+
+  const all = await m.api('/summary');
+  assert.equal(all.scope, 'all');
+  assert.equal(all.records.biggestSize.title, 'Huge Unfinished');
+  assert.equal(all.records.mostDiamonds.title, 'Huge Unfinished');
+
+  const done = await m.api('/summary?scope=done');
+  assert.equal(done.scope, 'done');
+  assert.equal(done.records.biggestSize.title, 'Finished Medium', 'an unfinished canvas won a finished record');
+  assert.equal(done.records.mostDiamonds.title, 'Finished Medium');
+
+  // and it holds when a period is on too
+  const march = await m.api('/summary?year=2026&month=03&scope=done');
+  assert.equal(march.records.biggestSize.title, 'Finished Medium');
+
+  await m.go('#/summary');
+  const first = () => m.find('.panel .row').textContent.replace(/\s+/g, ' ').trim();
+  assert.match(first(), /Huge Unfinished/);
+  await m.tap('[data-act="sumscope"][data-k="done"]');
+  assert.match(first(), /Finished Medium/, 'the switch did not change the records');
+  await m.tap('[data-act="sumscope"][data-k=""]');
+  assert.match(first(), /Huge Unfinished/);
+});
+
+test('the way into the summary is a card, not a stretched button', async () => {
+  const m = await mount();
+  await m.go('#/settings');
+  const card = m.find('.navcard');
+  assert.ok(card, 'no way into the summary from Settings');
+  assert.equal(card.getAttribute('data-go'), '#/summary');
+  assert.equal(m.find('.btn.ghost.wide[data-go="#/summary"]'), null,
+               'the full-width button put its label at one edge and its chevron at the other');
+});

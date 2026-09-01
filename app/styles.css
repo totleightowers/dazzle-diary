@@ -299,6 +299,25 @@ img { max-width: 100%; display: block; }
 .btn[disabled] { background: var(--sunken); color: var(--ink-mute); border-color: transparent; }
 .btn.dashed { background: var(--surface); border: 1.5px dashed oklch(0.85 0.010 75); color: var(--ink-mute); }
 
+/* A way into another screen. A .btn stretched to full width puts its label at
+   one edge and its chevron at the other, which on a wide screen is a bar with
+   a hole in it; this is shaped like the cards it sits among instead. */
+.navcard {
+  display: flex; align-items: center; gap: 13px; width: 100%; text-align: left;
+  padding: 13px 14px; border-radius: var(--r-card);
+  background: var(--surface); border: 1px solid var(--line); color: var(--ink);
+}
+.navcard > .t { flex: 1 1 auto; min-width: 0; }
+.navcard > .t > b {
+  display: block; font-family: var(--serif); font-size: 17px; font-weight: 600; line-height: 1.2;
+}
+.navcard > .t > span {
+  display: block; margin-top: 3px; font-size: 12px; line-height: 1.35; color: var(--ink-mute);
+}
+.navcard > svg { flex: 0 0 auto; }
+.navcard > svg:last-child { color: var(--ink-faint); }
+.navcard:active { background: var(--sunken); }
+
 /* ------------------------------------------------------------------ panels */
 .panel { border-radius: 16px; background: var(--surface); border: 1px solid var(--line); }
 .panel.pad-in { padding: 6px 14px; }

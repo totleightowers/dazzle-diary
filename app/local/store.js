@@ -971,12 +971,15 @@ export async function localApi(path, opts = {}) {
     const owned = rows.filter(r => r.status !== 'wishlist');
     const acquired = (r) => r.date_ordered || r.date_received || null;
 
-    /* Which projects this period is "about". With no period it is everything
-       you own; with one, the canvases you finished in it — otherwise a record
-       like "biggest kit" would answer from a stash that has nothing to do with
-       the month on screen. */
+    /* Which projects the records are about. "Biggest canvas I own" and "biggest
+       canvas I have actually finished" are different questions and both are
+       worth asking, so it is chosen rather than implied: everything you own, or
+       only what you finished. A period narrows whichever is chosen — by the
+       completion date for finished, by the order or delivery date for owned. */
     const finished = rows.filter(r => r.status === 'completed' && inPeriod(r.date_completed));
-    const scope = period ? finished : owned;
+    const acquiredInPeriod = owned.filter(r => inPeriod(acquired(r)));
+    const onlyFinished = q(url, 'scope') === 'done';
+    const scope = onlyFinished ? finished : (period ? acquiredInPeriod : owned);
 
     const mins = sessions.filter(x => inPeriod(x.on))
                          .reduce((n, x) => n + (Number(x.minutes) || 0), 0);
@@ -1041,10 +1044,10 @@ export async function localApi(path, opts = {}) {
       const k = key(r); if (k) a[k] = (a[k] || 0) + 1; return a;
     }, {})).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0] || null;
 
-    const bought = owned.filter(r => inPeriod(acquired(r)));
+    const bought = acquiredInPeriod;
 
     return {
-      period: period || null, years, months,
+      period: period || null, years, months, scope: onlyFinished ? 'done' : 'all',
       totals: {
         done: period ? finished.length : rows.filter(r => r.status === 'completed').length,
         bought: period ? bought.length : owned.length,

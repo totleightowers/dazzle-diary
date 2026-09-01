@@ -2298,7 +2298,7 @@ async function loadBrowse(reset) {
 /* ========================================================== #/summary */
 const MONTHS = ['January','February','March','April','May','June',
                 'July','August','September','October','November','December'];
-const SUMMARY = { year: null, month: null };
+const SUMMARY = { year: null, month: null, scope: 'all' };
 
 const hoursText = (h) => {
   const n = Number(h) || 0;
@@ -2312,6 +2312,7 @@ route(/^#\/summary$/, async () => {
   const params = new URLSearchParams();
   if (SUMMARY.year) params.set('year', SUMMARY.year);
   if (SUMMARY.year && SUMMARY.month) params.set('month', SUMMARY.month);
+  if (SUMMARY.scope === 'done') params.set('scope', 'done');
   const s = await api('/summary' + (params.toString() ? '?' + params : ''));
   const t = s.totals, r = s.records;
 
@@ -2389,12 +2390,20 @@ route(/^#\/summary$/, async () => {
         ${t.everHeld ? tile(num(t.everHeld), `put down and picked back up`) : ''}
       </div>` : ''}
 
+      <div>
+        <h3 class="label">Records</h3>
+        <div class="chiprow" style="margin:0;padding:0;flex-wrap:wrap;gap:6px">
+          ${chip('Everything you own', SUMMARY.scope !== 'done', 'sumscope', '')}
+          ${chip('Only what you finished', SUMMARY.scope === 'done', 'sumscope', 'done')}
+        </div>
+      </div>
+
       ${section('Canvas', [
         rec('Biggest', r.biggestSize, (_v, x) => sizeOf(x)),
         rec('Smallest', r.smallestSize, (_v, x) => sizeOf(x)),
         rec('Most diamonds', r.mostDiamonds, (v) => bigNum(v)),
         rec('Fewest diamonds', r.fewestDiamonds, (v) => bigNum(v))
-      ])}
+      ], SUMMARY.scope === 'done' ? 'Among the canvases you have finished.' : 'Across everything you own.')}
 
       ${section('How long it took', [
         rec('Longest, start to finish', r.longestDays, spanText),
@@ -2402,7 +2411,7 @@ route(/^#\/summary$/, async () => {
         rec('Quickest, start to finish', r.shortestDays, spanText),
         rec('Quickest, not counting time put down', r.shortestDaysNet, spanText),
         rec('Longest put down', r.longestHeld, spanText)
-      ], 'Calendar days between starting and finishing. The second of each pair takes off the days it spent on hold.')}
+      ], 'Calendar days between starting and finishing, so these are always about finished canvases whichever set is chosen above. The second of each pair takes off the days it spent on hold.')}
 
       ${section('Time at the board', [
         rec('Most hours', r.mostHours, hoursText),
@@ -2472,8 +2481,10 @@ route(/^#\/settings$/, async () => {
     <div class="topbar">${topbar('Settings', { back: '#/', sub: true })}</div>
     <div class="scroll pad stack" style="padding-top:18px;padding-bottom:26px">
       <p id="buildline" style="margin:0;font-size:11px;color:var(--ink-faint);text-align:center"></p>
-      <button class="btn ghost wide" data-go="#/summary" style="justify-content:space-between">
-        <span style="display:flex;align-items:center;gap:9px">${svg('gem', 18, 1.4)} Summary and records</span>
+      <button class="navcard" data-go="#/summary">
+        ${svg('gem', 22, 1.3)}
+        <span class="t"><b>Summary and records</b>
+          <span>Totals and records, for all time or one month</span></span>
         ${svg('chev', 16, 2.2)}</button>
 
       <div class="tiles">
@@ -2828,6 +2839,7 @@ async function handleClick(e) {
     forgetScroll('#/summary'); render();
   }
   else if (act === 'summonth') { SUMMARY.month = el.dataset.k || null; forgetScroll('#/summary'); render(); }
+  else if (act === 'sumscope') { SUMMARY.scope = el.dataset.k === 'done' ? 'done' : 'all'; render(); }
   else if (act === 'lbclear') {
     S.lb = { ...S.lb, shop: null, shape: null, size: null, rating: 0, sort: 'recent' };
     repaintLogbook();
