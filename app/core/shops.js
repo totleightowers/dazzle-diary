@@ -231,6 +231,47 @@ export const SHOPS = [
         type: names.find(n => n !== 'All Paintings') || null
       };
     }
+  },
+
+  {
+    id: 'muni',
+    hue: 9,
+    platform: 'shopify',
+    currency: 'USD',
+    name: 'Munimade',
+    domain: 'munimade.com',
+    // The one shop here with an honest product_type. "(Discontinued)" kits are
+    // kept: they are still things you can own, and an order history full of
+    // them has to match against something.
+    isKit: (p) => /^Diamond Painting Kit/i.test(p.product_type || ''),
+    parse(p) {
+      /* The title carries the artist, and `vendor` does not — it is the
+         manufacturer ("Vancy Arts"), which would put the wrong name on every
+         card. Shape is in the tags. Size, drills and colours are on the product
+         page and nowhere in the feed, so they stay empty rather than guessed:
+         see the note in README about what this shop cannot give. */
+      // "(v1.0) 'Sand and Spells' by TalySketch, Diamond Painting Canvas Kit (029)"
+      const raw = String(p.title || '').replace(/^\(v[\d.]+\)\s*/i, '');
+      const quoted = raw.match(/^[\u2018'"](.+?)[\u2019'"]\s+by\s+(.+?)\s*,/);
+      const plain = quoted ? null : raw.match(/^(.*?)\s*-?\s*by\s+(.+?)\s*,/i);
+      const found = quoted || plain;
+      const title = found ? found[1].trim()
+        : raw.replace(/,\s*[^,]*Diamond Painting[^,]*$/i, '').trim();
+
+      const tags = (p.tags || []).map(t => String(t).toLowerCase());
+      // "square drill" is the deliberate tag; "square" alone is the fallback
+      const shapeTag = tags.find(t => /^(round|square) drill$/.test(t))
+                    || tags.find(t => /^(round|square)$/.test(t));
+      return {
+        title: title || p.title,
+        artist: found ? found[2].trim() : null,
+        width_in: null, height_in: null,
+        shape: shapeOf(shapeTag),
+        coverage: coverageOf(tags.join(' ')),
+        colors: null, drills: null,
+        special: /ultimate sparkle/i.test(raw) ? 'Ultimate Sparkle' : null
+      };
+    }
   }
 ];
 
