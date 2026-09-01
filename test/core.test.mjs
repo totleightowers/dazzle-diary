@@ -151,15 +151,47 @@ test('every shop is completely described', () => {
   }
 });
 
-test('shop hues stay clear of each other and of the status bands', () => {
-  const gap = (a, b) => Math.min(Math.abs(a - b), 360 - Math.abs(a - b));
-  const hues = SHOPS.map(s => s.hue);
+const HUE_GAP = (a, b) => Math.min(Math.abs(a - b), 360 - Math.abs(a - b));
+
+test('shop hues stay clear of each other', () => {
+  /* 20 degrees, not 30. Seven shops and six coloured statuses share one hue
+     circle, and at 30 there was no room left for a seventh shop at all. */
+  const hues = SHOPS.map(s => [s.id, s.hue]);
   for (let i = 0; i < hues.length; i++)
     for (let j = i + 1; j < hues.length; j++)
-      assert.ok(gap(hues[i], hues[j]) >= 30, `shops ${hues[i]}/${hues[j]} too close`);
-  for (const h of hues)
-    for (const band of [32, 92, 178, 300])
-      assert.ok(gap(h, band) >= 20, `shop hue ${h} clashes with status band ${band}`);
+      assert.ok(HUE_GAP(hues[i][1], hues[j][1]) >= 20,
+                `${hues[i][0]} (${hues[i][1]}) and ${hues[j][0]} (${hues[j][1]}) are too close`);
+});
+
+/* The status hues are read out of the stylesheet rather than written down here.
+   The hardcoded list said [32, 92, 178, 300] and had gone stale: Wish list and
+   On hold were added later, so the check silently stopped covering two of the
+   statuses it was meant to protect — and missed both clashes below. */
+const statusHues = () => {
+  const out = {};
+  for (const m of CSS.matchAll(/--st-([A-Za-z]+):\s*oklch\(([\d.]+)\s+([\d.]+)\s+(\d+)\)/g)) {
+    // abandoned is hue 60 at chroma 0.006 — grey, competing with nothing
+    if (Number(m[3]) >= 0.02 && !(m[1] in out)) out[m[1]] = Number(m[4]);
+  }
+  return out;
+};
+
+/* Two shops were given their hues before Wish list and On hold existed, and now
+   sit inside those bands: an MDD kit on the wish list shows a pink shop link
+   beside a pink status pill. Recolouring a shop changes how the logbook has
+   looked since it was built, so these are recorded rather than quietly changed
+   — but nothing new may join them. */
+const KNOWN_BAND_CLASHES = new Set(['mdd/wishlist', 'dac/onHold']);
+
+test('no new shop hue clashes with a status band', () => {
+  const bands = statusHues();
+  assert.ok(Object.keys(bands).length >= 6, `only found ${Object.keys(bands).length} status hues`);
+  const clashes = [];
+  for (const s of SHOPS)
+    for (const [name, hue] of Object.entries(bands))
+      if (HUE_GAP(s.hue, hue) < 20 && !KNOWN_BAND_CLASHES.has(`${s.id}/${name}`))
+        clashes.push(`${s.id} (${s.hue}) is ${HUE_GAP(s.hue, hue)} degrees from ${name} (${hue})`);
+  assert.deepEqual(clashes, []);
 });
 
 test('product links match each platform', () => {
@@ -366,4 +398,77 @@ test('every status still reads back as itself', () => {
     const after = { status: 'notReceived', ...applyStatus({ status: 'notReceived' }, status, '2026-08-22') };
     assert.equal(statusFromDates(after), status, `${status} must read back as itself`);
   }
+});
+
+/* Adding a shop means editing shops.js and then eight separate places in the
+   stylesheet. Miss one and the shop still works but renders colourless, or
+   worse, half-coloured — which is not the kind of thing a person notices in a
+   diff. So the stylesheet is checked against the list of shops rather than
+   trusted. */
+import { readFileSync as _read } from 'node:fs';
+const CSS = _read(new URL('../app/styles.css', import.meta.url), 'utf8');
+
+test('every shop has the colours the stylesheet promises it', () => {
+  const missing = [];
+  for (const shop of SHOPS) {
+    const want = [
+      `--shop-${shop.id}:`,
+      `--shop-${shop.id}-bg:`,
+      `--shop-${shop.id}-soft:`,
+      `.card[data-shop="${shop.id}"]`,
+      `.pip[data-shop="${shop.id}"]`,
+      `.cat-card[data-shop="${shop.id}"]`,
+      `.chip[data-shop="${shop.id}"]`
+    ];
+    for (const w of want) if (!CSS.includes(w)) missing.push(`${shop.id}: ${w}`);
+    // the three variable blocks: light, the dark media query, the dark attribute
+    const defs = CSS.split(`--shop-${shop.id}:`).length - 1;
+    if (defs !== 3) missing.push(`${shop.id}: --shop-${shop.id} defined ${defs}x, expected 3 (light, dark media, dark attribute)`);
+  }
+  assert.deepEqual(missing, []);
+});
+
+test('Munimade titles yield the name, the artist and the shape', () => {
+  const shop = shopById('muni');
+  const row = (title, tags, type = 'Diamond Painting Kit') => toRow(shop, {
+    handle: 'x', title, vendor: 'Vancy Arts', product_type: type, tags,
+    images: [{ src: 'https://cdn.shopify.com/a.jpg' }],
+    variants: [{ title: 'Default Title', price: '85.00', available: true }]
+  });
+
+  // the artist is in the title; `vendor` is the manufacturer and must not be used
+  const a = row("'The Underwater Castle' by Femke Deborah, Diamond Painting Canvas Kit (128)",
+                ['square', 'square drill']);
+  assert.equal(a.title, 'The Underwater Castle');
+  assert.equal(a.artist, 'Femke Deborah');
+  assert.equal(a.shape, 'Square');
+  assert.equal(a.coverage, 'Full drill');
+
+  // a reissued design carries a (v1.0) prefix that is not part of the name
+  const b = row("(v1.0) 'Sand and Spells' by TalySketch, Diamond Painting Canvas Kit (029)", ['round drill']);
+  assert.equal(b.title, 'Sand and Spells');
+  assert.equal(b.artist, 'TalySketch');
+  assert.equal(b.shape, 'Round');
+
+  // ULTIMATE SPARKLE sits between the artist and the kit words
+  const c = row("'Unbridled Soul' by Kat Fedora, ULTIMATE SPARKLE Diamond Painting Canvas Kit (158)", ['square']);
+  assert.equal(c.title, 'Unbridled Soul');
+  assert.equal(c.special, 'Ultimate Sparkle');
+
+  // a grab-bag has no artist and must not invent one out of the quoted words
+  const d = row("(OOPSIE) Discounted 'B Grade' Diamond Painting Kits", ['diamond painting kit']);
+  assert.equal(d.artist, null);
+  assert.equal(d.shape, null);
+
+  // discontinued kits are still kits — an order history has to match them
+  assert.equal(row("'Star Princess' by Jessica Maltezo, Diamond Painting Canvas Kit (008)",
+                   ['round'], 'Diamond Painting Kit (Discontinued)').kind, 'kit');
+  // accessories are not
+  assert.equal(row('Washi Tape', [], 'Washi Tape').kind, 'other');
+  assert.equal(row('Storage Box', [], 'DP Storage').kind, 'other');
+});
+
+test('Munimade links back to the right product page', () => {
+  assert.equal(productUrl('muni', 'sand-and-spells-029'),
+               'https://munimade.com/products/sand-and-spells-029');
 });
