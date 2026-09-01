@@ -10,8 +10,13 @@ diamond count already filled in. There is no account, no cloud and no server:
 everything lives in the app's own storage on the phone.
 
 Supported shops: **Diamond Art Club**, **Mystical Dream Diamonds**,
-**Pressed and Placed**, **Diamond Art UK**, **Fallon Gems** and
-**Diamond Art Studio**.
+**Pressed and Placed**, **Diamond Art UK**, **Fallon Gems**,
+**Diamond Art Studio** and **Munimade**.
+
+What each shop publishes differs. Munimade lists its canvas size, diamond count
+and colour count on the product page rather than in its product feed, so those
+three arrive empty and can be typed in; everything else — cover, artist, drill
+shape, price — comes across.
 
 ## Features
 

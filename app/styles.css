@@ -742,6 +742,9 @@ select.fld {
   --shop-das: oklch(0.52 0.13 120);
   --shop-das-bg: oklch(0.965 0.030 120);
   --shop-das-soft: oklch(0.988 0.008 120);
+  --shop-muni: oklch(0.52 0.13 9);
+  --shop-muni-bg: oklch(0.965 0.030 9);
+  --shop-muni-soft: oklch(0.988 0.008 9);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -763,6 +766,9 @@ select.fld {
     --shop-das: oklch(0.74 0.11 120);
     --shop-das-bg: oklch(0.300 0.035 120);
     --shop-das-soft: oklch(0.245 0.012 120);
+    --shop-muni: oklch(0.74 0.11 9);
+    --shop-muni-bg: oklch(0.300 0.035 9);
+    --shop-muni-soft: oklch(0.245 0.012 9);
   }
 }
 :root[data-theme="dark"] {
@@ -784,6 +790,9 @@ select.fld {
   --shop-das: oklch(0.74 0.11 120);
   --shop-das-bg: oklch(0.300 0.035 120);
   --shop-das-soft: oklch(0.245 0.012 120);
+  --shop-muni: oklch(0.74 0.11 9);
+  --shop-muni-bg: oklch(0.300 0.035 9);
+  --shop-muni-soft: oklch(0.245 0.012 9);
 }
 
 /* project cards: the whisper, plus a pip that carries the actual identity */
@@ -794,6 +803,7 @@ select.fld {
 .card[data-shop="dauk"]   { background: var(--shop-dauk-soft); }
 .card[data-shop="fallon"] { background: var(--shop-fallon-soft); }
 .card[data-shop="das"]    { background: var(--shop-das-soft); }
+.card[data-shop="muni"]   { background: var(--shop-muni-soft); }
 
 .pip { width: 7px; height: 7px; border-radius: 999px; flex: 0 0 auto; display: inline-block; }
 .pip[data-shop="dac"]    { background: var(--shop-dac); }
@@ -802,6 +812,7 @@ select.fld {
 .pip[data-shop="dauk"]   { background: var(--shop-dauk); }
 .pip[data-shop="fallon"] { background: var(--shop-fallon); }
 .pip[data-shop="das"]    { background: var(--shop-das); }
+.pip[data-shop="muni"]   { background: var(--shop-muni); }
 
 /* catalogue cards and shop chips: nothing competing, so use the strong tint */
 .cat-card[data-shop="dac"]    { background: var(--shop-dac-bg);    border-color: var(--shop-dac); }
@@ -810,6 +821,7 @@ select.fld {
 .cat-card[data-shop="dauk"]   { background: var(--shop-dauk-bg);   border-color: var(--shop-dauk); }
 .cat-card[data-shop="fallon"] { background: var(--shop-fallon-bg); border-color: var(--shop-fallon); }
 .cat-card[data-shop="das"]    { background: var(--shop-das-bg);    border-color: var(--shop-das); }
+.cat-card[data-shop="muni"]   { background: var(--shop-muni-bg);   border-color: var(--shop-muni); }
 
 .chip[data-shop="dac"]    { background: var(--shop-dac-bg);    border-color: var(--shop-dac); }
 .chip[data-shop="mdd"]    { background: var(--shop-mdd-bg);    border-color: var(--shop-mdd); }
@@ -817,6 +829,7 @@ select.fld {
 .chip[data-shop="dauk"]   { background: var(--shop-dauk-bg);   border-color: var(--shop-dauk); }
 .chip[data-shop="fallon"] { background: var(--shop-fallon-bg); border-color: var(--shop-fallon); }
 .chip[data-shop="das"]    { background: var(--shop-das-bg);    border-color: var(--shop-das); }
+.chip[data-shop="muni"]   { background: var(--shop-muni-bg);   border-color: var(--shop-muni); }
 .chip[data-shop][aria-pressed="true"] { color: #fff; }
 .chip[data-shop="dac"][aria-pressed="true"]    { background: var(--shop-dac); }
 .chip[data-shop="mdd"][aria-pressed="true"]    { background: var(--shop-mdd); }
@@ -824,6 +837,7 @@ select.fld {
 .chip[data-shop="dauk"][aria-pressed="true"]   { background: var(--shop-dauk); }
 .chip[data-shop="fallon"][aria-pressed="true"] { background: var(--shop-fallon); }
 .chip[data-shop="das"][aria-pressed="true"]    { background: var(--shop-das); }
+.chip[data-shop="muni"][aria-pressed="true"]   { background: var(--shop-muni); }
 :root[data-theme="dark"] .chip[data-shop][aria-pressed="true"],
 .chip[data-shop][aria-pressed="true"] { color: var(--on-shop, #fff); }
 :root[data-theme="dark"] { --on-shop: oklch(0.16 0.02 60); }
