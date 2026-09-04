@@ -267,6 +267,11 @@ The project page shows:
 
 Expand **Correct the cost** to update those values and the project currency without entering Details.
 
+Dates are changed by tapping them. Each row in the Timeline is itself the
+control: tap **Ordered**, **Received**, **Started** or **Completed**, pick a date
+in the phone's own calendar, and it saves. A date that is not set says *Tap to
+set*. The status follows the dates, as it does everywhere else.
+
 A price you type yourself is marked as your figure rather than retaining an import/catalogue estimate provenance.
 
 Supported project currencies are:

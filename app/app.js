@@ -397,7 +397,7 @@ const S = {
   filter: 'all',
   q: '',
   // the logbook's own filters, beside the status chips and the search box
-  lb: { shop: null, shape: null, size: null, rating: 0, sort: 'recent', open: false },
+  lb: { shop: null, shape: null, size: null, rating: 0, sort: 'recent', open: false, gaps: null },
   projects: [],
   meta: null,
   importPreview: null,
@@ -805,8 +805,19 @@ const RATINGS = [{ k: 0, label: 'Any' }, { k: 3, label: '3+' }, { k: 4, label: '
 const lbActive = () => {
   const f = S.lb;
   return (f.shop ? 1 : 0) + (f.shape ? 1 : 0) + (f.size ? 1 : 0)
-       + (f.rating ? 1 : 0) + (f.sort !== 'recent' ? 1 : 0);
+       + (f.rating ? 1 : 0) + (f.gaps ? 1 : 0) + (f.sort !== 'recent' ? 1 : 0);
 };
+
+/* What a project is missing. A logbook built over months has gaps in it, and
+   until now the only way to find them was to open everything: a project with no
+   order date belongs to no month and quietly falls out of every year. */
+const GAPS = [
+  { k: 'dates', label: 'No dates',
+    has: (p) => p.status !== 'wishlist' && !p.date_ordered && !p.date_received },
+  { k: 'price', label: 'No price', has: (p) => p.status !== 'wishlist' && p.price == null },
+  { k: 'drills', label: 'No diamond count', has: (p) => !p.drills },
+  { k: 'size', label: 'No canvas size', has: (p) => !p.width_in || !p.height_in }
+];
 
 /** The shops she actually owns kits from — not every shop the app knows. */
 const lbShops = () => [...new Set(S.projects.map((p) => p.shop).filter(Boolean))]
@@ -823,6 +834,7 @@ function logbookGroups() {
     (!f.shop || p.shop === f.shop) &&
     (!f.shape || p.shape === f.shape) &&
     (!f.rating || Number(p.rating || 0) >= f.rating) &&
+    (!f.gaps || (GAPS.find((g) => g.k === f.gaps) || { has: () => true }).has(p)) &&
     (!bucket || (edge(p) != null
                  && (!bucket.minCm || edge(p) >= bucket.minCm)
                  && (!bucket.maxCm || edge(p) <= bucket.maxCm)));
@@ -864,6 +876,10 @@ function logbookFilters() {
     ${row('Drill shape', ['Round', 'Square'].map((sh) => chip('lbshape', sh, sh, f.shape === sh)).join(''))}
     ${row('Canvas size (longest edge)', SIZE_BUCKETS.map((b) => chip('lbsize', b.k, b.label, f.size === b.k)).join(''))}
     ${row('Rating', RATINGS.map((r) => chip('lbrating', r.k, r.label, f.rating === r.k)).join(''))}
+    ${row('Needs filling in', GAPS.map((g) => {
+      const n = S.projects.filter(g.has).length;
+      return n ? chip('lbgaps', g.k, `${g.label} · ${n}`, f.gaps === g.k) : '';
+    }).join(''))}
     ${row('Sort each section by', LB_SORTS.map((o) => chip('lbsort', o.k, o.label, f.sort === o.k)).join(''))}
   </div>`;
 }
@@ -1145,22 +1161,20 @@ route(/^#\/p\/(\d+)$/, async (id) => {
 
         <div>
           <h3 class="label">Timeline</h3>
-          <div class="panel pad-in">${dates.map(([k, v]) =>
-            `<div class="row"><span class="k">${h(k)}</span>
-             <span class="v tnum" style="${v ? '' : 'color:var(--ink-faint);font-weight:400'}">${h(dateText(v) || 'Not logged')}</span></div>`).join('')}</div>
-          <details class="sect" style="margin-top:8px">
-            <summary><span class="label" style="margin:0">Correct a date</span></summary>
-            <div class="grid2" style="margin-top:8px">
-              ${[['date_ordered', 'Ordered'], ['date_received', 'Received'],
-                 ['date_started', 'Started'], ['date_completed', 'Completed']].map(([k, l]) => `
-                <div><span class="minilabel">${l}</span>
-                <input class="fld" type="date" id="tl_${k}" value="${h(p[k] || '')}"></div>`).join('')}
-            </div>
-            <button class="btn ghost wide" style="margin-top:8px" data-act="savedates" data-id="${p.id}">
-              Save these dates</button>
-            <p style="margin:6px 2px 0;font-size:12px;color:var(--ink-mute)">The status follows the dates,
-              the same as it does everywhere else.</p>
-          </details>
+          <!-- Each row IS the control. Correcting a date used to mean opening a
+               disclosure, finding one of four fields, and pressing Save; the
+               date was always a real picker, it was just three taps away. -->
+          <div class="panel pad-in">${[['date_ordered', 'Ordered'], ['date_received', 'Received'],
+                                       ['date_started', 'Started'], ['date_completed', 'Completed']].map(([k, l]) => `
+            <label class="row daterow">
+              <span class="k">${l}</span>
+              <span class="v tnum" style="${p[k] ? '' : 'color:var(--ink-faint);font-weight:400'}">${
+                h(dateText(p[k]) || 'Tap to set')}</span>
+              <input type="date" value="${h(p[k] || '')}" aria-label="${l} date"
+                     data-act="setdate" data-k="${k}" data-id="${p.id}">
+            </label>`).join('')}</div>
+          <p style="margin:6px 2px 0;font-size:12px;color:var(--ink-mute)">Tap a date to change it.
+            The status follows the dates, the same as it does everywhere else.</p>
         </div>
 
         ${(() => {
@@ -2413,7 +2427,8 @@ route(/^#\/summary$/, async () => {
         Diamonds placed in a month is counted from progress recorded from now on \u2014 move a project's progress and it will start filling in.</p>` : ''}
       ${SUMMARY.year && t.undated ? `<p style="margin:-4px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
         ${num(t.undated)} project${t.undated === 1 ? ' has' : 's have'} no order or delivery date, so
-        ${t.undated === 1 ? 'it belongs' : 'they belong'} to no year. That is why the years do not add up to All time.</p>` : ''}
+        ${t.undated === 1 ? 'it belongs' : 'they belong'} to no year. That is why the years do not add up to All time.
+        Find ${t.undated === 1 ? 'it' : 'them'} under Filters \u2192 Needs filling in \u2192 No dates.</p>` : ''}
 
       ${section('Your stash', [
         pair('Canvas', 'Biggest', r.biggestSize, 'Smallest', r.smallestSize, (_v, x) => sizeOf(x)),
@@ -2829,6 +2844,18 @@ document.addEventListener('contextmenu', (e) => {
 document.addEventListener('pointercancel', dragCleanup);
 
 /* ------------------------------------------------------------- delegation */
+/* A date picker reports itself with `change`, never a click — the click that
+   opened it happens long before there is an answer. Routed through the same
+   handler so a date row behaves like every other control. */
+document.addEventListener('change', (e) => {
+  const el = e.target && e.target.closest && e.target.closest('[data-act="setdate"]');
+  if (!el) return;
+  handleClick({ target: el }).catch((err) => {
+    console.error(err);
+    toast(err && err.message ? err.message : 'Something went wrong');
+  });
+});
+
 document.addEventListener('click', (e) => { handleClick(e).catch((err) => {
   console.error(err);
   toast(err && err.message ? err.message : 'Something went wrong');
@@ -2853,17 +2880,18 @@ async function handleClick(e) {
   }
   else if (act === 'summonth') { SUMMARY.month = el.dataset.k || null; forgetScroll('#/summary'); render(); }
   else if (act === 'lbclear') {
-    S.lb = { ...S.lb, shop: null, shape: null, size: null, rating: 0, sort: 'recent' };
+    S.lb = { ...S.lb, shop: null, shape: null, size: null, rating: 0, gaps: null, sort: 'recent' };
     repaintLogbook();
   }
   else if (act === 'lbshop' || act === 'lbshape' || act === 'lbsize'
-           || act === 'lbrating' || act === 'lbsort') {
+           || act === 'lbrating' || act === 'lbgaps' || act === 'lbsort') {
     const f = S.lb, k = el.dataset.k;
     // tapping the one that is already on turns it off again, as the catalogue does
     if (act === 'lbshop') f.shop = f.shop === k ? null : k;
     if (act === 'lbshape') f.shape = f.shape === k ? null : k;
     if (act === 'lbsize') f.size = f.size === k ? null : k;
     if (act === 'lbrating') f.rating = Number(k);
+    if (act === 'lbgaps') f.gaps = f.gaps === k ? null : k;
     if (act === 'lbsort') f.sort = k;
     repaintLogbook();
   }
@@ -3130,16 +3158,14 @@ async function handleClick(e) {
     const g = S.gallery;
     if (g && g.items.length) lightbox(g.items, Number(el.dataset.i) || 0);
   }
-  else if (act === 'savedates') {
-    const dates = {};
-    for (const k of ['date_ordered', 'date_received', 'date_started', 'date_completed'])
-      dates[k] = document.getElementById('tl_' + k)?.value || null;
+  else if (act === 'setdate') {
     const project = await api('/projects/' + el.dataset.id);
+    const dates = { [el.dataset.k]: el.value || null };
     // the same rule the form and the drag use, so a date means one thing
     const status = statusFromDates({ ...project, ...dates });
     await api('/projects/' + el.dataset.id, { method: 'PATCH',
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...dates, status }) });
-    toast(status === project.status ? 'Dates saved' : `Dates saved · now ${statusOf(status).short}`);
+    toast(status === project.status ? 'Date saved' : `Date saved · now ${statusOf(status).short}`);
     render();
   }
   else if (act === 'savecost') {

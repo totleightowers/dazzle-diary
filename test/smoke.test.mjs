@@ -223,12 +223,23 @@ test('cost and dates are corrected where they are read', async () => {
   assert.equal(row.currency, 'GBP', 'the currency chips did nothing');
   assert.equal(row.price_source, 'you', 'a price typed by hand is still credited to the catalogue');
 
+  /* The timeline row is the control now: tap the date, pick one, done. No
+     disclosure to open and no Save to find. */
   await m.go('#/p/' + p.id);
-  m.find('#tl_date_started').value = '2026-08-20';
-  await m.tap('[data-act="savedates"]');
+  const started = m.find('[data-act="setdate"][data-k="date_started"]');
+  assert.ok(started, 'the timeline has no way to set a date');
+  started.value = '2026-08-20';
+  started.dispatchEvent({ type: 'change', target: started });
+  await m.settle();
   row = await m.api('/projects/' + p.id);
   assert.equal(row.date_started, '2026-08-20');
   assert.equal(row.status, 'started', 'the status did not follow the dates');
+
+  // an empty one invites a tap rather than showing nothing
+  await m.go('#/p/' + p.id);
+  const empty = m.find('[data-act="setdate"][data-k="date_completed"]');
+  assert.equal(empty.getAttribute('value'), '');
+  assert.match(empty.parentElement.textContent, /Tap to set/);
 });
 
 test('the project leads with managing it, not with editing the record', async () => {
@@ -1039,4 +1050,42 @@ test('a project created with a status gets the dates that status implies', async
 
   // so nothing new lands outside every year
   assert.equal((await m.api('/summary?year=2026')).totals.undated, 0);
+});
+
+/* A logbook built over months has gaps in it, and the only way to find them was
+   to open everything. A project with no order date is the one that matters:
+   it belongs to no month and falls quietly out of every year. */
+test('the logbook can show you what still needs filling in', async () => {
+  const m = await mount();
+  for (const q of await m.api('/projects')) await m.api('/projects/' + q.id, { method: 'DELETE' });
+  const complete = await m.seed({ title: 'All there', status: 'received', price: 50,
+                                  drills: 40000, width_in: 20, height_in: 20, date_ordered: '2026-02-01' });
+  const bare = await m.seed({ title: 'Nothing known', status: 'received' });
+  // older builds left projects with no dates at all
+  await m.api('/projects/' + bare.id, { method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date_ordered: null, date_received: null }) });
+
+  await m.go('#/');
+  await m.tap('[data-act="lbfilters"]');
+  const chip = m.find('[data-act="lbgaps"][data-k="dates"]');
+  assert.ok(chip, 'there is no way to find the projects with no dates');
+  assert.match(chip.textContent, /No dates · 1/, chip.textContent);
+
+  await m.tap('[data-act="lbgaps"][data-k="dates"]');
+  const titles = m.all('.card .name').map((n) => n.textContent);
+  assert.deepEqual(titles, ['Nothing known']);
+
+  // tapping it again turns it off, like every other filter
+  await m.tap('[data-act="lbgaps"][data-k="dates"]');
+  assert.equal(m.all('.card .name').length, 2);
+
+  // and a gap nobody has is not offered
+  await m.api('/projects/' + bare.id, { method: 'DELETE' });
+  await m.api('/projects/' + complete.id, { method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ price: 50 }) });
+  await m.go('#/');
+  await m.tap('[data-act="lbfilters"]');
+  assert.equal(m.find('[data-act="lbgaps"][data-k="dates"]'), null,
+               'a filter for a gap that nobody has is just noise');
 });
