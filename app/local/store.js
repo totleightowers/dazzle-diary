@@ -1034,6 +1034,14 @@ export async function localApi(path, opts = {}) {
     const placed = period
       ? finished.reduce((n, r) => n + (Number(r.drills) || 0), 0)
       : placedAll;
+    // everything still waiting to be placed, which is a fact about the stash as
+    // it stands rather than about any month, so it is only ever the whole thing
+    const remaining = Math.max(0, owned.filter(r => r.status !== 'abandoned')
+      .reduce((n, r) => n + (Number(r.drills) || 0), 0) - placedAll);
+    /* A project with no order or delivery date belongs to no year, so the years
+       never add up to All time. That is honest but invisible, and looks like an
+       error — the page says how many are unaccounted for. */
+    const undated = owned.filter(r => !acquired(r)).length;
 
     const allDates = [
       ...rows.flatMap(r => [r.date_completed, r.date_started, acquired(r)]),
@@ -1068,12 +1076,14 @@ export async function localApi(path, opts = {}) {
         placed, partial: !period,
         days: dayset.size,
         hours: Math.round(mins / 60 * 10) / 10,
-        streak,
+        streak, remaining, undated,
         /* Adding dollars to pounds gives a number that is not money. Grouped by
            currency, the way the figures in Settings already are. */
+        // same shape as the figure in Settings, so the two cannot drift apart
         spendBy: Object.values(bought.filter(r => r.price != null).reduce((a, r) => {
           const c = r.currency || 'GBP';
-          (a[c] = a[c] || { currency: c, total: 0 }).total += Number(r.price) || 0;
+          const e = (a[c] = a[c] || { currency: c, total: 0, n: 0 });
+          e.total += Number(r.price) || 0; e.n++;
           return a;
         }, {})).map(v => ({ ...v, total: Math.round(v.total * 100) / 100 }))
           .sort((a, b) => b.total - a.total),

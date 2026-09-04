@@ -2403,8 +2403,13 @@ route(/^#\/summary$/, async () => {
           `${SUMMARY.year ? 'spent on what you bought' : 'spent'}${(t.spendBy || []).length > 1
             ? ' · plus ' + t.spendBy.slice(1).map((x) => money(x.total, x.currency)).join(', ') : ''}`),
         tile(t.days && t.hours, hoursText(t.hours / (t.days || 1)), 'on an average day at it'),
-        tile(t.everHeld, num(t.everHeld), 'put down and picked back up')
+        tile(t.everHeld, num(t.everHeld), 'put down and picked back up'),
+        // the other half of the diamond picture, and only ever a whole-stash one
+        tile(!SUMMARY.year && t.remaining, bigNum(t.remaining), 'still to place across the rest of the stash')
       )}
+      ${SUMMARY.year && t.undated ? `<p style="margin:-4px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
+        ${num(t.undated)} project${t.undated === 1 ? ' has' : 's have'} no order or delivery date, so
+        ${t.undated === 1 ? 'it belongs' : 'they belong'} to no year. That is why the years do not add up to All time.</p>` : ''}
 
       ${section('Your stash', [
         pair('Canvas', 'Biggest', r.biggestSize, 'Smallest', r.smallestSize, (_v, x) => sizeOf(x)),

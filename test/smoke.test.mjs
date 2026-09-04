@@ -537,8 +537,8 @@ test('the summary counts what happened, and a wish-list kit is not a fact', asyn
   assert.equal(s.totals.hours, 8.5);
   assert.equal(s.totals.days, 4, 'four distinct days had a session');
   assert.equal(s.totals.streak, 3, '2, 3 and 4 February are a run of three');
-  assert.deepEqual(s.totals.spendBy, [{ currency: 'GBP', total: 105 }],
-                   'the wished-for £999 was counted as spent');
+  assert.deepEqual(s.totals.spendBy.map(({ currency, total }) => ({ currency, total })),
+                   [{ currency: 'GBP', total: 105 }], 'the wished-for £999 was counted as spent');
   assert.equal(s.records.biggestSize.title, 'Moon Eater');
   assert.equal(s.records.smallestSize.title, 'Tiny', 'the wish-list kit won "biggest"');
 
@@ -807,7 +807,7 @@ test('money is never added across currencies', async () => {
 
   const s = await m.api('/summary');
   // £140 and $90 are two facts, not one number
-  assert.deepEqual(s.totals.spendBy,
+  assert.deepEqual(s.totals.spendBy.map(({ currency, total }) => ({ currency, total })),
                    [{ currency: 'GBP', total: 140 }, { currency: 'USD', total: 90 }]);
   assert.equal(s.totals.spend, undefined, 'a single mixed-currency total should not exist');
   assert.equal(s.mainCurrency, 'GBP');
@@ -827,4 +827,49 @@ test('money is never added across currencies', async () => {
 
   const rows = m.all('.panel .row').map((x) => x.textContent.replace(/\s+/g, ' ').trim());
   assert.ok(rows.some((x) => /Dearest .*£80\.00/.test(x)), rows.join(' | '));
+});
+
+/* Settings and the summary answer the same questions from the same rows. They
+   were written months apart and drifted once already over currency, so they are
+   held together here rather than by hoping. */
+test('Settings and the summary agree on the same collection', async () => {
+  const m = await mount();
+  for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
+  await m.seed({ title: 'Wished', status: 'wishlist', price: 999, drills: 500000 });
+  await m.seed({ title: 'Waiting', status: 'notReceived', price: 60, drills: 40000, date_ordered: '2026-01-02' });
+  await m.seed({ title: 'Going', status: 'started', price: 70, drills: 100000, progress: 30,
+                 date_ordered: '2026-02-02', date_started: '2026-02-10' });
+  await m.seed({ title: 'Dollars', status: 'received', price: 90, currency: 'USD', drills: 30000,
+                 date_ordered: '2026-03-02' });
+  await m.seed({ title: 'Done', status: 'completed', price: 100, drills: 90000,
+                 date_ordered: '2026-01-05', date_started: '2026-02-01', date_completed: '2026-04-01' });
+
+  const stats = await m.api('/stats');
+  const s = await m.api('/summary');
+  assert.equal(s.totals.done, stats.completed, 'completed count');
+  assert.equal(s.totals.bought, stats.projects - stats.wishlist, 'owned count');
+  assert.equal(s.totals.placed, stats.placed, 'diamonds placed');
+  assert.equal(s.totals.remaining, stats.remaining, 'diamonds still to place');
+  assert.deepEqual(s.totals.spendBy, stats.spendBy, 'spend, per currency');
+});
+
+test('a project with no order date is accounted for rather than quietly dropped', async () => {
+  const m = await mount();
+  for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
+  await m.seed({ title: 'Dated', status: 'received', price: 40, drills: 10000, date_ordered: '2026-02-02' });
+  await m.seed({ title: 'No date at all', status: 'received', price: 60, drills: 20000 });
+
+  const all = await m.api('/summary');
+  const year = await m.api('/summary?year=2026');
+  assert.equal(all.totals.bought, 2);
+  assert.equal(year.totals.bought, 1, 'the undated project belongs to no year');
+  assert.equal(year.totals.undated, 1);
+
+  // and the page says so, because otherwise the year simply fails to add up
+  await m.go('#/summary');
+  await m.tap('[data-act="sumyear"][data-k="2026"]');
+  assert.match(m.screen(), /no order or delivery date/);
+  // but it is not said when nothing is missing
+  await m.tap('[data-act="sumyear"][data-k=""]');
+  assert.ok(!/no order or delivery date/.test(m.screen()));
 });

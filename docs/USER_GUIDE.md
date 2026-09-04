@@ -449,6 +449,12 @@ Depending on the selected period, Summary can show:
 - spend
 - average hours on an active day
 - how many projects were put down and later resumed
+- diamonds still to place across the rest of the stash (All time only, since it
+  is a fact about the stash as it stands rather than about a month)
+
+A project with no order or delivery date belongs to no year, so the years do not
+add up to All time. When a year or month is selected and some projects are
+undated, the page says how many rather than leaving the gap unexplained.
 
 ### Records
 
