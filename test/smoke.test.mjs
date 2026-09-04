@@ -8,6 +8,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { mount } from './mount.mjs';
 
 const broke = (m) => /Something went wrong/.test(m.text());
@@ -901,8 +902,14 @@ test('a project with no order date is accounted for rather than quietly dropped'
   await m.go('#/summary');
   await m.tap('[data-act="sumyear"][data-k="2026"]');
   assert.match(m.screen(), /no order or delivery date/);
-  // but it is not said when nothing is missing
+  // said on All time as well, because a logbook with nothing dated has no year
+  // chips at all and would never be offered the fix
   await m.tap('[data-act="sumyear"][data-k=""]');
+  assert.match(m.screen(), /no order or delivery date/);
+
+  // but not once there is nothing missing
+  await m.api('/projects/backfill-dates', { method: 'POST' });
+  await m.go('#/summary');
   assert.ok(!/no order or delivery date/.test(m.screen()));
 });
 
@@ -1149,4 +1156,64 @@ test('a new project shows the dates its status implies before you save', async (
   await m.tap('#status .opt[data-k="wishlist"]');
   assert.equal(m.find('#date_ordered').value || '', '',
                'a kit you have only wished for was given an order date');
+});
+
+test('a date row is not a label, so the picker is not closed by its own tap', () => {
+  // A label forwards a second, synthetic click to the control it names. With the
+  // input covering the whole row that meant one tap opened the picker and shut
+  // it again, which is what "it pops up and immediately disappears" was.
+  const src = readFileSync(new URL('../app/app.js', import.meta.url), 'utf8');
+  assert.ok(!/<label[^>]*class="row daterow"/.test(src),
+            'the date row is a label again, which closes the picker as it opens');
+  assert.match(src, /<div class="row daterow">/);
+});
+
+test('the undated projects can be dated from the day they were added', async () => {
+  const m = await mount();
+  for (const q of await m.api('/projects')) await m.api('/projects/' + q.id, { method: 'DELETE' });
+
+  const bare = await m.seed({ title: 'No dates', status: 'received', price: 40 });
+  await m.api('/projects/' + bare.id, { method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date_ordered: null, date_received: null }) });
+  await m.seed({ title: 'Wished', status: 'wishlist' });
+  await m.seed({ title: 'Already dated', status: 'received', date_ordered: '2026-02-01' });
+
+  assert.equal((await m.api('/projects/backfill-dates')).candidates, 1);
+  assert.equal((await m.api('/projects/backfill-dates', { method: 'POST' })).filled, 1);
+
+  const byTitle = Object.fromEntries((await m.api('/projects')).map((r) => [r.title, r]));
+  assert.ok(byTitle['No dates'].date_ordered, 'the undated project was not dated');
+  assert.equal(byTitle['No dates'].date_ordered,
+               String(byTitle['No dates'].created_at).slice(0, 10));
+  // a wish-list kit has not been bought, and a date you typed is yours
+  assert.ok(!byTitle['Wished'].date_ordered);
+  assert.equal(byTitle['Already dated'].date_ordered, '2026-02-01');
+
+  // running it twice does nothing the second time
+  assert.equal((await m.api('/projects/backfill-dates', { method: 'POST' })).filled, 0);
+});
+
+test('the summary offers the backfill, and asks first', async () => {
+  const m = await mount();
+  for (const q of await m.api('/projects')) await m.api('/projects/' + q.id, { method: 'DELETE' });
+  const bare = await m.seed({ title: 'Undated', status: 'received', price: 40 });
+  await m.api('/projects/' + bare.id, { method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date_ordered: null, date_received: null }) });
+
+  /* Offered on All time too. With nothing dated there are no year chips at all,
+     so an offer that only appeared under a year would be unreachable by exactly
+     the logbook that needs it most. */
+  await m.go('#/summary');
+  assert.ok(m.find('[data-act="backfilldates"]'), 'the summary does not offer to fill them in');
+
+  // saying no changes nothing
+  m.answerConfirms(false);
+  await m.tap('[data-act="backfilldates"]');
+  assert.ok(!(await m.api('/projects/' + bare.id)).date_ordered, 'it dated them without asking');
+
+  m.answerConfirms(true);
+  await m.tap('[data-act="backfilldates"]');
+  assert.ok((await m.api('/projects/' + bare.id)).date_ordered);
 });

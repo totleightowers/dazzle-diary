@@ -1234,6 +1234,35 @@ export async function localApi(path, opts = {}) {
     };
   }
 
+  /* Projects added before the app filled in a status's implied dates have no
+     order date at all, so they belong to no month and the years never add up.
+     Their real order dates are gone; the day each was added to the logbook is
+     the closest honest thing left, and it is at least a date you were holding
+     the kit in mind. Only ever run deliberately, and only on projects that have
+     neither an order nor a delivery date — nothing you typed is touched. */
+  if (p === '/projects/backfill-dates' && m === 'POST') {
+    const rows = await projects();
+    let filled = 0;
+    for (const row of rows) {
+      if (row.status === 'wishlist') continue;
+      if (row.date_ordered || row.date_received) continue;
+      const added = String(row.created_at || row.updated_at || '').slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(added)) continue;
+      row.date_ordered = added;
+      row.updated_at = nowIso();
+      await idb.put('projects', row);
+      filled++;
+    }
+    return { filled };
+  }
+
+  if (p === '/projects/backfill-dates' && m === 'GET') {
+    const rows = await projects();
+    return { candidates: rows.filter(r => r.status !== 'wishlist'
+      && !r.date_ordered && !r.date_received
+      && /^\d{4}-\d{2}-\d{2}$/.test(String(r.created_at || r.updated_at || '').slice(0, 10))).length };
+  }
+
   if (p === '/stats') {
     const rows = await projects();
     const byArtist = {};
