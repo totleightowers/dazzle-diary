@@ -1400,6 +1400,16 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
        details that had just been picked. */
   }
   const isNew = !id;
+  /* Show the dates the status is going to imply, rather than saving them
+     silently. The rule ran when a status was TAPPED, and a new project already
+     has one selected — so the commonest path of all, add from the catalogue and
+     save, went through the form with every date box empty. The store fills them
+     in on the way past; this is what makes the form agree with what it saves. */
+  if (isNew && p.status) {
+    const implied = applyStatus(p, p.status, today());
+    for (const [k, v] of Object.entries(implied))
+      if (k.startsWith('date_') && v && !p[k]) p[k] = v;
+  }
   const f = (name, label, value, extra = '', cls = '') =>
     `<div class="${cls}"><label class="label" for="${name}">${h(label)}</label>
      <input class="fld" id="${name}" name="${name}" value="${h(value ?? '')}" ${extra}></div>`;
