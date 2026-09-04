@@ -537,8 +537,8 @@ test('the summary counts what happened, and a wish-list kit is not a fact', asyn
   assert.equal(s.totals.hours, 8.5);
   assert.equal(s.totals.days, 4, 'four distinct days had a session');
   assert.equal(s.totals.streak, 3, '2, 3 and 4 February are a run of three');
-  assert.deepEqual(s.totals.spendBy, [{ currency: 'GBP', total: 105 }],
-                   'the wished-for £999 was counted as spent');
+  assert.deepEqual(s.totals.spendBy.map(({ currency, total }) => ({ currency, total })),
+                   [{ currency: 'GBP', total: 105 }], 'the wished-for £999 was counted as spent');
   assert.equal(s.records.biggestSize.title, 'Moon Eater');
   assert.equal(s.records.smallestSize.title, 'Tiny', 'the wish-list kit won "biggest"');
 
@@ -807,7 +807,7 @@ test('money is never added across currencies', async () => {
 
   const s = await m.api('/summary');
   // £140 and $90 are two facts, not one number
-  assert.deepEqual(s.totals.spendBy,
+  assert.deepEqual(s.totals.spendBy.map(({ currency, total }) => ({ currency, total })),
                    [{ currency: 'GBP', total: 140 }, { currency: 'USD', total: 90 }]);
   assert.equal(s.totals.spend, undefined, 'a single mixed-currency total should not exist');
   assert.equal(s.mainCurrency, 'GBP');
@@ -827,4 +827,216 @@ test('money is never added across currencies', async () => {
 
   const rows = m.all('.panel .row').map((x) => x.textContent.replace(/\s+/g, ' ').trim());
   assert.ok(rows.some((x) => /Dearest .*£80\.00/.test(x)), rows.join(' | '));
+});
+
+/* Settings and the summary answer the same questions from the same rows. They
+   were written months apart and drifted once already over currency, so they are
+   held together here rather than by hoping. */
+test('Settings and the summary agree on the same collection', async () => {
+  const m = await mount();
+  for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
+  await m.seed({ title: 'Wished', status: 'wishlist', price: 999, drills: 500000 });
+  await m.seed({ title: 'Waiting', status: 'notReceived', price: 60, drills: 40000, date_ordered: '2026-01-02' });
+  await m.seed({ title: 'Going', status: 'started', price: 70, drills: 100000, progress: 30,
+                 date_ordered: '2026-02-02', date_started: '2026-02-10' });
+  await m.seed({ title: 'Dollars', status: 'received', price: 90, currency: 'USD', drills: 30000,
+                 date_ordered: '2026-03-02' });
+  await m.seed({ title: 'Done', status: 'completed', price: 100, drills: 90000,
+                 date_ordered: '2026-01-05', date_started: '2026-02-01', date_completed: '2026-04-01' });
+
+  const stats = await m.api('/stats');
+  const s = await m.api('/summary');
+  assert.equal(s.totals.done, stats.completed, 'completed count');
+  assert.equal(s.totals.bought, stats.projects - stats.wishlist, 'owned count');
+  assert.equal(s.totals.placed, stats.placed, 'diamonds placed');
+  assert.equal(s.totals.remaining, stats.remaining, 'diamonds still to place');
+  assert.deepEqual(s.totals.spendBy, stats.spendBy, 'spend, per currency');
+});
+
+test('a project with no order date is accounted for rather than quietly dropped', async () => {
+  const m = await mount();
+  for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
+  await m.seed({ title: 'Dated', status: 'received', price: 40, drills: 10000, date_ordered: '2026-02-02' });
+  /* A project created now gets the dates its status implies, so an undated one
+     has to be made the way older builds left them: dates cleared afterwards. */
+  const undated = await m.seed({ title: 'No date at all', status: 'received', price: 60, drills: 20000 });
+  await m.api('/projects/' + undated.id, { method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date_ordered: null, date_received: null }) });
+
+  const all = await m.api('/summary');
+  const year = await m.api('/summary?year=2026');
+  assert.equal(all.totals.bought, 2);
+  assert.equal(year.totals.bought, 1, 'the undated project belongs to no year');
+  assert.equal(year.totals.undated, 1);
+
+  // and the page says so, because otherwise the year simply fails to add up
+  await m.go('#/summary');
+  await m.tap('[data-act="sumyear"][data-k="2026"]');
+  assert.match(m.screen(), /no order or delivery date/);
+  // but it is not said when nothing is missing
+  await m.tap('[data-act="sumyear"][data-k=""]');
+  assert.ok(!/no order or delivery date/.test(m.screen()));
+});
+
+/* A period has to be applied with the date that belongs to the fact. Time put
+   down is measured by when it was put down; time at the board by when you sat
+   at it. Scoping either by the order date made a year name one canvas and all
+   time name another, on the same data. */
+test('a hold is counted in the year it happened, not the year the kit was bought', async () => {
+  const m = await mount();
+  for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
+
+  // bought in 2025, put down for three weeks during 2026
+  await m.seed({ title: 'Bought Earlier', status: 'started', drills: 50000,
+                 date_ordered: '2025-06-01', date_started: '2025-07-01',
+                 holds: JSON.stringify([{ held: '2026-03-01', restarted: '2026-03-22' }]) });
+  // bought in 2026, put down for nine days
+  await m.seed({ title: 'Bought In Year', status: 'started', drills: 40000,
+                 date_ordered: '2026-01-05', date_started: '2026-02-01',
+                 holds: JSON.stringify([{ held: '2026-05-01', restarted: '2026-05-10' }]) });
+
+  const year = await m.api('/summary?year=2026');
+  assert.equal(year.records.longestHeld.title, 'Bought Earlier',
+               'the longest hold in 2026 was on a kit bought in 2025');
+  assert.equal(year.records.longestHeld.value, 21);
+  assert.equal(year.totals.everHeld, 2, 'both were put down during 2026');
+
+  const all = await m.api('/summary');
+  assert.equal(all.records.longestHeld.title, 'Bought Earlier');
+
+  // a hold that happened entirely in another year is not in this one
+  const other = await m.api('/summary?year=2025');
+  assert.equal(other.totals.everHeld, 0);
+  assert.equal(other.records.longestHeld, null);
+});
+
+test('time at the board is measured by when you sat at it', async () => {
+  const m = await mount();
+  for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
+  const old = await m.seed({ title: 'Old Kit', status: 'started', drills: 50000, date_ordered: '2025-01-01' });
+  const fresh = await m.seed({ title: 'New Kit', status: 'started', drills: 40000, date_ordered: '2026-01-01' });
+  // the kit bought in 2025 got far more hours during 2026
+  for (const [id, on, minutes] of [[old.id, '2026-04-01', 300], [old.id, '2026-04-02', 240],
+                                   [fresh.id, '2026-04-03', 60], [old.id, '2025-05-01', 600]])
+    await m.api(`/projects/${id}/sessions`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on, minutes }) });
+
+  const year = await m.api('/summary?year=2026');
+  assert.equal(year.records.mostHours.title, 'Old Kit', 'hours were scoped by the order date');
+  assert.equal(year.records.mostHours.value, 9, 'only the 2026 sessions count');
+  assert.equal(year.records.mostSessions.value, 2);
+  assert.equal(year.records.longestSession.value, 300);
+
+  // and the 2025 sitting belongs to 2025
+  const before = await m.api('/summary?year=2025');
+  assert.equal(before.records.longestSession.value, 600);
+  assert.equal(before.records.mostHours.value, 10);
+});
+
+/* Only the current percentage was ever kept, so "diamonds placed in March" had
+   no answer. Every change to a project's progress is recorded now. */
+test('moving a project on records what was placed and when', async () => {
+  const m = await mount();
+  for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
+  const p = await m.seed({ title: 'Working', status: 'started', drills: 100000, progress: 0,
+                           date_ordered: '2026-01-01', date_started: '2026-01-10' });
+  const move = (progress) => m.api('/projects/' + p.id, { method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ progress }) });
+
+  await move(20);
+  await move(35);
+  const s = await m.api('/summary');
+  assert.ok(s.totals.historyFrom, 'nothing was recorded');
+
+  // 35% of 100,000 was placed, in two goes
+  const today = new Date().toISOString().slice(0, 10);
+  const month = await m.api(`/summary?year=${today.slice(0, 4)}&month=${today.slice(5, 7)}`);
+  assert.equal(month.totals.placed, 35000);
+
+  // and going backwards is not a placement
+  await move(30);
+  const after = await m.api(`/summary?year=${today.slice(0, 4)}&month=${today.slice(5, 7)}`);
+  assert.equal(after.totals.placed, 30000, 'undoing progress should take it back off');
+});
+
+test('a canvas finished before any history existed still counts in its month', async () => {
+  const m = await mount();
+  for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
+  // seeded straight to completed, the way an import or an older build leaves it
+  await m.seed({ title: 'Old Finish', status: 'completed', drills: 60000,
+                 date_ordered: '2026-01-01', date_started: '2026-01-05', date_completed: '2026-03-20' });
+  const march = await m.api('/summary?year=2026&month=03');
+  assert.equal(march.totals.placed, 60000, 'a finished canvas with no history was ignored');
+});
+
+test('progress history goes with the project when it is deleted', async () => {
+  const m = await mount();
+  for (const q of await m.api('/projects')) await m.api('/projects/' + q.id, { method: 'DELETE' });
+  const p = await m.seed({ title: 'Doomed', status: 'started', drills: 50000, progress: 0 });
+  await m.api('/projects/' + p.id, { method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ progress: 50 }) });
+  const today = new Date().toISOString().slice(0, 10);
+  const q = `?year=${today.slice(0, 4)}&month=${today.slice(5, 7)}`;
+  assert.equal((await m.api('/summary' + q)).totals.placed, 25000);
+
+  await m.api('/projects/' + p.id, { method: 'DELETE' });
+  assert.equal((await m.api('/summary' + q)).totals.placed, 0,
+               'diamonds placed on a canvas you deleted are not diamonds you placed');
+});
+
+test('a backup carries progress history, and restoring twice does not double it', async () => {
+  const m = await mount();
+  for (const q of await m.api('/projects')) await m.api('/projects/' + q.id, { method: 'DELETE' });
+  const p = await m.seed({ title: 'Tracked', status: 'started', drills: 80000, progress: 0,
+                           date_ordered: '2026-01-01', date_started: '2026-01-05' });
+  await m.api('/projects/' + p.id, { method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ progress: 25 }) });
+
+  const full = await m.api('/projects/' + p.id);
+  assert.equal(full.progress_history.length, 1, 'the project does not carry its history');
+  const backup = JSON.stringify({
+    version: 3, projects: [full], photos: [], sessions: [],
+    progress: full.progress_history.map((h) => ({ ...h, project_id: p.id }))
+  });
+
+  // restore into an empty logbook
+  await m.api('/projects/' + p.id, { method: 'DELETE' });
+  const first = await m.api('/restore', { method: 'POST', body: backup });
+  assert.equal(first.progress, 1, 'the history was not restored');
+
+  const today = new Date().toISOString().slice(0, 10);
+  const q = `?year=${today.slice(0, 4)}&month=${today.slice(5, 7)}`;
+  assert.equal((await m.api('/summary' + q)).totals.placed, 20000);
+
+  // and again: the same diamonds must not be counted twice
+  const second = await m.api('/restore', { method: 'POST', body: backup });
+  assert.equal(second.progress, 0, 'restoring twice duplicated the history');
+  assert.equal((await m.api('/summary' + q)).totals.placed, 20000);
+});
+
+/* The rule that a status implies its earlier dates ran when a status was
+   changed and not when a project was created, so anything added from the
+   catalogue kept the default status and arrived with no dates at all — and then
+   belonged to no month, which is why a year did not add up to All time. */
+test('a project created with a status gets the dates that status implies', async () => {
+  const m = await mount();
+  for (const q of await m.api('/projects')) await m.api('/projects/' + q.id, { method: 'DELETE' });
+
+  const waiting = await m.seed({ title: 'Added from the catalogue', status: 'notReceived' });
+  assert.ok(waiting.date_ordered, 'a kit on its way has no order date');
+
+  const here = await m.seed({ title: 'On the shelf', status: 'received' });
+  assert.ok(here.date_ordered && here.date_received);
+
+  // a wish-list kit has not been bought, so it gets no dates at all
+  const wished = await m.seed({ title: 'Wished for', status: 'wishlist' });
+  assert.ok(!wished.date_ordered && !wished.date_received);
+
+  // and a date you supplied is yours
+  const mine = await m.seed({ title: 'Ordered in February', status: 'received', date_ordered: '2026-02-01' });
+  assert.equal(mine.date_ordered, '2026-02-01');
+
+  // so nothing new lands outside every year
+  assert.equal((await m.api('/summary?year=2026')).totals.undated, 0);
 });
