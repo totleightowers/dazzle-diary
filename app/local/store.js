@@ -502,9 +502,17 @@ export async function localApi(path, opts = {}) {
     const row = (cache && cache.rows || []).find(r => r.shop === shop && r.handle === handle);
     if (row && !row.image) await listingImages(shop, handle);   // fills the row in place
     if (row) return specForRow(row);
-    // not in the catalogue at all — the pictures are still worth having
+    /* Not in the catalogue at all — the pictures are still worth having. Same
+       shape as a real row: callers read these fields straight off whatever this
+       returns, and a missing key is not the same as an empty one. */
     const live = await liveImages(shop, handle);
-    return live.length ? { shop, handle, image: live[0], images: JSON.stringify(live) } : null;
+    if (!live.length) return null;
+    return {
+      kind: 'kit', shop, handle, image: live[0], images: JSON.stringify(live),
+      title: null, artist: null, price: null, currency: null, available: null,
+      width_in: null, height_in: null, shape: null, coverage: null,
+      colors: null, drills: null, special: null, variant_title: null, type: null
+    };
   }
 
   if (p === '/catalogue/search' || p === '/catalogue/browse') {

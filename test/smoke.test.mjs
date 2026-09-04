@@ -641,6 +641,19 @@ const SPEC_HTML = `<ul>
    indistinguishable from one this test's own fetch filled in — which is how a
    test asserting that an empty page yields nothing came back with 95,200. */
 let muniN = 0;
+/* Stand the shop up from a known state. A catalogue sync skips shops that are
+   switched off, and every test in this file shares one database — so a shop
+   another test disabled would simply never sync here, leaving no catalogue row
+   and a test comparing fields on an object that was never a row. */
+const muniMount = async (product) => {
+  const m = await mount({ products: [product], shop: 'muni' });
+  await m.api('/prefs', { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ excluded: [] }) });
+  await m.sync();
+  const [row] = await m.api('/catalogue/browse?shop=muni&limit=5');
+  assert.ok(row, 'the shop did not sync, so nothing below is about what it says it is');
+  return m;
+};
 const muniProduct = (over = {}) => ({
   id: 42, title: "'The Underwater Castle' by Femke Deborah, Diamond Painting Canvas Kit (128)",
   vendor: 'Vancy Arts', handle: 'underwater-castle-' + (++muniN),
@@ -652,8 +665,7 @@ const muniProduct = (over = {}) => ({
 
 test('a kit whose spec is only on the shop page gets it when you own it', async () => {
   const kit = muniProduct();
-  const m = await mount({ products: [kit], shop: 'muni' });
-  await m.sync();
+  const m = await muniMount(kit);
 
   /* Ask for this shop by name. An earlier test walks Settings and taps every
      control, which switches shops off, and that preference outlives it in the
@@ -675,8 +687,7 @@ test('a kit whose spec is only on the shop page gets it when you own it', async 
 
 test('the backfill fills owned projects and never overwrites what you typed', async () => {
   const kit = muniProduct();
-  const m = await mount({ products: [kit], shop: 'muni' });
-  await m.sync();
+  const m = await muniMount(kit);
   for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
 
   const mine = await m.seed({ title: 'The Underwater Castle', status: 'started',
@@ -699,8 +710,7 @@ test('the backfill fills owned projects and never overwrites what you typed', as
 
 test('a shop page with nothing on it is not asked about twice', async () => {
   const kit = muniProduct({ specHtml: '<html><body>nothing here</body></html>' });
-  const m = await mount({ products: [kit], shop: 'muni' });
-  await m.sync();
+  const m = await muniMount(kit);
   const row = await m.api('/catalogue/product?shop=muni&handle=' + kit.handle);
   assert.equal(row.drills, null);
   assert.equal(row.spec_checked, 1, 'an empty page must still be marked as read');
@@ -708,8 +718,7 @@ test('a shop page with nothing on it is not asked about twice', async () => {
 
 test('a counted diamond number stops being an estimate', async () => {
   const kit = muniProduct();
-  const m = await mount({ products: [kit], shop: 'muni' });
-  await m.sync();
+  const m = await muniMount(kit);
   for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
   const p = await m.seed({ title: 'Estimated', status: 'started', shop: 'muni',
                            dac_handle: kit.handle });
