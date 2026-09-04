@@ -1089,3 +1089,21 @@ test('the logbook can show you what still needs filling in', async () => {
   assert.equal(m.find('[data-act="lbgaps"][data-k="dates"]'), null,
                'a filter for a gap that nobody has is just noise');
 });
+
+test('the summary takes you straight to the projects with no dates', async () => {
+  const m = await mount();
+  for (const q of await m.api('/projects')) await m.api('/projects/' + q.id, { method: 'DELETE' });
+  await m.seed({ title: 'Dated', status: 'received', price: 40, date_ordered: '2026-02-02' });
+  const bare = await m.seed({ title: 'Undated', status: 'received', price: 60 });
+  await m.api('/projects/' + bare.id, { method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date_ordered: null, date_received: null }) });
+
+  await m.go('#/summary');
+  await m.tap('[data-act="sumyear"][data-k="2026"]');
+  await m.tap('[data-act="shownodates"]');
+
+  assert.equal(globalThis.location.hash, '#/', 'it should land on the logbook');
+  assert.deepEqual(m.all('.card .name').map((n) => n.textContent), ['Undated'],
+                   'the logbook is not showing the undated projects');
+});

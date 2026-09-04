@@ -2428,7 +2428,8 @@ route(/^#\/summary$/, async () => {
       ${SUMMARY.year && t.undated ? `<p style="margin:-4px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
         ${num(t.undated)} project${t.undated === 1 ? ' has' : 's have'} no order or delivery date, so
         ${t.undated === 1 ? 'it belongs' : 'they belong'} to no year. That is why the years do not add up to All time.
-        Find ${t.undated === 1 ? 'it' : 'them'} under Filters \u2192 Needs filling in \u2192 No dates.</p>` : ''}
+        <button data-act="shownodates" style="color:var(--ink);font-weight:700;text-decoration:underline;font-size:12px">
+          Show ${t.undated === 1 ? 'it' : 'them'}</button></p>` : ''}
 
       ${section('Your stash', [
         pair('Canvas', 'Biggest', r.biggestSize, 'Smallest', r.smallestSize, (_v, x) => sizeOf(x)),
@@ -2879,6 +2880,15 @@ async function handleClick(e) {
     forgetScroll('#/summary'); render();
   }
   else if (act === 'summonth') { SUMMARY.month = el.dataset.k || null; forgetScroll('#/summary'); render(); }
+  /* Straight from "seventeen projects have no date" to looking at the
+     seventeen. Naming a filter and leaving you to find it is most of the work
+     still to do. */
+  else if (act === 'shownodates') {
+    S.lb = { ...S.lb, gaps: 'dates', open: true };
+    S.filter = 'all'; S.q = '';
+    forgetScroll('#/');
+    go('#/');
+  }
   else if (act === 'lbclear') {
     S.lb = { ...S.lb, shop: null, shape: null, size: null, rating: 0, gaps: null, sort: 'recent' };
     repaintLogbook();
