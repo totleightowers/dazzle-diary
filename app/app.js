@@ -1166,13 +1166,16 @@ route(/^#\/p\/(\d+)$/, async (id) => {
                date was always a real picker, it was just three taps away. -->
           <div class="panel pad-in">${[['date_ordered', 'Ordered'], ['date_received', 'Received'],
                                        ['date_started', 'Started'], ['date_completed', 'Completed']].map(([k, l]) => `
-            <label class="row daterow">
+            <!-- a div, not a label. A label forwards a second, synthetic click to
+                 the control it names, and the input already covers the whole row —
+                 so the tap opened the picker and the forwarded click shut it again. -->
+            <div class="row daterow">
               <span class="k">${l}</span>
               <span class="v tnum" style="${p[k] ? '' : 'color:var(--ink-faint);font-weight:400'}">${
                 h(dateText(p[k]) || 'Tap to set')}</span>
               <input type="date" value="${h(p[k] || '')}" aria-label="${l} date"
                      data-act="setdate" data-k="${k}" data-id="${p.id}">
-            </label>`).join('')}</div>
+            </div>`).join('')}</div>
           <p style="margin:6px 2px 0;font-size:12px;color:var(--ink-mute)">Tap a date to change it.
             The status follows the dates, the same as it does everywhere else.</p>
         </div>
@@ -2435,11 +2438,13 @@ route(/^#\/summary$/, async () => {
         Diamonds placed is counted from the progress you have recorded since ${h(dateText(t.historyFrom))}. Work done before that is in the totals but not in any month.</p>` : ''}
       ${SUMMARY.year && !t.historyFrom ? `<p style="margin:-4px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
         Diamonds placed in a month is counted from progress recorded from now on \u2014 move a project's progress and it will start filling in.</p>` : ''}
-      ${SUMMARY.year && t.undated ? `<p style="margin:-4px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
+      ${t.undated ? `<p style="margin:-4px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
         ${num(t.undated)} project${t.undated === 1 ? ' has' : 's have'} no order or delivery date, so
         ${t.undated === 1 ? 'it belongs' : 'they belong'} to no year. That is why the years do not add up to All time.
         <button data-act="shownodates" style="color:var(--ink);font-weight:700;text-decoration:underline;font-size:12px">
-          Show ${t.undated === 1 ? 'it' : 'them'}</button></p>` : ''}
+          Show ${t.undated === 1 ? 'it' : 'them'}</button>
+        <button data-act="backfilldates" style="color:var(--ink);font-weight:700;text-decoration:underline;font-size:12px;margin-left:10px">
+          Use the day ${t.undated === 1 ? 'it was' : 'they were'} added</button></p>` : ''}
 
       ${section('Your stash', [
         pair('Canvas', 'Biggest', r.biggestSize, 'Smallest', r.smallestSize, (_v, x) => sizeOf(x)),
@@ -2893,6 +2898,19 @@ async function handleClick(e) {
   /* Straight from "seventeen projects have no date" to looking at the
      seventeen. Naming a filter and leaving you to find it is most of the work
      still to do. */
+  /* The real order dates are gone. The day a kit was added to the logbook is the
+     closest honest thing left, so it is offered rather than applied: it writes a
+     date you did not choose into a record you keep on purpose. */
+  else if (act === 'backfilldates') {
+    const { candidates } = await api('/projects/backfill-dates');
+    if (!candidates) { toast('Nothing to fill in'); return; }
+    if (!confirm(`Set the order date on ${candidates} project${candidates === 1 ? '' : 's'} `
+               + 'to the day it was added to the logbook? Their real order dates are not '
+               + 'recoverable, and you can change any of them afterwards.')) return;
+    const { filled } = await api('/projects/backfill-dates', { method: 'POST' });
+    toast(`${filled} project${filled === 1 ? '' : 's'} dated`);
+    render();
+  }
   else if (act === 'shownodates') {
     S.lb = { ...S.lb, gaps: 'dates', open: true };
     S.filter = 'all'; S.q = '';

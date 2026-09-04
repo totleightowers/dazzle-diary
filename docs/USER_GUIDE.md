@@ -469,8 +469,12 @@ bought, which would put a record in the wrong year.
 
 A project with no order or delivery date belongs to no year, so the years do not
 add up to All time. New projects get the dates their status implies as soon as
-they are created, so this only affects projects added by older builds; the page
-says how many there are. When a year or month is selected and some projects are
+they are created, so this only affects projects added by older builds. The page
+says how many there are, and offers two ways to deal with them: **Show them**
+filters the logbook to exactly those projects so their dates can be tapped in,
+and **Use the day they were added** sets the order date on all of them to the day
+each was added to the logbook. The second asks first, because the real order
+dates are not recoverable and it writes a date you did not choose. When a year or month is selected and some projects are
 undated, the page says how many rather than leaving the gap unexplained.
 
 ### Records
