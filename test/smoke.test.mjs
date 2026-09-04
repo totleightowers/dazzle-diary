@@ -56,6 +56,13 @@ for (const width of [390, 1028]) {
         assert.ok(!broke(m), `tapping ${act} on ${hash} broke the app (${shape})`);
       }
     }
+    /* Tapping everything includes the shop switches in Settings, and a shop
+       switched off is skipped by a catalogue sync. That preference outlives
+       this test in the one database the file shares, so later tests found
+       shops that would not sync and catalogues that came back empty — twice.
+       Whatever this test turns off, it turns back on. */
+    await m.api('/prefs', { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ excluded: [] }) });
   });
 }
 
