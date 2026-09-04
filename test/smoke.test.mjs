@@ -1123,3 +1123,30 @@ test('the summary takes you straight to the projects with no dates', async () =>
   assert.deepEqual(m.all('.card .name').map((n) => n.textContent), ['Undated'],
                    'the logbook is not showing the undated projects');
 });
+
+/* The date rule ran when a status was tapped, and a new project already has one
+   selected — so add from the catalogue and save, which is the commonest path
+   there is, went through the form with every date box empty. */
+test('a new project shows the dates its status implies before you save', async () => {
+  const m = await mount();
+  for (const q of await m.api('/projects')) await m.api('/projects/' + q.id, { method: 'DELETE' });
+  await m.sync();
+  await m.go('#/browse');
+  await m.tap('[data-act="pickcat"]');
+
+  const ordered = m.find('#date_ordered');
+  assert.ok(ordered, 'the form has no order date field');
+  assert.match(ordered.getAttribute('value'), /^\d{4}-\d{2}-\d{2}$/,
+               'the form shows no order date for a kit that is on its way');
+
+  // what it shows is what it saves
+  await m.tap('[data-act="save"]');
+  const [saved] = await m.api('/projects');
+  assert.equal(saved.date_ordered, ordered.getAttribute('value'));
+
+  // a wish-list kit has not been bought, so the form offers no dates for it
+  await m.go('#/new');
+  await m.tap('#status .opt[data-k="wishlist"]');
+  assert.equal(m.find('#date_ordered').value || '', '',
+               'a kit you have only wished for was given an order date');
+});
