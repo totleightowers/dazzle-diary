@@ -32,6 +32,8 @@ Stores:
 - `projects`
 - `photos`
 - `sessions`
+- `progress` — every change to a project's percentage, with the date and the
+  drill count at the time, so diamonds placed can be attributed to a month
 - `catalogue`
 - `blobs`
 - `meta`
@@ -178,6 +180,7 @@ Dazzle calculates them from:
 - dates
 - sessions
 - holds
+- progress history
 - prices
 
 There is no separate persistent “statistics database”.
@@ -215,11 +218,12 @@ The current payload is version 2 and contains:
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "exportedAt": "...",
   "projects": [],
   "photos": [],
-  "sessions": []
+  "sessions": [],
+  "progress": []
 }
 ```
 
@@ -239,6 +243,7 @@ A full backup carries the parts that matter if the app/private storage is lost:
 - purchase metadata
 - ratings
 - sessions
+- progress history
 - progress photos
 
 ## Why catalogue covers are not embedded
@@ -293,7 +298,7 @@ A backed-up project with no local match is inserted with a new local ID.
 
 Its old cover/gallery filenames are removed before insertion.
 
-The restore then maps the old project ID to the new local ID for sessions and photos.
+The restore then maps the old project ID to the new local ID for sessions, progress history and photos.
 
 ## Sessions
 

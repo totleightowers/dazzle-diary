@@ -1,6 +1,6 @@
 /** Minimal promise wrapper over IndexedDB. Enough for one app, nothing more. */
 const DB_NAME = 'logbook';
-const DB_VERSION = 2;   // 2 added sessions
+const DB_VERSION = 3;   // 2 added sessions, 3 added progress history
 
 let dbp = null;
 export function open() {
@@ -19,6 +19,13 @@ export function open() {
       }
       if (!db.objectStoreNames.contains('sessions')) {
         const s = db.createObjectStore('sessions', { keyPath: 'id', autoIncrement: true });
+        s.createIndex('project_id', 'project_id');
+      }
+      /* Every change to a project's progress, so "diamonds placed in March" can
+         be answered. Only the current percentage was ever kept, which says
+         where a canvas is but nothing about when the work happened. */
+      if (!db.objectStoreNames.contains('progress')) {
+        const s = db.createObjectStore('progress', { keyPath: 'id', autoIncrement: true });
         s.createIndex('project_id', 'project_id');
       }
       if (!db.objectStoreNames.contains('catalogue')) {

@@ -252,6 +252,9 @@ async function withPhotos(p) {
   if (!p) return p;
   p.photos = (await idb.byIndex('photos', 'project_id', p.id))
     .map(({ id, file, caption, taken_at }) => ({ id, file, caption, taken_at }));
+  p.progress_history = (await idb.byIndex('progress', 'project_id', p.id))
+    .map(({ id, on, at, from, to, drills }) => ({ id, on, at, from, to, drills }))
+    .sort((a, b) => String(a.at).localeCompare(String(b.at)));
   p.sessions = (await idb.byIndex('sessions', 'project_id', p.id))
     .map(({ id, on, minutes, note }) => ({ id, on, minutes, note }))
     .sort((a, b) => String(b.on).localeCompare(String(a.on)) || b.id - a.id);
@@ -268,6 +271,22 @@ async function recountHours(projectId) {
   const hours = Math.round(mins / 60 * 100) / 100;
   if (row.hours !== hours) { row.hours = hours; row.updated_at = nowIso(); await idb.put('projects', row); }
   return hours;
+}
+
+/* Only the current percentage was ever kept, which says where a canvas is but
+   nothing about when the work happened — so "diamonds placed in March" had no
+   answer. Every change is recorded from now on: the percentage before and
+   after, and the drill count at the time, since that can be filled in later and
+   would otherwise rewrite history. Nothing can be reconstructed for work done
+   before this existed. */
+async function recordProgress(projectId, before, after, drills) {
+  const from = Math.max(0, Math.min(100, Number(before) || 0));
+  const to = Math.max(0, Math.min(100, Number(after) || 0));
+  if (from === to) return;
+  await idb.put('progress', {
+    project_id: projectId, on: nowIso().slice(0, 10), at: nowIso(),
+    from, to, drills: Number(drills) || 0
+  });
 }
 
 /* Time logged against a project is the plainest possible statement that it has
@@ -630,6 +649,7 @@ export async function localApi(path, opts = {}) {
       if (!row.date_completed) row.date_completed = ts.slice(0, 10);
     }
     const id = await idb.put('projects', row);
+    if (Number(row.progress) > 0) await recordProgress(id, 0, row.progress, row.drills);
     return withPhotos(await idb.get('projects', id));
   }
 
@@ -641,6 +661,7 @@ export async function localApi(path, opts = {}) {
     if (m === 'GET') return withPhotos(row);
     if (m === 'PATCH') {
       const body = json();
+      const was = Number(row.progress) || 0;
       // pointing a project at a different listing makes the old pictures wrong;
       // a cover you chose yourself is yours and survives the relink
       const relinked = 'dac_handle' in body && (body.dac_handle || null) !== (row.dac_handle || null);
@@ -667,6 +688,7 @@ export async function localApi(path, opts = {}) {
       }
       row.updated_at = nowIso();
       await idb.put('projects', row);
+      if ('progress' in body || row.progress !== was) await recordProgress(id, was, row.progress, row.drills);
       return withPhotos(row);
     }
     if (m === 'DELETE') {
@@ -679,6 +701,7 @@ export async function localApi(path, opts = {}) {
          project at a time — but the summary adds them all up, and hours worked
          on a canvas you deleted are not hours you worked. */
       for (const x of await idb.byIndex('sessions', 'project_id', id)) await idb.del('sessions', x.id);
+      for (const x of await idb.byIndex('progress', 'project_id', id)) await idb.del('progress', x.id);
       await idb.del('projects', id);
       return { ok: true };
     }
@@ -919,6 +942,22 @@ export async function localApi(path, opts = {}) {
     }
     for (const [, pid] of idMap) await recountHours(pid);
 
+    /* Progress history: like sessions and photos, nothing can reproduce it —
+       the current percentage says where a canvas is, never when the work
+       happened. Matched on the moment and the two percentages, so restoring the
+       same backup twice does not count the same diamonds twice. */
+    let progressAdded = 0;
+    for (const h of (data.progress || [])) {
+      const pid = idMap.get(h.project_id);
+      if (!pid || h.from == null || h.to == null) continue;
+      const here = await idb.byIndex('progress', 'project_id', pid);
+      if (here.some(x => x.at === h.at && x.from === h.from && x.to === h.to)) continue;
+      await idb.put('progress', { project_id: pid, on: h.on || null, at: h.at || nowIso(),
+                                  from: Number(h.from) || 0, to: Number(h.to) || 0,
+                                  drills: Number(h.drills) || 0 });
+      progressAdded++;
+    }
+
     // progress photos: the only part of a logbook that cannot be re-downloaded
     let photos = 0, photosFailed = 0;
     const seenPhotos = new Set();
@@ -950,7 +989,7 @@ export async function localApi(path, opts = {}) {
     }
 
     return {
-      added, updated, fieldsChanged, sessions: sessionsAdded,
+      added, updated, fieldsChanged, sessions: sessionsAdded, progress: progressAdded,
       skipped: data.projects.length - added - updated,
       photos, photosFailed,
       covers, coversMissing,
@@ -973,6 +1012,7 @@ export async function localApi(path, opts = {}) {
     // sessions left behind by projects deleted before they were cleaned up
     const live = new Set(rows.map(r => r.id));
     const sessions = (await idb.all('sessions')).filter(x => live.has(x.project_id));
+    const history = (await idb.all('progress')).filter(x => live.has(x.project_id));
     const today = nowIso().slice(0, 10);
     const owned = rows.filter(r => r.status !== 'wishlist');
     const acquired = (r) => r.date_ordered || r.date_received || null;
@@ -1009,6 +1049,36 @@ export async function localApi(path, opts = {}) {
     const held = (r) => parseHolds(r).reduce((n, hh) =>
       n + (hh && hh.held ? (span(hh.held, hh.restarted || today) || 0) : 0), 0);
 
+    /* A period has to be applied with the date that belongs to the fact. Time
+       put down is measured by when it was put down, and time at the board by
+       when you sat at it — neither has anything to do with when the kit was
+       bought. Scoping those by the order date is how "longest put down" came to
+       name one canvas for 2026 and a different one for all time: the real
+       record was on a kit bought the year before. */
+    const from = !period ? '0000-01-01' : (period.length === 4 ? `${period}-01-01` : `${period}-01`);
+    const to = !period ? '9999-12-31' : (period.length === 4 ? `${period}-12-31`
+      : new Date(Date.UTC(Number(period.slice(0, 4)), Number(period.slice(5, 7)), 0))
+          .toISOString().slice(0, 10));
+    const overlap = (a, b) => {
+      const start = a > from ? a : from, end = b < to ? b : to;
+      return end < start ? 0 : (span(start, end) || 0);
+    };
+    /** Days this project spent put down inside the period. */
+    const heldIn = (r) => parseHolds(r).reduce((n, hh) =>
+      n + (hh && hh.held ? overlap(hh.held, hh.restarted || today) : 0), 0);
+
+    const sessionsIn = sessions.filter(x => inPeriod(x.on));
+    const byProjectIn = new Map();
+    for (const x of sessionsIn) {
+      const e = byProjectIn.get(x.project_id) || { mins: 0, n: 0, longest: 0 };
+      e.mins += Number(x.minutes) || 0; e.n++;
+      e.longest = Math.max(e.longest, Number(x.minutes) || 0);
+      byProjectIn.set(x.project_id, e);
+    }
+    const timed = rows.filter(r => byProjectIn.has(r.id));
+    const worked = (r) => byProjectIn.get(r.id) || { mins: 0, n: 0, longest: 0 };
+    const putDown = rows.filter(r => heldIn(r) > 0);
+
     const area = (r) => (r.width_in && r.height_in) ? r.width_in * r.height_in : null;
     const one = (list, value, pick) => {
       const cand = list.map(r => ({ r, v: value(r) })).filter(x => x.v != null && Number.isFinite(x.v));
@@ -1023,7 +1093,7 @@ export async function localApi(path, opts = {}) {
 
     const takenIncl = (r) => span(r.date_started, r.date_completed);
     const takenExcl = (r) => { const t = takenIncl(r); return t == null ? null : Math.max(0, t - held(r)); };
-    const everHeld = scope.filter(r => held(r) > 0).length;
+    const everHeld = putDown.length;
     const byProject = (id) => sessions.filter(x => x.project_id === id);
 
     // diamonds placed: finished canvases, plus part-done ones when nothing is
@@ -1031,9 +1101,24 @@ export async function localApi(path, opts = {}) {
     const placedAll = Math.round(owned.filter(r => r.status !== 'abandoned').reduce((n, r) =>
       n + (r.status === 'completed' ? (Number(r.drills) || 0)
                                     : (Number(r.drills) || 0) * (Number(r.progress) || 0) / 100), 0));
-    const placed = period
-      ? finished.reduce((n, r) => n + (Number(r.drills) || 0), 0)
-      : placedAll;
+    /* Diamonds placed inside a period, from the recorded changes: each one
+       carries the percentage before and after and the drill count at the time.
+       Only work done since progress history existed can be counted, so the page
+       says when the record starts rather than quietly reporting a small number
+       as though it were the whole story. */
+    const changedIn = history.filter(x => inPeriod(x.on));
+    const hasHistoryIn = new Set(changedIn.map(x => x.project_id));
+    /* A canvas finished in the period counts in full unless its own progress
+       was recorded during it, in which case the record is the better answer and
+       counting both would count the same diamonds twice. This is what makes the
+       figure right for work done before any history existed. */
+    const placedIn = Math.round(
+      changedIn.reduce((n, x) => n + (Number(x.drills) || 0) * ((x.to - x.from) / 100), 0)
+      + finished.filter(r => !hasHistoryIn.has(r.id))
+                .reduce((n, r) => n + (Number(r.drills) || 0), 0));
+    const historyFrom = history.length
+      ? history.map(x => x.on).sort()[0] : null;
+    const placed = period ? placedIn : placedAll;
     // everything still waiting to be placed, which is a fact about the stash as
     // it stands rather than about any month, so it is only ever the whole thing
     const remaining = Math.max(0, owned.filter(r => r.status !== 'abandoned')
@@ -1076,7 +1161,7 @@ export async function localApi(path, opts = {}) {
         placed, partial: !period,
         days: dayset.size,
         hours: Math.round(mins / 60 * 10) / 10,
-        streak, remaining, undated,
+        streak, remaining, undated, historyFrom,
         /* Adding dollars to pounds gives a number that is not money. Grouped by
            currency, the way the figures in Settings already are. */
         // same shape as the figure in Settings, so the two cannot drift apart
@@ -1102,16 +1187,13 @@ export async function localApi(path, opts = {}) {
         fewestDiamondsFinished: least(finished, r => Number(r.drills) || null),
         longestDays: most(finished, takenIncl), shortestDays: least(finished, takenIncl),
         longestDaysNet: most(finished, takenExcl), shortestDaysNet: least(finished, takenExcl),
-        mostHours: most(scope, r => Number(r.hours) || null),
-        fewestHours: least(scope, r => Number(r.hours) || null),
+        mostHours: most(timed, r => worked(r).mins / 60 || null),
+        fewestHours: least(timed, r => worked(r).mins / 60 || null),
         // diamonds an hour, over canvases you actually finished and timed
         fastest: most(finished, r => (r.hours > 0 && r.drills) ? Math.round(r.drills / r.hours) : null),
         slowest: least(finished, r => (r.hours > 0 && r.drills) ? Math.round(r.drills / r.hours) : null),
-        mostSessions: most(scope, r => byProject(r.id).length || null),
-        longestSession: most(scope, r => {
-          const m = byProject(r.id).map(x => Number(x.minutes) || 0);
-          return m.length ? Math.max(...m) : null;
-        }),
+        mostSessions: most(timed, r => worked(r).n || null),
+        longestSession: most(timed, r => worked(r).longest || null),
         /* Ranked within one currency, because the app has no exchange rates and
            never will offline — comparing a $90 kit with an £80 one would be a
            guess dressed as a fact. The currency chosen is the one you have
@@ -1122,7 +1204,7 @@ export async function localApi(path, opts = {}) {
         // compare a small dear kit with a big cheap one
         bestValue: least(bought.filter(inMainCurrency), r => (r.price > 0 && r.drills > 0)
           ? Math.round(r.price / (r.drills / 1000) * 100) / 100 : null),
-        longestHeld: most(scope, r => held(r) || null)
+        longestHeld: most(putDown, r => heldIn(r) || null)
       },
       favourites: {
         artist: counted(scope, r => r.artist),

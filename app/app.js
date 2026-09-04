@@ -2393,7 +2393,7 @@ route(/^#\/summary$/, async () => {
         tile(t.bought, num(t.bought), SUMMARY.year ? 'paintings bought' : 'paintings owned'),
         tile(t.placed, bigNum(t.placed), t.partial
           ? 'diamonds placed — finished canvases plus how far you are through the rest'
-          : 'diamonds in what you finished', 'var(--st-started)'),
+          : 'diamonds placed', 'var(--st-started)'),
         tile(t.days, num(t.days), `day${t.days === 1 ? '' : 's'} at the board`),
         tile(t.hours, hoursText(t.hours), 'hours logged'),
         tile(t.streak, num(t.streak), `day${t.streak === 1 ? '' : 's'} in a row — your longest run`),
@@ -2407,6 +2407,10 @@ route(/^#\/summary$/, async () => {
         // the other half of the diamond picture, and only ever a whole-stash one
         tile(!SUMMARY.year && t.remaining, bigNum(t.remaining), 'still to place across the rest of the stash')
       )}
+      ${SUMMARY.year && t.historyFrom ? `<p style="margin:-4px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
+        Diamonds placed is counted from the progress you have recorded since ${h(dateText(t.historyFrom))}. Work done before that is in the totals but not in any month.</p>` : ''}
+      ${SUMMARY.year && !t.historyFrom ? `<p style="margin:-4px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
+        Diamonds placed in a month is counted from progress recorded from now on \u2014 move a project's progress and it will start filling in.</p>` : ''}
       ${SUMMARY.year && t.undated ? `<p style="margin:-4px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
         ${num(t.undated)} project${t.undated === 1 ? ' has' : 's have'} no order or delivery date, so
         ${t.undated === 1 ? 'it belongs' : 'they belong'} to no year. That is why the years do not add up to All time.</p>` : ''}
@@ -2473,6 +2477,7 @@ route(/^#\/settings$/, async () => {
         const res = await api('/restore', { method: 'POST', body: await f.text() });
         const bits = [`${res.added} added`];
         if (res.updated) bits.push(`${res.updated} updated (${res.fieldsChanged} fields)`);
+        if (res.progress) bits.push(`${res.progress} progress entries`);
         if (res.skipped) bits.push(`${res.skipped} unchanged`);
         bits.push(`${res.photos} photos`);
         if (res.photosFailed) bits.push(`${res.photosFailed} photos could not be read`);
@@ -2878,10 +2883,13 @@ async function handleClick(e) {
       const projects = await api('/projects');
       const photos = [];
       const sessions = [];
+      const progress = [];
       let n = 0;
       for (const p of projects) {
         const full = await api('/projects/' + p.id);
         for (const se of (full.sessions || [])) sessions.push({ ...se, project_id: p.id });
+        // when the work happened, which the current percentage cannot say
+        for (const h of (full.progress_history || [])) progress.push({ ...h, project_id: p.id });
         for (const ph of (full.photos || [])) {
           say(`Shrinking photo ${++n}…`);
           const res = await fetch('/photos/' + encodeURIComponent(ph.file));
@@ -2893,13 +2901,14 @@ async function handleClick(e) {
           photos.push({ ...ph, project_id: p.id, data: btoa(bin) });
         }
       }
-      const json = JSON.stringify({ version: 2, exportedAt: new Date().toISOString(),
-                                    projects, photos, sessions });
+      const json = JSON.stringify({ version: 3, exportedAt: new Date().toISOString(),
+                                    projects, photos, sessions, progress });
       const blob = new Blob([json], { type: 'application/json' });
       say('Writing the file…');
       const where = await saveToPhone('dazzle-diary-backup.json', blob);
       say(`Saved to ${where} — ${projects.length} projects, ${photos.length} photos, ${
-        sessions.length} sessions, ${(blob.size / 1048576).toFixed(1)} MB`);
+        sessions.length} sessions, ${progress.length} progress entries, ${
+        (blob.size / 1048576).toFixed(1)} MB`);
       toast('Backup saved');
     } catch (e) { say(e.message); }
     el.disabled = false;

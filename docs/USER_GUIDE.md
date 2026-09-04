@@ -452,6 +452,16 @@ Depending on the selected period, Summary can show:
 - diamonds still to place across the rest of the stash (All time only, since it
   is a fact about the stash as it stands rather than about a month)
 
+Diamonds placed in a month is counted from **progress history**: every change to
+a project's percentage is recorded with the date and the drill count at the time.
+Only work done since that record began can be attributed to a month — nothing can
+be reconstructed for earlier work — so a canvas finished in a month with no
+recorded history still counts in full, and the page says when the record starts.
+
+Time put down is measured by the dates of the holds themselves, and time at the
+board by the dates of the sessions. Neither is scoped by when the kit was
+bought, which would put a record in the wrong year.
+
 A project with no order or delivery date belongs to no year, so the years do not
 add up to All time. When a year or month is selected and some projects are
 undated, the page says how many rather than leaving the gap unexplained.
