@@ -11,7 +11,7 @@ import * as idb from './idb.js';
 import { SHOPS, shopById, toRow } from '../core/shops.js';
 import { norm } from '../core/match.js';
 import { buildPreview } from '../core/import.js';
-import { parseHolds } from '../core/status.js';
+import { parseHolds, applyStatus } from '../core/status.js';
 
 export const PROXY = '/__net/?url=';
 const via = (url) => PROXY + encodeURIComponent(url);
@@ -644,6 +644,19 @@ export async function localApi(path, opts = {}) {
     const ts = nowIso();
     const row = { created_at: ts, updated_at: ts, hours: 0, progress: 0 };
     for (const f of PROJECT_FIELDS) if (body[f] !== undefined) row[f] = body[f];
+    /* The rule that a status implies its earlier dates ran when a status was
+       CHANGED and not when a project was created, so anything added from the
+       catalogue kept the default status and arrived with no dates at all. Those
+       projects then belonged to no month, and the year never added up to All
+       time. Dates you supplied yourself are left exactly as they are. */
+    if (row.status) {
+      const implied = applyStatus(row, row.status, ts.slice(0, 10));
+      // fill only. applyStatus also CLEARS the dates a status has moved back
+      // past, which is right when you change one and wrong when you state one:
+      // a completion date given at creation is a fact, not a leftover.
+      for (const [k, v] of Object.entries(implied))
+        if (k.startsWith('date_') && v && !row[k]) row[k] = v;
+    }
     if (Number(row.progress) >= 100 && row.status !== 'completed' && row.status !== 'abandoned') {
       row.status = 'completed';
       if (!row.date_completed) row.date_completed = ts.slice(0, 10);

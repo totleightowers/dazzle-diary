@@ -463,7 +463,9 @@ board by the dates of the sessions. Neither is scoped by when the kit was
 bought, which would put a record in the wrong year.
 
 A project with no order or delivery date belongs to no year, so the years do not
-add up to All time. When a year or month is selected and some projects are
+add up to All time. New projects get the dates their status implies as soon as
+they are created, so this only affects projects added by older builds; the page
+says how many there are. When a year or month is selected and some projects are
 undated, the page says how many rather than leaving the gap unexplained.
 
 ### Records

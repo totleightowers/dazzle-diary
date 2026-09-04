@@ -857,7 +857,12 @@ test('a project with no order date is accounted for rather than quietly dropped'
   const m = await mount();
   for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
   await m.seed({ title: 'Dated', status: 'received', price: 40, drills: 10000, date_ordered: '2026-02-02' });
-  await m.seed({ title: 'No date at all', status: 'received', price: 60, drills: 20000 });
+  /* A project created now gets the dates its status implies, so an undated one
+     has to be made the way older builds left them: dates cleared afterwards. */
+  const undated = await m.seed({ title: 'No date at all', status: 'received', price: 60, drills: 20000 });
+  await m.api('/projects/' + undated.id, { method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date_ordered: null, date_received: null }) });
 
   const all = await m.api('/summary');
   const year = await m.api('/summary?year=2026');
@@ -1008,4 +1013,30 @@ test('a backup carries progress history, and restoring twice does not double it'
   const second = await m.api('/restore', { method: 'POST', body: backup });
   assert.equal(second.progress, 0, 'restoring twice duplicated the history');
   assert.equal((await m.api('/summary' + q)).totals.placed, 20000);
+});
+
+/* The rule that a status implies its earlier dates ran when a status was
+   changed and not when a project was created, so anything added from the
+   catalogue kept the default status and arrived with no dates at all — and then
+   belonged to no month, which is why a year did not add up to All time. */
+test('a project created with a status gets the dates that status implies', async () => {
+  const m = await mount();
+  for (const q of await m.api('/projects')) await m.api('/projects/' + q.id, { method: 'DELETE' });
+
+  const waiting = await m.seed({ title: 'Added from the catalogue', status: 'notReceived' });
+  assert.ok(waiting.date_ordered, 'a kit on its way has no order date');
+
+  const here = await m.seed({ title: 'On the shelf', status: 'received' });
+  assert.ok(here.date_ordered && here.date_received);
+
+  // a wish-list kit has not been bought, so it gets no dates at all
+  const wished = await m.seed({ title: 'Wished for', status: 'wishlist' });
+  assert.ok(!wished.date_ordered && !wished.date_received);
+
+  // and a date you supplied is yours
+  const mine = await m.seed({ title: 'Ordered in February', status: 'received', date_ordered: '2026-02-01' });
+  assert.equal(mine.date_ordered, '2026-02-01');
+
+  // so nothing new lands outside every year
+  assert.equal((await m.api('/summary?year=2026')).totals.undated, 0);
 });
