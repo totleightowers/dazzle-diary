@@ -56,6 +56,13 @@ for (const width of [390, 1028]) {
         assert.ok(!broke(m), `tapping ${act} on ${hash} broke the app (${shape})`);
       }
     }
+    /* Tapping everything includes the shop switches in Settings, and a shop
+       switched off is skipped by a catalogue sync. That preference outlives
+       this test in the one database the file shares, so later tests found
+       shops that would not sync and catalogues that came back empty — twice.
+       Whatever this test turns off, it turns back on. */
+    await m.api('/prefs', { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ excluded: [] }) });
   });
 }
 
@@ -223,12 +230,23 @@ test('cost and dates are corrected where they are read', async () => {
   assert.equal(row.currency, 'GBP', 'the currency chips did nothing');
   assert.equal(row.price_source, 'you', 'a price typed by hand is still credited to the catalogue');
 
+  /* The timeline row is the control now: tap the date, pick one, done. No
+     disclosure to open and no Save to find. */
   await m.go('#/p/' + p.id);
-  m.find('#tl_date_started').value = '2026-08-20';
-  await m.tap('[data-act="savedates"]');
+  const started = m.find('[data-act="setdate"][data-k="date_started"]');
+  assert.ok(started, 'the timeline has no way to set a date');
+  started.value = '2026-08-20';
+  started.dispatchEvent({ type: 'change', target: started });
+  await m.settle();
   row = await m.api('/projects/' + p.id);
   assert.equal(row.date_started, '2026-08-20');
   assert.equal(row.status, 'started', 'the status did not follow the dates');
+
+  // an empty one invites a tap rather than showing nothing
+  await m.go('#/p/' + p.id);
+  const empty = m.find('[data-act="setdate"][data-k="date_completed"]');
+  assert.equal(empty.getAttribute('value'), '');
+  assert.match(empty.parentElement.textContent, /Tap to set/);
 });
 
 test('the project leads with managing it, not with editing the record', async () => {
@@ -623,6 +641,19 @@ const SPEC_HTML = `<ul>
    indistinguishable from one this test's own fetch filled in — which is how a
    test asserting that an empty page yields nothing came back with 95,200. */
 let muniN = 0;
+/* Stand the shop up from a known state. A catalogue sync skips shops that are
+   switched off, and every test in this file shares one database — so a shop
+   another test disabled would simply never sync here, leaving no catalogue row
+   and a test comparing fields on an object that was never a row. */
+const muniMount = async (product) => {
+  const m = await mount({ products: [product], shop: 'muni' });
+  await m.api('/prefs', { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ excluded: [] }) });
+  await m.sync();
+  const [row] = await m.api('/catalogue/browse?shop=muni&limit=5');
+  assert.ok(row, 'the shop did not sync, so nothing below is about what it says it is');
+  return m;
+};
 const muniProduct = (over = {}) => ({
   id: 42, title: "'The Underwater Castle' by Femke Deborah, Diamond Painting Canvas Kit (128)",
   vendor: 'Vancy Arts', handle: 'underwater-castle-' + (++muniN),
@@ -634,8 +665,7 @@ const muniProduct = (over = {}) => ({
 
 test('a kit whose spec is only on the shop page gets it when you own it', async () => {
   const kit = muniProduct();
-  const m = await mount({ products: [kit], shop: 'muni' });
-  await m.sync();
+  const m = await muniMount(kit);
 
   /* Ask for this shop by name. An earlier test walks Settings and taps every
      control, which switches shops off, and that preference outlives it in the
@@ -657,8 +687,7 @@ test('a kit whose spec is only on the shop page gets it when you own it', async 
 
 test('the backfill fills owned projects and never overwrites what you typed', async () => {
   const kit = muniProduct();
-  const m = await mount({ products: [kit], shop: 'muni' });
-  await m.sync();
+  const m = await muniMount(kit);
   for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
 
   const mine = await m.seed({ title: 'The Underwater Castle', status: 'started',
@@ -681,8 +710,7 @@ test('the backfill fills owned projects and never overwrites what you typed', as
 
 test('a shop page with nothing on it is not asked about twice', async () => {
   const kit = muniProduct({ specHtml: '<html><body>nothing here</body></html>' });
-  const m = await mount({ products: [kit], shop: 'muni' });
-  await m.sync();
+  const m = await muniMount(kit);
   const row = await m.api('/catalogue/product?shop=muni&handle=' + kit.handle);
   assert.equal(row.drills, null);
   assert.equal(row.spec_checked, 1, 'an empty page must still be marked as read');
@@ -690,8 +718,7 @@ test('a shop page with nothing on it is not asked about twice', async () => {
 
 test('a counted diamond number stops being an estimate', async () => {
   const kit = muniProduct();
-  const m = await mount({ products: [kit], shop: 'muni' });
-  await m.sync();
+  const m = await muniMount(kit);
   for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
   const p = await m.seed({ title: 'Estimated', status: 'started', shop: 'muni',
                            dac_handle: kit.handle });
@@ -1039,4 +1066,60 @@ test('a project created with a status gets the dates that status implies', async
 
   // so nothing new lands outside every year
   assert.equal((await m.api('/summary?year=2026')).totals.undated, 0);
+});
+
+/* A logbook built over months has gaps in it, and the only way to find them was
+   to open everything. A project with no order date is the one that matters:
+   it belongs to no month and falls quietly out of every year. */
+test('the logbook can show you what still needs filling in', async () => {
+  const m = await mount();
+  for (const q of await m.api('/projects')) await m.api('/projects/' + q.id, { method: 'DELETE' });
+  const complete = await m.seed({ title: 'All there', status: 'received', price: 50,
+                                  drills: 40000, width_in: 20, height_in: 20, date_ordered: '2026-02-01' });
+  const bare = await m.seed({ title: 'Nothing known', status: 'received' });
+  // older builds left projects with no dates at all
+  await m.api('/projects/' + bare.id, { method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date_ordered: null, date_received: null }) });
+
+  await m.go('#/');
+  await m.tap('[data-act="lbfilters"]');
+  const chip = m.find('[data-act="lbgaps"][data-k="dates"]');
+  assert.ok(chip, 'there is no way to find the projects with no dates');
+  assert.match(chip.textContent, /No dates · 1/, chip.textContent);
+
+  await m.tap('[data-act="lbgaps"][data-k="dates"]');
+  const titles = m.all('.card .name').map((n) => n.textContent);
+  assert.deepEqual(titles, ['Nothing known']);
+
+  // tapping it again turns it off, like every other filter
+  await m.tap('[data-act="lbgaps"][data-k="dates"]');
+  assert.equal(m.all('.card .name').length, 2);
+
+  // and a gap nobody has is not offered
+  await m.api('/projects/' + bare.id, { method: 'DELETE' });
+  await m.api('/projects/' + complete.id, { method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ price: 50 }) });
+  await m.go('#/');
+  await m.tap('[data-act="lbfilters"]');
+  assert.equal(m.find('[data-act="lbgaps"][data-k="dates"]'), null,
+               'a filter for a gap that nobody has is just noise');
+});
+
+test('the summary takes you straight to the projects with no dates', async () => {
+  const m = await mount();
+  for (const q of await m.api('/projects')) await m.api('/projects/' + q.id, { method: 'DELETE' });
+  await m.seed({ title: 'Dated', status: 'received', price: 40, date_ordered: '2026-02-02' });
+  const bare = await m.seed({ title: 'Undated', status: 'received', price: 60 });
+  await m.api('/projects/' + bare.id, { method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date_ordered: null, date_received: null }) });
+
+  await m.go('#/summary');
+  await m.tap('[data-act="sumyear"][data-k="2026"]');
+  await m.tap('[data-act="shownodates"]');
+
+  assert.equal(globalThis.location.hash, '#/', 'it should land on the logbook');
+  assert.deepEqual(m.all('.card .name').map((n) => n.textContent), ['Undated'],
+                   'the logbook is not showing the undated projects');
 });

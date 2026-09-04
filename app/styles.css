@@ -326,6 +326,16 @@ img { max-width: 100%; display: block; }
 .row:last-child { border-bottom: 0; }
 .row .k { font-size: 13px; color: var(--ink-mute); }
 .row .v { font-size: 14px; font-weight: 600; text-align: right; }
+/* The whole row opens the picker. A bare date input shows dd/mm/yyyy when it is
+   empty and cannot say "Tap to set", so the text stays ours and the real input
+   lies over the row, invisible and full size. */
+.daterow { position: relative; cursor: pointer; }
+.daterow > input[type="date"] {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  margin: 0; padding: 0; border: 0; background: transparent;
+  opacity: 0; -webkit-appearance: none; appearance: none;
+}
+.daterow:active { background: var(--sunken); }
 .label { display: block; margin-bottom: 6px; font-size: 11px; font-weight: 700;
          letter-spacing: 0.07em; text-transform: uppercase; color: var(--ink-mute); }
 .stack { display: flex; flex-direction: column; gap: 16px; }
