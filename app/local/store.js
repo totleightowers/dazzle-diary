@@ -12,6 +12,7 @@ import { SHOPS, shopById, toRow } from '../core/shops.js';
 import { norm } from '../core/match.js';
 import { buildPreview } from '../core/import.js';
 import { parseHolds, applyStatus } from '../core/status.js';
+import { estimateDrills } from '../core/estimate.js';
 
 export const PROXY = '/__net/?url=';
 const via = (url) => PROXY + encodeURIComponent(url);
@@ -98,7 +99,11 @@ async function liveSpec(shopId, handle) {
 }
 
 const SPEC_FIELDS = ['width_in', 'height_in', 'drills', 'colors', 'special'];
-const needsSpec = (r) => !!r && SPEC_FIELDS.some(f => r[f] == null);
+/* An estimated diamond count is a guess standing in for a fact, so it does not
+   count as filled: without this the estimate blocked the shop's real number
+   from ever being fetched, and a guess would have outlived the truth. */
+const blank = (r, f) => r[f] == null || (f === 'drills' && !!r.drills_estimated);
+const needsSpec = (r) => !!r && SPEC_FIELDS.some(f => blank(r, f));
 
 /** Fill a catalogue row's spec from the shop's own page. Returns the row. */
 async function specForRow(row) {
@@ -152,7 +157,7 @@ export async function backfillSpec(onProgress) {
     if (!found) continue;
     let changed = false;
     for (const f of SPEC_FIELDS) {
-      if (row[f] == null && found[f] != null) { row[f] = found[f]; changed = true; }
+      if (blank(row, f) && found[f] != null) { row[f] = found[f]; changed = true; }
     }
     // a counted number is not an estimate any more
     if (changed && row.drills && row.drills_estimated) row.drills_estimated = 0;
@@ -271,6 +276,47 @@ async function recountHours(projectId) {
   const hours = Math.round(mins / 60 * 100) / 100;
   if (row.hours !== hours) { row.hours = hours; row.updated_at = nowIso(); await idb.put('projects', row); }
   return hours;
+}
+
+/* What a listing can tell a project, for the fields the project has nothing in.
+   Relinking used to move the pointer and refresh the covers and no more, so a
+   project linked to a listing full of detail sat there with its own blanks. It
+   fills only: everything you typed is yours, and relinking is not a reason to
+   lose it. */
+const FROM_LISTING = ['artist', 'shape', 'coverage', 'width_in', 'height_in',
+                      'colors', 'drills', 'special'];
+
+async function fillFromListing(row) {
+  if (!row.dac_handle || !row.shop) return 0;
+  let listing = (cache && cache.rows || []).find(r => r.shop === row.shop && r.handle === row.dac_handle);
+  // the page carries what the feed leaves out for some shops
+  if (listing && needsSpec(listing)) listing = await specForRow(listing);
+  if (!listing) return 0;
+  let filled = 0;
+  for (const f of FROM_LISTING) {
+    if (blank(row, f) && listing[f] != null) { row[f] = listing[f]; filled++; }
+  }
+  if (row.price == null && listing.price != null) {
+    row.price = listing.price;
+    row.price_source = 'catalogue';
+    if (!row.currency && listing.currency) row.currency = listing.currency;
+    filled++;
+  }
+  if (row.drills != null) row.drills_estimated = 0;
+  return filled;
+}
+
+/* A canvas size implies roughly how many diamonds cover it, and that estimate
+   was only ever applied by the order importer — so a kit added from the
+   catalogue, or by hand, from a shop that publishes no count had nothing at
+   all. It is marked as an estimate, and a real count replaces it. */
+function estimateIfEmpty(row) {
+  if (row.drills != null) return false;
+  const n = estimateDrills(row.width_in, row.height_in, row.shape);
+  if (n == null) return false;
+  row.drills = n;
+  row.drills_estimated = 1;
+  return true;
 }
 
 /* Only the current percentage was ever kept, which says where a canvas is but
@@ -669,6 +715,8 @@ export async function localApi(path, opts = {}) {
       row.status = 'completed';
       if (!row.date_completed) row.date_completed = ts.slice(0, 10);
     }
+    try { await catalogue(); await fillFromListing(row); } catch { /* offline: what was typed still saves */ }
+    estimateIfEmpty(row);
     const id = await idb.put('projects', row);
     if (Number(row.progress) > 0) await recordProgress(id, 0, row.progress, row.drills);
     return withPhotos(await idb.get('projects', id));
@@ -697,8 +745,11 @@ export async function localApi(path, opts = {}) {
             row.cover = own[0] || g[0];
             row.covers = JSON.stringify([...own, ...g]);
           }
+          await fillFromListing(row);
         } catch { /* covers are cosmetic; never fail a save over them */ }
       }
+      // a size with no count is still worth an estimate, however it got here
+      estimateIfEmpty(row);
       /* Finishing a canvas means the same thing wherever it is said. The slider
          on the project page enforced it and the form did not, so the form could
          leave a project at 100% and still Started with no completion date. The

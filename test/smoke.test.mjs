@@ -721,10 +721,17 @@ test('a counted diamond number stops being an estimate', async () => {
   const kit = muniProduct();
   const m = await muniMount(kit);
   for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
-  const p = await m.seed({ title: 'Estimated', status: 'started', shop: 'muni',
-                           dac_handle: kit.handle });
+
+  // a linked kit now takes the shop's own count as it is created
+  const p = await m.seed({ title: 'Linked', status: 'started', shop: 'muni', dac_handle: kit.handle });
+  assert.equal(p.drills, 95200, 'the count on the shop page did not come across');
+  assert.ok(!p.drills_estimated);
+
+  /* An older build left projects carrying an estimate and no real count. The
+     backfill still has to replace one when the shop turns out to publish it. */
   await m.api('/projects/' + p.id, { method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ drills_estimated: 1 }) });
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ drills: null, drills_estimated: 1 }) });
   await m.sync();
   const after = await m.api('/projects/' + p.id);
   assert.equal(after.drills, 95200);
@@ -1247,4 +1254,91 @@ test('the tap that opens a date picker does not itself save anything', async () 
   const row = await m.api('/projects/' + p.id);
   assert.equal(row.date_started, '2026-08-20');
   assert.equal(row.status, 'started', 'the status did not follow the date');
+});
+
+/* A canvas size implies roughly how many diamonds cover it, and that estimate
+   was only ever applied by the order importer — so a kit added from the
+   catalogue or by hand, from a shop that publishes no count, had nothing. */
+test('a canvas with a size gets an estimated diamond count however it arrived', async () => {
+  const m = await mount();
+  for (const q of await m.api('/projects')) await m.api('/projects/' + q.id, { method: 'DELETE' });
+
+  const byHand = await m.seed({ title: 'By hand', status: 'received',
+                                width_in: 24, height_in: 32, shape: 'Square' });
+  assert.ok(byHand.drills > 0, 'a canvas with a size got no estimate');
+  assert.equal(byHand.drills_estimated, 1, 'the estimate is not marked as one');
+
+  // no shape, no estimate: the density depends on it
+  const noShape = await m.seed({ title: 'No shape', status: 'received', width_in: 24, height_in: 32 });
+  assert.ok(!noShape.drills, 'guessed a count with no drill shape to go on');
+
+  // and a real count is never replaced by a guess
+  const counted = await m.seed({ title: 'Counted', status: 'received', width_in: 24, height_in: 32,
+                                 shape: 'Square', drills: 12345 });
+  assert.equal(counted.drills, 12345);
+  assert.ok(!counted.drills_estimated);
+});
+
+test('relinking fills the blanks from the listing and leaves the rest alone', async () => {
+  const m = await mount();
+  for (const q of await m.api('/projects')) await m.api('/projects/' + q.id, { method: 'DELETE' });
+  await m.sync();
+
+  // a project with almost nothing on it, and one thing typed by hand
+  const p = await m.seed({ title: 'Blank', status: 'received', colors: 7 });
+  const linked = await m.api('/projects/' + p.id, { method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dac_handle: 'moon-eater', shop: 'dac' }) });
+
+  assert.equal(linked.artist, 'Yuumei Art', 'relinking brought across no artist');
+  assert.ok(linked.width_in > 0 && linked.height_in > 0, 'no canvas size came across');
+  assert.ok(linked.drills > 0, 'no diamond count came across');
+  assert.equal(linked.shape, 'Square');
+  assert.ok(linked.price > 0, 'no price came across');
+  assert.equal(linked.price_source, 'catalogue', 'a price from the shop should say where it came from');
+  // the colour count was typed, so it stays as it was
+  assert.equal(linked.colors, 7, 'relinking overwrote a value that was typed by hand');
+
+  // relinking again changes nothing that is now filled in
+  const again = await m.api('/projects/' + p.id, { method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dac_handle: 'moon-eater-2', shop: 'dac' }) });
+  assert.equal(again.colors, 7);
+  assert.equal(again.artist, 'Yuumei Art');
+});
+
+test('a kit picked from the catalogue arrives with its details filled in', async () => {
+  const m = await mount();
+  for (const q of await m.api('/projects')) await m.api('/projects/' + q.id, { method: 'DELETE' });
+  await m.sync();
+  await m.go('#/browse');
+  await m.tap('[data-act="pickcat"]');
+  await m.tap('[data-act="save"]');
+
+  const [saved] = await m.api('/projects');
+  assert.equal(saved.artist, 'Yuumei Art');
+  assert.ok(saved.drills > 0, 'the diamond count did not come across');
+  assert.ok(saved.colors > 0);
+  assert.ok(saved.date_ordered, 'and it should still get the date its status implies');
+});
+
+test('an estimated count never blocks the real one', async () => {
+  const kit = muniProduct();
+  const m = await muniMount(kit);
+  for (const q of await m.api('/projects')) await m.api('/projects/' + q.id, { method: 'DELETE' });
+
+  /* A size with no count gets an estimate. An estimate is a number, so it would
+     have looked like a filled field and stopped the shop's real count ever
+     being fetched — a guess outliving the truth. */
+  const p = await m.seed({ title: 'Guessed', status: 'started', width_in: 20, height_in: 24, shape: 'Square' });
+  assert.ok(p.drills > 0 && p.drills_estimated, 'no estimate was made');
+  const guess = p.drills;
+
+  await m.api('/projects/' + p.id, { method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ shop: 'muni', dac_handle: kit.handle }) });
+  const after = await m.api('/projects/' + p.id);
+
+  assert.equal(after.drills, 95200, `the estimate of ${guess} was never replaced`);
+  assert.ok(!after.drills_estimated, 'it is a counted number now, not an estimate');
 });

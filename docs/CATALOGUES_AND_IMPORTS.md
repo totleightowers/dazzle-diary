@@ -140,6 +140,17 @@ Some feeds are incomplete.
 
 Munimade, for example, publishes fields such as diamond count, image size and colour count on the product page rather than the JSON feed.
 
+Relinking a project brings across everything the listing knows that the project
+does not: artist, canvas size, drill shape, coverage, colour count, diamond
+count, special diamonds, and a price if the project has none. It fills only —
+anything already typed is left exactly as it is — and the same fill runs when a
+project is created against a listing.
+
+Where no diamond count is published anywhere, one is estimated from the canvas
+size and drill shape and marked as an estimate. An estimate never blocks the
+real number: it is treated as a blank, so a shop that later turns out to publish
+a count replaces it.
+
 Fetching every product page during sync would be unnecessarily heavy.
 
 The pattern is:
