@@ -1217,3 +1217,34 @@ test('the summary offers the backfill, and asks first', async () => {
   await m.tap('[data-act="backfilldates"]');
   assert.ok((await m.api('/projects/' + bare.id)).date_ordered);
 });
+
+/* The tap that opens a date picker must do nothing else. The input carries a
+   data-act so a pick can be routed, and the click delegation matched the same
+   attribute — so opening the calendar also ran the save, which re-rendered the
+   page and took the input, and the picker with it, out from under the finger.
+   The earlier test only ever dispatched `change`, so it never saw this. */
+test('the tap that opens a date picker does not itself save anything', async () => {
+  const m = await mount();
+  const p = await m.seed({ title: 'Moon Eater', status: 'received',
+                           date_ordered: '2026-03-01', date_received: '2026-03-08' });
+  await m.go('#/p/' + p.id);
+
+  const el = m.find('[data-act="setdate"][data-k="date_started"]');
+  const before = m.find('.daterow');
+  el.dispatchEvent({ type: 'click' });
+  await m.settle();
+
+  // nothing saved, nothing navigated, and the row was not rebuilt underneath it
+  assert.equal((await m.api('/projects/' + p.id)).date_started ?? null, null,
+               'opening the picker saved a date on its own');
+  assert.equal(globalThis.location.hash, '#/p/' + p.id);
+  assert.equal(m.find('.daterow'), before, 'the page re-rendered and took the picker with it');
+
+  // and the pick itself still works
+  el.value = '2026-08-20';
+  el.dispatchEvent({ type: 'change' });
+  await m.settle();
+  const row = await m.api('/projects/' + p.id);
+  assert.equal(row.date_started, '2026-08-20');
+  assert.equal(row.status, 'started', 'the status did not follow the date');
+});

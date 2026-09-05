@@ -2866,7 +2866,7 @@ document.addEventListener('pointercancel', dragCleanup);
 document.addEventListener('change', (e) => {
   const el = e.target && e.target.closest && e.target.closest('[data-act="setdate"]');
   if (!el) return;
-  handleClick({ target: el }).catch((err) => {
+  handleClick({ target: el, type: 'change' }).catch((err) => {
     console.error(err);
     toast(err && err.message ? err.message : 'Something went wrong');
   });
@@ -2886,6 +2886,13 @@ async function handleClick(e) {
   const el = e.target.closest('[data-act]');
   if (!el) return;
   const act = el.dataset.act;
+
+  /* A date row answers to `change`, never to the click that opened its picker.
+     Without this the tap that opens the calendar also runs the save below,
+     which re-renders the page and takes the input — and the picker with it —
+     out from under the finger. That is what "it pops up and immediately
+     disappears" was, and removing the label around the row did not touch it. */
+  if (act === 'setdate' && e.type !== 'change') return;
 
   if (act === 'filter') { S.filter = el.dataset.k; repaintLogbook(); }
   else if (act === 'lbfilters') { S.lb.open = !S.lb.open; paintLogbook(); }
