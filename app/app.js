@@ -413,7 +413,8 @@ const S = {
              scroll: 0, open: false, loaded: false },
   facets: null,
   importSel: new Set(),
-  importTab: 'new'
+  importTab: 'new',
+  importShop: 'dac'
 };
 
 /* --------------------------------------------------------------- fragments */
@@ -1884,15 +1885,32 @@ function paintNeedsCatalogue() {
   </div>`;
 }
 
-function paintImportPick() {
+function paintImportPick(state) {
+  /* An order history only makes sense against the shop it came from: the titles
+     are matched to that shop's catalogue. This always assumed Diamond Art Club,
+     silently, so an order history from anywhere else was matched against the
+     wrong catalogue and simply found nothing. */
+  const shops = ((state && state.catalogue && state.catalogue.shops) || []).filter((sh) => sh.kits);
+  if (!shops.some((sh) => sh.id === S.importShop)) S.importShop = (shops[0] || {}).id || 'dac';
+  const chosen = shops.find((sh) => sh.id === S.importShop);
+
   $out.innerHTML = `
   <div class="screen reading">
     <div class="topbar">${topbar('Import orders', { back: '#/', sub: true })}</div>
     <div class="scroll pad stack" style="padding-top:20px;padding-bottom:26px">
+      ${shops.length ? `<div>
+        <h3 class="label">Which shop is this order history from?</h3>
+        <div class="chiprow" style="margin:0;padding:0;flex-wrap:wrap;gap:6px">
+          ${shops.map((sh) => `<button class="chip" style="height:36px;padding:0 12px"
+            data-act="importshop" data-k="${h(sh.id)}" data-shop="${h(sh.id)}"
+            aria-pressed="${S.importShop === sh.id}">${h(sh.name)}</button>`).join('')}
+        </div>
+      </div>` : ''}
       <label class="dropzone" id="drop">
         ${svg('imp', 34, 1.6)}
         <span style="font-family:var(--serif);font-size:19px;font-weight:600">Choose your order history</span>
-        <span style="font-size:13px;line-height:1.5;color:var(--ink-mute)">The CSV you exported from your shop account.<br>Nothing leaves your phone.</span>
+        <span style="font-size:13px;line-height:1.5;color:var(--ink-mute)">The CSV you exported from ${
+          h(chosen ? chosen.name : 'your shop')}.<br>Nothing leaves your phone.</span>
         <input type="file" accept=".csv,text/csv" id="csv" hidden>
       </label>
       <div class="panel pad-in">
@@ -1913,7 +1931,8 @@ function paintImportPick() {
     document.getElementById('drop').classList.add('on');
     try {
       const text = await file.text();
-      S.importPreview = await api('/import/preview', { method: 'POST', headers: { 'Content-Type': 'text/csv' }, body: text });
+      S.importPreview = await api('/import/preview?shop=' + encodeURIComponent(S.importShop),
+        { method: 'POST', headers: { 'Content-Type': 'text/csv' }, body: text });
       S.importSel = new Set(S.importPreview.kits.filter((k) => !k.duplicate).map((k) => k.key));
       S.importTab = 'new';
       paintImportReview();
@@ -3105,6 +3124,7 @@ async function handleClick(e) {
     S.fromCatalogue = S.browse.items[Number(el.dataset.i)];
     go('#/new');
   }
+  else if (act === 'importshop') { S.importShop = el.dataset.k; render(); }
   else if (act === 'itab') { S.importTab = el.dataset.k; paintImportReview(); }
   /* An order history knows when you bought things. The import only ever created
      what was missing, so the one question a logbook cannot answer for itself —
