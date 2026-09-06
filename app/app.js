@@ -449,9 +449,13 @@ const card = (p) => `
     </div>
   </button>`;
 
-const topbar = (title, { back = null, right = '', sub = false } = {}) => `
+/* `back` unwinds a history entry; `backAct` runs an action instead, for the
+   screens that live at the same hash as the one behind them. */
+const topbar = (title, { back = null, backAct = null, right = '', sub = false } = {}) => `
   <div class="titlerow${sub ? ' sub' : ''}">
-    ${back ? `<button class="iconbtn flush-l" data-back="${back}" aria-label="Back">${svg('back', 20, 2)}</button>` : ''}
+    ${back || backAct
+      ? `<button class="iconbtn flush-l" ${backAct ? `data-act="${backAct}"` : `data-back="${back}"`} aria-label="Back">${svg('back', 20, 2)}</button>`
+      : ''}
     <h1>${h(title)}</h1>${right}
   </div>`;
 
@@ -524,6 +528,11 @@ async function render() {
 
   // a catalogue pick belongs to the form it was picked for, and to nothing else
   if (!/^#\/new/.test(hash)) S.fromCatalogue = null;
+
+  /* A file you have chosen but not imported belongs to the import screen. Left
+     behind, it meant Import reopened onto a review of a file you had already
+     walked away from, with no way back to the picker. */
+  if (!/^#\/import$/.test(hash)) forgetImport();
 
   /* Leaving the form — by the back arrow, Cancel, or the phone's own Back —
      asks first if anything was typed. Saying "keep editing" puts the form back
@@ -1885,6 +1894,9 @@ function paintNeedsCatalogue() {
   </div>`;
 }
 
+/* Let go of a file chosen but not imported. */
+function forgetImport() { S.importPreview = null; S.importSel = new Set(); }
+
 function paintImportPick(state) {
   /* An order history only makes sense against the shop it came from: the titles
      are matched to that shop's catalogue. This always assumed Diamond Art Club,
@@ -1964,7 +1976,7 @@ function paintImportReview() {
   $out.innerHTML = `
   <div class="screen reading">
     <div class="topbar">
-      ${topbar('Review import', { back: '#/', sub: true, right:
+      ${topbar('Review import', { backAct: 'importback', sub: true, right:
         `<button class="iconbtn" style="width:auto;padding:0 12px;margin-right:-12px;font-size:13px;font-weight:700;color:var(--accent)" data-act="toggleall">${allOn ? 'None' : 'Select all'}</button>` })}
       <div class="chiprow">${tabs.map(([k, l]) =>
         `<button class="chip" data-act="itab" data-k="${k}" aria-pressed="${tab === k}">${h(l)}</button>`).join('')}</div>
@@ -3125,6 +3137,7 @@ async function handleClick(e) {
     go('#/new');
   }
   else if (act === 'importshop') { S.importShop = el.dataset.k; render(); }
+  else if (act === 'importback') { forgetImport(); render(); }
   else if (act === 'itab') { S.importTab = el.dataset.k; paintImportReview(); }
   /* An order history knows when you bought things. The import only ever created
      what was missing, so the one question a logbook cannot answer for itself —
@@ -3139,7 +3152,7 @@ async function handleClick(e) {
         headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kits }) });
       toast(r.filled ? `${r.filled} project${r.filled === 1 ? '' : 's'} filled in · ${r.fields} fields`
                      : 'Nothing needed filling in');
-      S.importPreview = null;
+      forgetImport();
       go('#/');
     } catch (e) { toast(e.message); el.disabled = false; }
   }
@@ -3170,7 +3183,7 @@ async function handleClick(e) {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kits })
     });
     runJob(job, box, (j) => {
-      S.importPreview = null; S.importSel = new Set();
+      forgetImport();
       toast(`${j.result.inserted} project${j.result.inserted === 1 ? '' : 's'} added`);
       depth = 0;
       swap('#/');

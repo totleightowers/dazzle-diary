@@ -101,6 +101,9 @@ export async function mount({ width = 390, products = null, catalogue = true, sh
   globalThis.Blob = class {
     constructor(parts, opts) { this.parts = parts || []; this.type = (opts || {}).type || ''; }
     get size() { return this.parts.reduce((n, x) => n + Buffer.byteLength(String(x)), 0); }
+    // the import reads the chosen file with .text(); without it here the only
+    // way to reach the review screen was to set the app's own state by hand
+    async text() { return this.parts.join(''); }
     async arrayBuffer() {
       const b = Buffer.from(this.parts.join(''));
       return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
@@ -199,8 +202,18 @@ export async function mount({ width = 390, products = null, catalogue = true, sh
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
   });
 
+  /* Choose a file on the import screen, the way a finger does: the app reads
+     input.files[0] and takes itself to the review. */
+  const dropCsv = async (text, name = 'orders.csv') => {
+    const input = document.getElementById('csv');
+    if (!input) throw new Error('no file input on screen — is this the import screen?');
+    input.files = [new globalThis.File([text], name, { type: 'text/csv' })];
+    await input.onchange();
+    await settle();
+  };
+
   return {
-    document, window: win, api, app, go, tap, settle, sync, seed, fire, files, downloads,
+    document, window: win, api, app, go, tap, settle, sync, seed, fire, files, downloads, dropCsv,
     html: () => document.documentElement.innerHTML,
     text: () => document.documentElement.textContent,
     screen: () => (document.getElementById('main') || app).innerHTML,

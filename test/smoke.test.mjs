@@ -1481,3 +1481,37 @@ test('the import says which shop it is reading the file against', async () => {
   assert.match(src, /\/import\/preview\?shop=' \+ encodeURIComponent\(S\.importShop\)/,
                'the import still asks for a fixed shop');
 });
+
+/* A CSV you did not mean to open used to be a one-way door. The review screen's
+   back arrow left the import altogether, and the half-read file stayed in hand,
+   so coming back to Import showed the same review again — with no way to reach
+   the file picker short of finishing an import you did not want. */
+test('backing out of a review returns to the file picker, not out of the import', async () => {
+  const m = await mount();
+  await m.sync();
+  await m.go('#/import');
+  await m.dropCsv(ORDER_CSV);
+
+  assert.ok(m.find('[data-act="itab"]'), 'choosing a file did not reach the review');
+
+  await m.tap('.titlerow [aria-label="Back"]');
+  assert.ok(m.find('#csv'), 'backing out of the review did not return to the file picker');
+  assert.equal(m.find('[data-act="itab"]'), null, 'the abandoned review is still on screen');
+
+  // and the file really was let go of, so a second look starts clean
+  await m.go('#/');
+  await m.go('#/import');
+  assert.ok(m.find('#csv'), 'the abandoned file came back');
+});
+
+test('leaving the import by any other route lets go of a half-read file', async () => {
+  const m = await mount();
+  await m.sync();
+  await m.go('#/import');
+  await m.dropCsv(ORDER_CSV);
+  assert.ok(m.find('[data-act="itab"]'), 'choosing a file did not reach the review');
+
+  await m.go('#/settings');            // the phone's own Back, a tapped link — same thing
+  await m.go('#/import');
+  assert.ok(m.find('#csv'), 'the import reopened onto a review of a file already abandoned');
+});
