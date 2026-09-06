@@ -278,6 +278,35 @@ async function recountHours(projectId) {
   return hours;
 }
 
+/* What an order line can tell a project it already has a record for. Blanks
+   only: an order history is evidence about what you bought, never a reason to
+   overwrite what you have written down yourself. */
+function importFills(row, k) {
+  if (!row || !k) return {};
+  const out = {};
+  const put = (f, v) => { if (v != null && v !== '' && blank(row, f)) out[f] = v; };
+
+  put('date_ordered', k.orderDate);
+  if (k.status === 'received') put('date_received', k.orderDate);
+  put('order_ref', k.orderRef);
+  put('order_total', k.orderTotal);
+  put('order_items', k.orderItems);
+  put('order_flag', k.flag);
+  put('artist', k.artist);
+  put('shape', k.shape);
+  put('coverage', k.coverage);
+  put('width_in', k.width_in);
+  put('height_in', k.height_in);
+  put('colors', k.colors);
+  put('special', k.special);
+  // a counted number replaces a guess; an estimate does not replace a guess
+  if (k.drills != null && blank(row, 'drills') && !k.drillsEstimated) out.drills = k.drills;
+  if (out.drills != null) out.drills_estimated = 0;
+  if (row.price == null && k.price != null) { out.price = k.price; out.price_source = k.priceSource || 'order'; }
+  if (!row.dac_handle && k.handle) { out.dac_handle = k.handle; out.shop = k.shop || 'dac'; }
+  return out;
+}
+
 /* What a listing can tell a project, for the fields the project has nothing in.
    Relinking used to move the pointer and refresh the covers and no more, so a
    project linked to a listing full of detail sat there with its own blanks. It
@@ -614,7 +643,55 @@ export async function localApi(path, opts = {}) {
     for (const r of rows) if (r.dac_handle) known.set(norm(r.title), r.dac_handle);
     const s = shopById(shop);
     const pref = ((await idb.get('meta', 'prefs')) || {}).currency || 'GBP';
-    return buildPreview(catFor(shop), existing, String(opts.body), s ? s.name : 'Diamond Art Club', known, pref);
+    const preview = buildPreview(catFor(shop), existing, String(opts.body), s ? s.name : 'Diamond Art Club', known, pref);
+
+    /* An order history knows things about projects you already have — when you
+       ordered them above all. The import only ever created what was missing and
+       skipped the rest as duplicates, so a second import could not answer the
+       one question the logbook could not: when did I buy this. Every duplicate
+       now says what it could fill in, and fills nothing that is not empty. */
+    const byId = new Map(rows.map(r => [r.id, r]));
+    for (const k of preview.kits || []) {
+      if (!k.duplicate || k.duplicateId == null) continue;
+      k.fills = importFills(byId.get(k.duplicateId), k);
+      k.fillCount = Object.keys(k.fills || {}).length;
+    }
+    /* A line the catalogue cannot match is not necessarily a line you do not
+       own: shops retire listings, and a kit bought last May may simply not be
+       sold any more. The order still knows when it was bought, and the logbook
+       still has the project — so match those against the logbook by title and
+       let them fill dates too. Without this an order history could not date the
+       oldest kits in a collection, which are exactly the undated ones. */
+    const byTitle = new Map(rows.map(r => [norm(r.title || ''), r]));
+    for (const sk of preview.skipped || []) {
+      const row = byTitle.get(norm(sk.title || '')) || byTitle.get(norm(sk.rawTitle || ''));
+      if (!row) continue;
+      sk.duplicateId = row.id;
+      sk.owned = true;
+      sk.fills = importFills(row, sk);
+      sk.fillCount = Object.keys(sk.fills).length;
+    }
+    preview.summary.fillable = [...(preview.kits || []), ...(preview.skipped || [])]
+      .filter(k => k.fillCount > 0).length;
+    return preview;
+  }
+
+  if (p === '/import/fill' && m === 'POST') {
+    const kits = json().kits || [];
+    let filled = 0, fields = 0;
+    for (const k of kits) {
+      const row = await idb.get('projects', Number(k.duplicateId));
+      if (!row) continue;
+      const patch = importFills(row, k);
+      const keys = Object.keys(patch);
+      if (!keys.length) continue;
+      Object.assign(row, patch);
+      estimateIfEmpty(row);
+      row.updated_at = nowIso();
+      await idb.put('projects', row);
+      filled++; fields += keys.length;
+    }
+    return { filled, fields };
   }
 
   if (p === '/import/commit' && m === 'POST') {

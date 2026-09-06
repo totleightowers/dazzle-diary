@@ -140,6 +140,17 @@ Some feeds are incomplete.
 
 Munimade, for example, publishes fields such as diamond count, image size and colour count on the product page rather than the JSON feed.
 
+An order history can also fill in projects you already have. The import used to
+create what was missing and skip the rest as duplicates, so a second import
+could not answer the one question a logbook cannot answer for itself: when did I
+buy this. The **Logged** tab now offers to fill the blanks on everything it
+matched — order date above all, plus order reference, artist, size and the rest.
+It fills only; anything typed by hand is left alone.
+
+Lines the catalogue cannot match are matched against the logbook by title
+instead. Shops retire listings, and a kit bought a year ago may not be sold any
+more — those are exactly the oldest and most likely undated projects.
+
 Relinking a project brings across everything the listing knows that the project
 does not: artist, canvas size, drill shape, coverage, colour count, diamond
 count, special diamonds, and a price if the project has none. It fills only —

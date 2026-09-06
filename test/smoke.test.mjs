@@ -1342,3 +1342,90 @@ test('an estimated count never blocks the real one', async () => {
   assert.equal(after.drills, 95200, `the estimate of ${guess} was never replaced`);
   assert.ok(!after.drills_estimated, 'it is a counted number now, not an estimate');
 });
+
+/* An order history knows when you bought things. The import only ever created
+   what was missing and skipped the rest as duplicates, so a second import could
+   not answer the one question a logbook cannot answer for itself. */
+const ORDER_CSV = 'Order,Date,Payment Status,Fulfillment Status,Total,Products\n' +
+                  '#100,2026/03/07,paid,fulfilled,£169.00,Moon Eater\n';
+
+test('an order history fills the blanks on projects already in the logbook', async () => {
+  const m = await mount();
+  for (const q of await m.api('/projects')) await m.api('/projects/' + q.id, { method: 'DELETE' });
+  await m.sync();
+
+  // the project is already there, with no order date and a colour count typed in
+  const p = await m.seed({ title: 'Moon Eater', status: 'received', colors: 7 });
+  await m.api('/projects/' + p.id, { method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date_ordered: null, date_received: null }) });
+
+  const preview = await m.api('/import/preview?shop=dac', { method: 'POST', body: ORDER_CSV });
+  const dupe = preview.kits.find((k) => k.duplicate);
+  assert.ok(dupe, 'the order line did not match the project already in the logbook');
+  assert.equal(preview.summary.fillable, 1);
+  assert.ok(dupe.fills.date_ordered, 'the order date is not offered as a fill');
+  assert.ok(!('colors' in dupe.fills), 'a colour count typed by hand was offered up to be overwritten');
+
+  const r = await m.api('/import/fill', { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kits: [dupe] }) });
+  assert.equal(r.filled, 1);
+
+  const after = await m.api('/projects/' + p.id);
+  assert.equal(after.date_ordered, '2026-03-07', 'the order date was not filled in');
+  assert.equal(after.colors, 7, 'the typed colour count was overwritten');
+  assert.equal(after.order_ref, '#100');
+
+  // and it no longer counts as undated
+  assert.equal((await m.api('/summary')).totals.undated, 0);
+
+  // running it again fills nothing, because nothing is blank any more
+  const again = await m.api('/import/fill', { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kits: [dupe] }) });
+  assert.equal(again.filled, 0);
+});
+
+test('the review screen offers the fill, on the tab where the matches are', () => {
+  /* The review is reached through a file input, which a test cannot hand a file
+     to; the behaviour above is covered at the API. This checks the offer is
+     actually wired to it and sits on the Logged tab, where the projects it
+     talks about are listed. */
+  const src = readFileSync(new URL('../app/app.js', import.meta.url), 'utf8');
+  assert.match(src, /tab === 'dupe' && sum\.fillable/, 'the fill is not offered on the Logged tab');
+  assert.match(src, /data-act="importfill"/);
+  assert.match(src, /act === 'importfill'/, 'the button has no handler');
+  assert.match(src, /'\/import\/fill'/, 'the handler does not call the fill route');
+});
+
+test('an order for a kit the shop no longer sells can still date it', async () => {
+  const m = await mount();
+  for (const q of await m.api('/projects')) await m.api('/projects/' + q.id, { method: 'DELETE' });
+  await m.sync();
+
+  /* Shops retire listings. A kit bought last May may not be sold any more, and
+     those are exactly the oldest — and so the undated — projects. The line will
+     not match the catalogue, but the logbook still has the project. */
+  const p = await m.seed({ title: 'Retired Canvas', status: 'received' });
+  await m.api('/projects/' + p.id, { method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date_ordered: null, date_received: null }) });
+
+  const csv = 'Order,Date,Payment Status,Fulfillment Status,Total,Products\n' +
+              '#900,2026/05/24,paid,fulfilled,£70.00,Retired Canvas\n';
+  const preview = await m.api('/import/preview?shop=dac', { method: 'POST', body: csv });
+
+  assert.equal(preview.kits.length, 0, 'the catalogue should not have matched it');
+  const line = (preview.skipped || []).find((x) => x.fillCount > 0);
+  assert.ok(line, 'a line the catalogue could not match was not offered against the logbook');
+  assert.equal(preview.summary.fillable, 1);
+
+  await m.api('/import/fill', { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kits: [line] }) });
+  assert.equal((await m.api('/projects/' + p.id)).date_ordered, '2026-05-24');
+
+  // and a line matching nothing in the logbook is still just skipped
+  const other = 'Order,Date,Payment Status,Fulfillment Status,Total,Products\n' +
+                '#901,2026/05/24,paid,fulfilled,£70.00,Never Heard Of It\n';
+  const second = await m.api('/import/preview?shop=dac', { method: 'POST', body: other });
+  assert.equal(second.summary.fillable, 0);
+});
