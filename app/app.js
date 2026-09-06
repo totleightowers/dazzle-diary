@@ -2504,7 +2504,8 @@ route(/^#\/summary$/, async () => {
 
 /* ========================================================== #/settings */
 route(/^#\/settings$/, async () => {
-  const [state, stats] = await Promise.all([api('/state'), api('/stats')]);
+  const [state, stats, gaps] = await Promise.all([
+    api('/state'), api('/stats'), api('/projects/backfill-dates').catch(() => ({ candidates: 0 }))]);
   const synced = state.catalogue.syncedAt ? dateText(state.catalogue.syncedAt.slice(0, 10)) : null;
   setTimeout(() => {
     const r = document.getElementById('restore');
@@ -2653,6 +2654,24 @@ route(/^#\/settings$/, async () => {
 
       <div>
         <h3 class="label">Your data</h3>
+        ${gaps.candidates ? `
+        <div class="panel pad-in" style="margin-bottom:10px">
+          <div class="row" style="align-items:flex-start">
+            <span class="k" style="flex:1 1 auto;color:var(--ink)">
+              <span style="display:block;font-weight:600">${num(gaps.candidates)} project${
+                gaps.candidates === 1 ? ' has' : 's have'} no order date</span>
+              <span style="display:block;margin-top:3px;font-size:12px;color:var(--ink-mute)">
+                ${gaps.candidates === 1 ? 'It belongs' : 'They belong'} to no month, so the years never add up.
+                Their real order dates are not recoverable.</span>
+            </span>
+          </div>
+          <div style="display:flex;gap:8px;padding:4px 0 8px">
+            <button class="btn ghost" style="flex:1 1 auto;height:40px;font-size:13px"
+                    data-act="shownodates">Show them</button>
+            <button class="btn ghost" style="flex:1 1 auto;height:40px;font-size:13px"
+                    data-act="backfilldates">Use the day added</button>
+          </div>
+        </div>` : ''}
         <button class="btn primary wide" data-act="backup">Create a full backup</button>
         <div id="backupbox"></div>
         <p style="margin:8px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">

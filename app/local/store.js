@@ -120,6 +120,7 @@ async function specForRow(row) {
 
 /** The row's pictures, going to the shop if the row itself has none. */
 async function listingImages(shopId, handle) {
+  await catalogue();
   const c = (cache && cache.rows || []).find(r => r.shop === shopId && r.handle === handle);
   const known = c ? (asList(c.images).length ? asList(c.images) : (c.image ? [c.image] : [])) : [];
   if (known.length) return known;
@@ -317,6 +318,7 @@ const FROM_LISTING = ['artist', 'shape', 'coverage', 'width_in', 'height_in',
 
 async function fillFromListing(row) {
   if (!row.dac_handle || !row.shop) return 0;
+  await catalogue();
   let listing = (cache && cache.rows || []).find(r => r.shop === row.shop && r.handle === row.dac_handle);
   // the page carries what the feed leaves out for some shops
   if (listing && needsSpec(listing)) listing = await specForRow(listing);
@@ -574,6 +576,12 @@ export async function localApi(path, opts = {}) {
   if (p === '/catalogue/product' && m === 'GET') {
     const shop = q(url, 'shop'), handle = q(url, 'handle');
     if (!shop || !handle) return null;
+    /* Every sync empties the in-memory catalogue, so reading it without building
+       it first found nothing and fell through to fetching from the shop — no
+       cover, no spec, and a row of the right shape with nothing in it. Rare,
+       intermittent, and exactly the kind of thing that looks like the shop
+       being slow. */
+    await catalogue();
     const row = (cache && cache.rows || []).find(r => r.shop === shop && r.handle === handle);
     if (row && !row.image) await listingImages(shop, handle);   // fills the row in place
     if (row) return specForRow(row);
@@ -763,6 +771,7 @@ export async function localApi(path, opts = {}) {
     const body = json();
     if (!body.title || !String(body.title).trim()) throw Object.assign(new Error('A project name is required.'), { status: 400 });
     if (body.dac_handle && body.shop && !body.cover) {
+      await catalogue();
       const c = cache.rows.find(r => r.shop === body.shop && r.handle === body.dac_handle);
       if (c && c.image) {
         const urls = Array.isArray(c.images) ? c.images

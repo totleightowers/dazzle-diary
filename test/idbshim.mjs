@@ -23,10 +23,18 @@ class StoreHandle {
     return {
       getAll(value){ const r=new Req();
         r.result=[...self.s.rows.values()].filter(v=>v[path]===value); self.tx._q(r); return r; },
+      /* A live cursor holds its transaction open. Without this the transaction
+         reported itself complete before the cursor had stepped even once, so
+         replaceShop resolved before deleting or writing a single row and the
+         writes landed later by timer — which made "did the catalogue sync?" a
+         race, and produced a test failure roughly one run in five that looked
+         like the app losing catalogue rows. Real IndexedDB does not do this. */
       openKeyCursor(range){ const r=new Req();
         const matches=[...self.s.rows.entries()].filter(([,v])=>v[path]===range.only);
-        let i=0;
-        const step=()=>{ if(i>=matches.length){ r.result=null; r.onsuccess&&r.onsuccess(); return; }
+        let i=0, closed=false;
+        self.tx.pending++;
+        const finish=()=>{ if(closed) return; closed=true; self.tx.pending--; self.tx._maybe(); };
+        const step=()=>{ if(i>=matches.length){ r.result=null; r.onsuccess&&r.onsuccess(); finish(); return; }
           const [pk]=matches[i++];
           r.result={ primaryKey: JSON.parse(pk), continue: ()=>setTimeout(step,0) };
           r.onsuccess&&r.onsuccess(); };

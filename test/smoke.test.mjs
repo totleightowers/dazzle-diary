@@ -713,6 +713,11 @@ test('a shop page with nothing on it is not asked about twice', async () => {
   const kit = muniProduct({ specHtml: '<html><body>nothing here</body></html>' });
   const m = await muniMount(kit);
   const row = await m.api('/catalogue/product?shop=muni&handle=' + kit.handle);
+  /* A real catalogue row carries the kit's title; the fallback for a handle the
+     catalogue does not have carries a null one. Asserting the title pins that
+     this came from the catalogue rather than from the shop, which is what fails
+     when the in-memory copy has been emptied by a sync and not rebuilt. */
+  assert.equal(row.title, 'The Underwater Castle', 'this did not come from the catalogue');
   assert.equal(row.drills, null);
   assert.equal(row.spec_checked, 1, 'an empty page must still be marked as read');
 });
@@ -1428,4 +1433,28 @@ test('an order for a kit the shop no longer sells can still date it', async () =
                 '#901,2026/05/24,paid,fulfilled,£70.00,Never Heard Of It\n';
   const second = await m.api('/import/preview?shop=dac', { method: 'POST', body: other });
   assert.equal(second.summary.fillable, 0);
+});
+
+/* A bulk change to your records belongs where you would look for one. It was
+   small grey underlined text part-way down the summary, which is not a place
+   anybody finds an action. */
+test('the offer to date undated projects is in Settings, under Your data', async () => {
+  const m = await mount();
+  for (const q of await m.api('/projects')) await m.api('/projects/' + q.id, { method: 'DELETE' });
+  const p = await m.seed({ title: 'Undated', status: 'received' });
+  await m.api('/projects/' + p.id, { method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date_ordered: null, date_received: null }) });
+
+  await m.go('#/settings');
+  assert.ok(m.find('[data-act="backfilldates"]'), 'Settings does not offer to fill in the dates');
+  assert.ok(m.find('[data-act="shownodates"]'), 'Settings does not offer to show them');
+  // it says how many, so you know what you are agreeing to
+  assert.match(m.screen(), /1 project has no order date/);
+
+  // and once there is nothing to do, the offer is not there
+  await m.api('/projects/backfill-dates', { method: 'POST' });
+  await m.go('#/settings');
+  assert.equal(m.find('[data-act="backfilldates"]'), null,
+               'the offer outlived the thing it was offering to fix');
 });
