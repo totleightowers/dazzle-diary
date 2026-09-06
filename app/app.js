@@ -1967,6 +1967,15 @@ function paintImportReview() {
         ${P.warnings.map((w) => `<div class="notice warn" style="margin-top:12px">${svg('info', 18)}<span>${h(w)}</span></div>`).join('')}
       ` : ''}
 
+      ${tab === 'dupe' && sum.fillable ? `
+        <div class="notice" style="margin-top:16px">${svg('info', 18)}
+          <span>These are already in your logbook, so nothing here will be added again.
+            <strong>${sum.fillable}</strong> of them have blanks this order history can fill —
+            when you ordered them, above all. Nothing you have typed is touched.</span></div>
+        <button class="btn primary wide" style="margin-top:10px" data-act="importfill">
+          Fill in ${sum.fillable} project${sum.fillable === 1 ? '' : 's'}</button>
+      ` : ''}
+
       ${tab === 'skipped' ? `
         <section class="group" data-status="none" style="margin-top:16px">
           <header><span class="dot" style="background:var(--ink-faint)"></span>
@@ -3078,6 +3087,23 @@ async function handleClick(e) {
     go('#/new');
   }
   else if (act === 'itab') { S.importTab = el.dataset.k; paintImportReview(); }
+  /* An order history knows when you bought things. The import only ever created
+     what was missing, so the one question a logbook cannot answer for itself —
+     when did I order this — went unanswered on every project already in it. */
+  else if (act === 'importfill') {
+    const kits = [...(S.importPreview.kits || []), ...(S.importPreview.skipped || [])]
+      .filter((k) => k.fillCount > 0);
+    if (!kits.length) { toast('Nothing to fill in'); return; }
+    el.disabled = true;
+    try {
+      const r = await api('/import/fill', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kits }) });
+      toast(r.filled ? `${r.filled} project${r.filled === 1 ? '' : 's'} filled in · ${r.fields} fields`
+                     : 'Nothing needed filling in');
+      S.importPreview = null;
+      go('#/');
+    } catch (e) { toast(e.message); el.disabled = false; }
+  }
   else if (act === 'pick') {
     const k = el.dataset.k;
     S.importSel.has(k) ? S.importSel.delete(k) : S.importSel.add(k);
