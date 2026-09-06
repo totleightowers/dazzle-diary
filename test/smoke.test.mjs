@@ -1458,3 +1458,26 @@ test('the offer to date undated projects is in Settings, under Your data', async
   assert.equal(m.find('[data-act="backfilldates"]'), null,
                'the offer outlived the thing it was offering to fix');
 });
+
+/* An order history only makes sense against the shop it came from — the titles
+   are matched to that shop's catalogue. The import silently assumed Diamond Art
+   Club, so a history from anywhere else was matched against the wrong catalogue
+   and found nothing, with no way to say otherwise. */
+test('the import says which shop it is reading the file against', async () => {
+  const m = await mount({ products: [muniProduct()], shop: 'muni' });
+  await m.api('/prefs', { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ excluded: [] }) });
+  await m.sync();
+  await m.go('#/import');
+
+  const chip = m.find('[data-act="importshop"][data-k="muni"]');
+  assert.ok(chip, 'the import does not say which shop it is about to read this as');
+  assert.equal(chip.getAttribute('aria-pressed'), 'true');
+  assert.match(m.find('#drop').textContent, /Munimade/,
+               'the dropzone does not name the shop the file will be matched against');
+
+  // and the chosen shop is what the preview is asked for, rather than always dac
+  const src = readFileSync(new URL('../app/app.js', import.meta.url), 'utf8');
+  assert.match(src, /\/import\/preview\?shop=' \+ encodeURIComponent\(S\.importShop\)/,
+               'the import still asks for a fixed shop');
+});
