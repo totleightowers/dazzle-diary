@@ -1515,3 +1515,91 @@ test('leaving the import by any other route lets go of a half-read file', async 
   await m.go('#/import');
   assert.ok(m.find('#csv'), 'the import reopened onto a review of a file already abandoned');
 });
+
+/* A cover is the picture of the canvas you are about to spend eighty hours on.
+   It was fetched at 600px wide — fine for a thumbnail, soft the moment you open
+   it. Shopify serves whatever width you ask for, so asking for a small one was
+   the only thing making these pictures compressed. */
+test('a cover is fetched at full fidelity, not a thumbnail', async () => {
+  const m = await mount();
+  await m.sync();
+  const cat = await m.api('/catalogue/search?q=moon');
+  m.net.length = 0;
+  await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: cat[0].title, shop: cat[0].shop, dac_handle: cat[0].handle }) });
+
+  const shots = m.net.filter((u) => /\.(jpg|jpeg|png|webp)/i.test(u));
+  assert.ok(shots.length, 'adding a kit fetched no pictures at all');
+  for (const u of shots) {
+    const w = Number(new URL(u).searchParams.get('width'));
+    assert.ok(w >= 1600, `a cover was fetched at width=${w || '(none)'}, which is a thumbnail`);
+  }
+});
+
+/* The pictures already on disk were fetched small, and the filename does not
+   say how wide they are — so the "is it already here?" check kept handing back
+   the soft copy for ever. Existing kits have to be able to catch up. */
+test('kits cached before full fidelity can be upgraded in place', async () => {
+  const m = await mount();
+  await m.sync();
+  const cat = await m.api('/catalogue/search?q=moon');
+  const made = await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: cat[0].title, shop: cat[0].shop, dac_handle: cat[0].handle }) });
+
+  // put it back the way an older version of the app left it
+  const row = await m.api('/projects/' + made.id);
+  await m.api('/projects/' + made.id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cover_hifi: 0 }) });
+
+  const before = await m.api('/projects/upgrade-covers');
+  assert.equal(before.candidates, 1, 'the kit with soft pictures was not offered an upgrade');
+
+  m.net.length = 0;
+  const done = await m.api('/projects/upgrade-covers', { method: 'POST' });
+  assert.equal(done.upgraded, 1, 'the upgrade skipped the kit whose file was already on disk');
+  const shots = m.net.filter((u) => /\.(jpg|jpeg|png|webp)/i.test(u));
+  assert.ok(shots.length, 'the upgrade re-fetched nothing — the on-disk check still short-circuits');
+  for (const u of shots)
+    assert.ok(Number(new URL(u).searchParams.get('width')) >= 1600, 'refetched at thumbnail width');
+
+  // and it does not keep offering to do work it has already done
+  assert.equal((await m.api('/projects/upgrade-covers')).candidates, 0,
+               'the upgrade offers itself again after finishing');
+  assert.ok(row.cover, 'sanity: the project had a cover to begin with');
+});
+
+/* Moving a kit to Started is the moment you actually look at it. */
+test('changing status fetches full fidelity for a kit still on thumbnails', async () => {
+  const m = await mount();
+  await m.sync();
+  const cat = await m.api('/catalogue/search?q=moon');
+  const made = await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: cat[0].title, shop: cat[0].shop, dac_handle: cat[0].handle }) });
+  await m.api('/projects/' + made.id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cover_hifi: 0 }) });
+
+  m.net.length = 0;
+  await m.api('/projects/' + made.id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'started' }) });
+  const shots = m.net.filter((u) => /\.(jpg|jpeg|png|webp)/i.test(u));
+  assert.ok(shots.length, 'a status change did not hot-fetch the full-fidelity pictures');
+});
+
+/* An offer nobody can find is not an offer. */
+test('the offer to get full-size pictures is in Settings, under Your data', async () => {
+  const m = await mount();
+  await m.sync();
+  const cat = await m.api('/catalogue/search?q=moon');
+  const made = await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: cat[0].title, shop: cat[0].shop, dac_handle: cat[0].handle }) });
+  await m.api('/projects/' + made.id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cover_hifi: 0 }) });
+
+  await m.go('#/settings');
+  assert.ok(m.find('[data-act="upgradecovers"]'), 'Settings never offers to fetch the full-size pictures');
+
+  await m.tap('[data-act="upgradecovers"]');
+  assert.equal((await m.api('/projects/upgrade-covers')).candidates, 0, 'the button did not do it');
+  assert.equal(m.find('[data-act="upgradecovers"]'), null,
+               'the offer outlived the thing it was offering to fix');
+});

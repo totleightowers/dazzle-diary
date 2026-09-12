@@ -15,6 +15,7 @@ const IMAGE = 'https://cdn.shopify.com/kit.jpg';
 export async function mount({ width = 390, products = null, catalogue = true, shop = 'dac' } = {}) {
   const document = makeDocument();
   const files = new Map();          // the native file store
+  const net = [];                   // every URL the app asked for, in order
   const downloads = [];
   const listeners = Object.create(null);
   const confirms = [];
@@ -114,6 +115,7 @@ export async function mount({ width = 390, products = null, catalogue = true, sh
   };
   globalThis.fetch = async (u) => {
     const raw = String(u);
+    net.push(decodeURIComponent(raw.replace('/__net/?url=', '')));
     const real = decodeURIComponent(raw.replace('/__net/?url=', ''));
     if (/\.(jpg|jpeg|png|webp)/i.test(real)) {
       return { ok: true, status: 200, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
@@ -213,7 +215,7 @@ export async function mount({ width = 390, products = null, catalogue = true, sh
   };
 
   return {
-    document, window: win, api, app, go, tap, settle, sync, seed, fire, files, downloads, dropCsv,
+    document, window: win, api, app, go, tap, settle, sync, seed, fire, files, downloads, dropCsv, net,
     html: () => document.documentElement.innerHTML,
     text: () => document.documentElement.textContent,
     screen: () => (document.getElementById('main') || app).innerHTML,
