@@ -2535,8 +2535,9 @@ route(/^#\/summary$/, async () => {
 
 /* ========================================================== #/settings */
 route(/^#\/settings$/, async () => {
-  const [state, stats, gaps] = await Promise.all([
-    api('/state'), api('/stats'), api('/projects/backfill-dates').catch(() => ({ candidates: 0 }))]);
+  const [state, stats, gaps, soft] = await Promise.all([
+    api('/state'), api('/stats'), api('/projects/backfill-dates').catch(() => ({ candidates: 0 })),
+    api('/projects/upgrade-covers').catch(() => ({ candidates: 0 }))]);
   const synced = state.catalogue.syncedAt ? dateText(state.catalogue.syncedAt.slice(0, 10)) : null;
   setTimeout(() => {
     const r = document.getElementById('restore');
@@ -2702,6 +2703,23 @@ route(/^#\/settings$/, async () => {
             <button class="btn ghost" style="flex:1 1 auto;height:40px;font-size:13px"
                     data-act="backfilldates">Use the day added</button>
           </div>
+        </div>` : ''}
+        ${soft.candidates ? `
+        <div class="panel pad-in" style="margin-bottom:10px">
+          <div class="row" style="align-items:flex-start">
+            <span class="k" style="flex:1 1 auto;color:var(--ink)">
+              <span style="display:block;font-weight:600">${num(soft.candidates)} project${
+                soft.candidates === 1 ? '' : 's'} still on thumbnail pictures</span>
+              <span style="display:block;margin-top:3px;font-size:12px;color:var(--ink-mute)">
+                They were saved when covers were fetched small. Fetching them again at full
+                width needs a connection, and replaces the pictures in place.</span>
+            </span>
+          </div>
+          <div style="padding:4px 0 8px">
+            <button class="btn ghost wide" style="height:40px;font-size:13px"
+                    data-act="upgradecovers">Get the full-size pictures</button>
+          </div>
+          <div id="hifibox"></div>
         </div>` : ''}
         <button class="btn primary wide" data-act="backup">Create a full backup</button>
         <div id="backupbox"></div>
@@ -2975,6 +2993,21 @@ async function handleClick(e) {
                + 'recoverable, and you can change any of them afterwards.')) return;
     const { filled } = await api('/projects/backfill-dates', { method: 'POST' });
     toast(`${filled} project${filled === 1 ? '' : 's'} dated`);
+    render();
+  }
+  else if (act === 'upgradecovers') {
+    const { candidates } = await api('/projects/upgrade-covers');
+    if (!candidates) { toast('Every picture is already full size'); render(); return; }
+    el.disabled = true;
+    const box = document.getElementById('hifibox');
+    if (box) box.innerHTML = `<p style="margin:2px 0 8px;font-size:12px;color:var(--ink-mute)">Fetching ${
+      num(candidates)} project${candidates === 1 ? '' : 's'}…</p>`;
+    try {
+      const { upgraded } = await api('/projects/upgrade-covers', { method: 'POST' });
+      toast(upgraded ? `${upgraded} project${upgraded === 1 ? '' : 's'} now full size`
+                     : 'Could not reach the shops');
+    } catch (e) { toast(e.message); }
+    el.disabled = false;
     render();
   }
   else if (act === 'shownodates') {
