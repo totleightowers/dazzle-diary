@@ -3166,7 +3166,22 @@ async function handleClick(e) {
   }
   else if (act === 'bmore') { await loadBrowse(false); }
   else if (act === 'pickcat') {
-    S.fromCatalogue = S.browse.items[Number(el.dataset.i)];
+    const pick = S.browse.items[Number(el.dataset.i)];
+    S.fromCatalogue = pick;
+    /* Adding a canvas you already have splits its hours, photos and progress
+       between two rows, and the old flow gave you no hint until you recognised
+       your own kit halfway through typing it in again. Owning two of the same
+       canvas is a real thing though, so this is an offer, not a refusal. */
+    const mine = await api('/projects/find?shop=' + encodeURIComponent(pick.shop || 'dac')
+                         + '&handle=' + encodeURIComponent(pick.dac_handle || pick.handle || '')
+                         + '&title=' + encodeURIComponent(pick.title || '')).catch(() => ({ id: null }));
+    if (mine.id != null
+        && confirm(`${mine.title} is already in your logbook. Open it?\n\n`
+                 + 'Cancel to add a second copy.')) {
+      S.fromCatalogue = null;
+      go('#/p/' + mine.id);
+      return;
+    }
     go('#/new');
   }
   else if (act === 'importshop') { S.importShop = el.dataset.k; render(); }

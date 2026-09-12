@@ -11,6 +11,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { mount } from './mount.mjs';
 
+/* The IndexedDB shim outlives a single mount, so a test that means "I do not
+   own this yet" has to say so — picking a kit you already have now opens it
+   instead of adding a second copy. */
+const emptyLogbook = async (m) => {
+  for (const r of await m.api('/projects')) await m.api('/projects/' + r.id, { method: 'DELETE' });
+};
+
 const broke = (m) => /Something went wrong/.test(m.text());
 
 async function app(width = 390) {
@@ -70,6 +77,7 @@ for (const width of [390, 1028]) {
 test('a project picked from the catalogue arrives with its picture', async () => {
   const m = await mount({ width: 1028 });
   await m.sync();
+  await emptyLogbook(m);            // this is the ADD path: nothing here yet
   await m.go('#/browse');
   await m.tap('[data-act="pickcat"]');
   assert.equal(globalThis.location.hash, '#/new');
@@ -299,6 +307,7 @@ test('logging time starts a project that had not been started', async () => {
 test('a kit picked from the catalogue shows its pictures and a way to the shop', async () => {
   const m = await mount();
   await m.sync();
+  await emptyLogbook(m);
   await m.go('#/browse');
   await m.tap('[data-act="pickcat"]');
 
@@ -343,6 +352,7 @@ test('a picture can be pinched, panned and pinched back', async () => {
 test('the dots follow the strip, and tapping one moves it', async () => {
   const m = await mount();
   await m.sync();
+  await emptyLogbook(m);
   await m.go('#/browse');
   await m.tap('[data-act="pickcat"]');
 
@@ -1602,4 +1612,56 @@ test('the offer to get full-size pictures is in Settings, under Your data', asyn
   assert.equal((await m.api('/projects/upgrade-covers')).candidates, 0, 'the button did not do it');
   assert.equal(m.find('[data-act="upgradecovers"]'), null,
                'the offer outlived the thing it was offering to fix');
+});
+
+/* Picking a kit you already own used to open a blank New project form, so the
+   only way to notice was to recognise your own canvas halfway through typing it
+   in again — and the logbook would then hold it twice, splitting its hours,
+   photos and progress between two rows. */
+test('picking a kit already in the logbook opens it instead of adding it twice', async () => {
+  const m = await mount();
+  await m.sync();
+  await emptyLogbook(m);
+  const cat = await m.api('/catalogue/search?q=moon');
+  const made = await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: cat[0].title, shop: cat[0].shop, dac_handle: cat[0].handle }) });
+  const before = (await m.api('/projects')).length;
+
+  m.answerConfirms(true);
+  await m.go('#/browse');
+  await m.tap('[data-act="pickcat"]');
+
+  assert.equal(globalThis.location.hash, '#/p/' + made.id, 'it did not open the kit already logged');
+  assert.equal((await m.api('/projects')).length, before, 'a second copy was created anyway');
+});
+
+/* Owning two of the same canvas is a real thing, so the answer is an offer, not
+   a refusal. */
+test('declining opens the New project form so a second copy can still be added', async () => {
+  const m = await mount();
+  await m.sync();
+  await emptyLogbook(m);
+  const cat = await m.api('/catalogue/search?q=moon');
+  await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: cat[0].title, shop: cat[0].shop, dac_handle: cat[0].handle }) });
+
+  m.answerConfirms(false);
+  await m.go('#/browse');
+  await m.tap('[data-act="pickcat"]');
+  assert.equal(globalThis.location.hash, '#/new', 'saying no did not let a second copy be added');
+});
+
+/* A kit typed in by hand has no listing behind it, and is still the same canvas. */
+test('a kit added by hand is recognised by name, with no listing link', async () => {
+  const m = await mount();
+  await m.sync();
+  await emptyLogbook(m);
+  const cat = await m.api('/catalogue/search?q=moon');
+  const typed = await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: cat[0].title.toUpperCase() }) });   // no shop, no handle
+
+  m.answerConfirms(true);
+  await m.go('#/browse');
+  await m.tap('[data-act="pickcat"]');
+  assert.equal(globalThis.location.hash, '#/p/' + typed.id, 'the one typed in by hand went unrecognised');
 });
