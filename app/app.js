@@ -3440,9 +3440,27 @@ window.addEventListener('hashchange', (e) => {
   if (e && e.oldURL && e.newURL && e.oldURL.length > e.newURL.length && depth > 0) depth--;
   return render();          // returned so callers can await a finished render
 });
+/* Kits saved before covers were fetched at full width are still carrying the
+   thumbnail, and there is no moment in normal use to fix them: re-picking the
+   same listing is not a relink, and re-fetching a picture that has not changed
+   is waste. So it happens once, by itself, on the first launch after updating.
+   It needs a connection; anything it cannot reach keeps its mark and is simply
+   tried again next time. */
+async function catchUpCovers() {
+  try {
+    const { candidates } = await api('/projects/upgrade-covers');
+    if (!candidates) return;
+    toast(`Fetching full-size pictures · ${candidates} kit${candidates === 1 ? '' : 's'}`);
+    const { upgraded } = await api('/projects/upgrade-covers', { method: 'POST' });
+    if (!upgraded) return;
+    toast(`${upgraded} kit${upgraded === 1 ? '' : 's'} now full size`);
+    render();
+  } catch { /* no connection: the next launch tries again */ }
+}
+
 Promise.all([
   api('/prefs').then((p) => { if (p) Object.assign(S.prefs, p); }).catch(() => {}),
   // a timer left running when the app was closed is still running
   api('/timer').then((t) => { S.timer = t || null; }).catch(() => {})
-]).finally(render);
+]).finally(() => { render(); catchUpCovers(); });
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});

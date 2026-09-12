@@ -1665,3 +1665,33 @@ test('a kit added by hand is recognised by name, with no listing link', async ()
   await m.tap('[data-act="pickcat"]');
   assert.equal(globalThis.location.hash, '#/p/' + typed.id, 'the one typed in by hand went unrecognised');
 });
+
+/* Kits saved before covers went full width cannot be caught up by saving them —
+   re-picking the same listing is not a relink, and refetching a picture that has
+   not changed is waste. So the catching up happens once, by itself, on the first
+   launch after updating. */
+test('kits still on thumbnails are caught up on launch, without being asked', async () => {
+  const first = await mount();
+  await first.sync();
+  await emptyLogbook(first);
+  const cat = await first.api('/catalogue/search?q=moon');
+  const made = await first.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: cat[0].title, shop: cat[0].shop, dac_handle: cat[0].handle }) });
+  // put it back the way a version before full-fidelity covers left it
+  await first.api('/projects/' + made.id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cover_hifi: 0 }) });
+  assert.equal((await first.api('/projects/upgrade-covers')).candidates, 1);
+
+  // the next launch
+  const next = await mount();
+  await next.settle();
+  await next.settle();
+
+  assert.equal((await next.api('/projects/upgrade-covers')).candidates, 0,
+               'launching did not catch up the kits still on thumbnails');
+  const shots = next.net.filter((u) => /\.(jpg|jpeg|png|webp)/i.test(u));
+  assert.ok(shots.length, 'launching fetched no pictures at all');
+  for (const u of shots)
+    assert.ok(Number(new URL(u).searchParams.get('width')) >= 1600,
+              'launch refetched at thumbnail width');
+});
