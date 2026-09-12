@@ -1451,6 +1451,20 @@ export async function localApi(path, opts = {}) {
       && /^\d{4}-\d{2}-\d{2}$/.test(String(r.created_at || r.updated_at || '').slice(0, 10))).length };
   }
 
+  /* Is this listing already in the logbook? Answered the way the order import
+     answers it, so the two agree: the same listing, or failing that the same
+     name — a kit typed in by hand has no listing behind it and is still the
+     same canvas. A wish list entry counts: that is the row you meant to find. */
+  if (p === '/projects/find' && m === 'GET') {
+    const shop = q(url, 'shop');
+    const handle = q(url, 'handle');
+    const title = norm(q(url, 'title') || '');
+    const rows = await projects();
+    const hit = (handle && rows.find(r => r.dac_handle === handle && (r.shop || 'dac') === (shop || 'dac')))
+             || (title && rows.find(r => norm(r.title) === title));
+    return hit ? { id: hit.id, title: hit.title, status: hit.status } : { id: null };
+  }
+
   /* Pictures fetched before covers went full width. Offered as a count first so
      Settings can stay quiet when there is nothing to catch up on. */
   if (p === '/projects/upgrade-covers' && m === 'GET') {
