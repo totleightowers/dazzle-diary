@@ -3458,29 +3458,61 @@ window.addEventListener('hashchange', (e) => {
    is waste. So it happens once, by itself, on the first launch after updating.
    It needs a connection; anything it cannot reach keeps its mark and is simply
    tried again next time. */
+/* A hundred kits is a long fetch, and it carries on whatever screen you are
+   looking at — nothing cancels it. The only sign of it used to live on the
+   Settings screen though, so walking away was indistinguishable from it having
+   stopped. This pill rides above every screen instead, and goes back to
+   Settings if you tap it. */
+function coverPill(text) {
+  let el = document.getElementById('coverpill');
+  if (text == null) { el?.remove(); return; }
+  if (!el) {
+    el = document.createElement('button');
+    el.id = 'coverpill';
+    el.className = 'coverpill';
+    el.setAttribute('aria-label', 'Fetching pictures — go to Settings');
+    el.onclick = () => go('#/settings');
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+}
+
 /* Moves the line that is already on the screen, rather than drawing a second
    one underneath it, and reads how many are done back off the projects each
-   tick — so the count is the truth rather than a number painted once. */
+   tick — so the count is the truth rather than a number painted once. Only ONE
+   of these runs at a time, however many screens ask for it. */
+let coverWatch = null;
 async function watchCovers(jobId) {
+  if (coverWatch === jobId) return;
+  coverWatch = jobId;
   const set = (id, text) => { const e = document.getElementById(id); if (e) e.textContent = text; };
-  for (;;) {
-    let j, soft;
-    try { [j, soft] = await Promise.all([api('/jobs/' + jobId), api('/projects/upgrade-covers')]); }
-    catch { return; }
-    if (!document.getElementById('hifibar')) return;      // gone from the screen
-    set('hificount', `${num(soft.done)} of ${num(soft.total)} kit${
-      soft.total === 1 ? '' : 's'} have full-size pictures`);
-    const bar = document.getElementById('hifibar');
-    if (bar) bar.style.width = (soft.total ? Math.round(soft.done / soft.total * 100) : 0) + '%';
-    if (j.state === 'running') {
-      if (j.message) set('hifiwhy', j.message);
-      await new Promise((r) => setTimeout(r, 400));
-      continue;
+  try {
+    for (;;) {
+      let j, soft;
+      try { [j, soft] = await Promise.all([api('/jobs/' + jobId), api('/projects/upgrade-covers')]); }
+      catch { coverPill(null); return; }
+      const pct = soft.total ? Math.round(soft.done / soft.total * 100) : 0;
+      // the Settings panel, when it happens to be the screen you are on
+      set('hificount', `${num(soft.done)} of ${num(soft.total)} kit${
+        soft.total === 1 ? '' : 's'} have full-size pictures`);
+      const bar = document.getElementById('hifibar');
+      if (bar) bar.style.width = pct + '%';
+      if (j.state === 'running') {
+        coverPill(`Pictures · ${num(soft.done)}/${num(soft.total)}`);
+        if (j.message) set('hifiwhy', j.message);
+        await new Promise((r) => setTimeout(r, 400));
+        continue;
+      }
+      coverPill(null);
+      if (j.state === 'error') toast(j.error || 'That did not work');
+      else {
+        const n = (j.result || {}).upgraded || 0;
+        if (n) toast(`${n} kit${n === 1 ? '' : 's'} now full size`);
+      }
+      render();
+      return;
     }
-    if (j.state === 'error') toast(j.error || 'That did not work');
-    render();
-    return;
-  }
+  } finally { coverWatch = null; }
 }
 
 async function catchUpCovers() {
@@ -3491,14 +3523,7 @@ async function catchUpCovers() {
     /* Started as a job so Settings can show how far it has got, and pick it back
        up if you go and look while it is still running. */
     const { job } = await api('/projects/upgrade-covers?job=1', { method: 'POST' });
-    if (!job) return;
-    for (;;) {
-      const j = await api('/jobs/' + job);
-      if (j.state === 'running') { await new Promise((r) => setTimeout(r, 700)); continue; }
-      const n = (j.result || {}).upgraded || 0;
-      if (n) { toast(`${n} kit${n === 1 ? '' : 's'} now full size`); render(); }
-      return;
-    }
+    if (job) watchCovers(job);
   } catch { /* no connection: the next launch tries again */ }
 }
 

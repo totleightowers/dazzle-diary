@@ -1846,3 +1846,36 @@ test('the picture panel has one progress line, and a count that is live', async 
   await m.go('#/settings');
   assert.match(m.text(), /1 of 1 kit/, 'the count never caught up with what was done');
 });
+
+/* Fetching a hundred kits takes a while, and the only sign it was happening
+   lived on the Settings screen — so walking away looked exactly like it having
+   stopped, and the only way to be sure was to sit there and watch it. */
+test('the picture fetch keeps going, and says so, after you navigate away', async () => {
+  const m = await mount();
+  await m.sync();
+  await emptyLogbook(m);
+  const cat = await m.api('/catalogue/search?q=moon');
+  const made = await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: cat[0].title, shop: cat[0].shop, dac_handle: cat[0].handle }) });
+  await m.api('/projects/' + made.id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cover_hifi: 0 }) });
+
+  await m.go('#/settings');
+  await m.tap('[data-act="upgradecovers"]');
+  await m.go('#/');                       // walk away
+
+  assert.ok(m.find('#coverpill'), 'nothing anywhere says the fetch is still going');
+
+  for (let i = 0; i < 400; i++) {
+    if (!(await m.api('/projects/upgrade-covers')).candidates) break;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  assert.equal((await m.api('/projects/upgrade-covers')).candidates, 0,
+               'walking away stopped the fetch');
+  // the watcher notices it has finished on its next tick, then clears the pill
+  for (let i = 0; i < 60; i++) {
+    if (!m.find('#coverpill')) break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  assert.equal(m.find('#coverpill'), null, 'the sign outlived the fetch it was about');
+});
