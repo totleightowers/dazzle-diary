@@ -2543,10 +2543,7 @@ route(/^#\/settings$/, async () => {
   /* A fetch already under way when this screen is painted — because it started
      on launch, or because the screen was painted again — is picked back up
      rather than looking like nothing is happening. */
-  if (soft.running) setTimeout(() => {
-    const box = document.getElementById('hifibox');
-    if (box) runJob(soft.running, box, () => render());
-  }, 0);
+  if (soft.running) setTimeout(() => watchCovers(soft.running), 0);
   setTimeout(() => {
     const r = document.getElementById('restore');
     if (!r) return;
@@ -2716,16 +2713,17 @@ route(/^#\/settings$/, async () => {
         <div class="panel pad-in" style="margin-bottom:10px">
           <div class="row" style="align-items:flex-start">
             <span class="k" style="flex:1 1 auto;color:var(--ink)">
-              <span style="display:block;font-weight:600">${num(soft.done)} of ${num(soft.total)} kit${
+              <span style="display:block;font-weight:600" id="hificount">${
+                num(soft.done)} of ${num(soft.total)} kit${
                 soft.total === 1 ? '' : 's'} have full-size pictures</span>
-              <span style="display:block;margin-top:3px;font-size:12px;color:var(--ink-mute)">${
+              <span style="display:block;margin-top:3px;font-size:12px;color:var(--ink-mute)" id="hifiwhy">${
                 soft.candidates
                   ? 'The rest were saved when pictures were fetched small. Fetching them again '
                     + 'needs a connection, and replaces them in place — about 1 MB a picture.'
                   : 'Every kit has the pictures the shop published.'}</span>
             </span>
           </div>
-          <div class="progressline" style="margin:4px 0 2px"><i style="width:${
+          <div class="progressline" style="margin:4px 0 2px"><i id="hifibar" style="width:${
             soft.total ? Math.round(soft.done / soft.total * 100) : 0}%"></i></div>
           ${soft.candidates ? `
           <div style="display:flex;gap:8px;padding:8px 0">
@@ -2735,7 +2733,6 @@ route(/^#\/settings$/, async () => {
                     data-act="upgradecovers"${soft.running ? ' disabled' : ''}>${
                       soft.running ? 'Fetching…' : 'Get the rest'}</button>
           </div>` : ''}
-          <div id="hifibox"></div>
         </div>` : ''}
         <button class="btn primary wide" data-act="backup">Create a full backup</button>
         <div id="backupbox"></div>
@@ -3013,15 +3010,11 @@ async function handleClick(e) {
   }
   else if (act === 'upgradecovers') {
     el.disabled = true;
-    const box = document.getElementById('hifibox');
+    el.textContent = 'Fetching…';
     try {
       const { job } = await api('/projects/upgrade-covers?job=1', { method: 'POST' });
-      if (box && job) runJob(job, box, (j) => {
-        const n = (j.result || {}).upgraded || 0;
-        toast(n ? `${n} kit${n === 1 ? '' : 's'} now full size` : 'Could not reach the shops');
-        render();
-      });
-    } catch (e) { toast(e.message); el.disabled = false; }
+      if (job) watchCovers(job);
+    } catch (e) { toast(e.message); el.disabled = false; render(); }
   }
   else if (act === 'showsmallpics') {
     S.lb = { ...S.lb, gaps: 'pics', open: true };
@@ -3465,6 +3458,63 @@ window.addEventListener('hashchange', (e) => {
    is waste. So it happens once, by itself, on the first launch after updating.
    It needs a connection; anything it cannot reach keeps its mark and is simply
    tried again next time. */
+/* A hundred kits is a long fetch, and it carries on whatever screen you are
+   looking at — nothing cancels it. The only sign of it used to live on the
+   Settings screen though, so walking away was indistinguishable from it having
+   stopped. This pill rides above every screen instead, and goes back to
+   Settings if you tap it. */
+function coverPill(text) {
+  let el = document.getElementById('coverpill');
+  if (text == null) { el?.remove(); return; }
+  if (!el) {
+    el = document.createElement('button');
+    el.id = 'coverpill';
+    el.className = 'coverpill';
+    el.setAttribute('aria-label', 'Fetching pictures — go to Settings');
+    el.onclick = () => go('#/settings');
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+}
+
+/* Moves the line that is already on the screen, rather than drawing a second
+   one underneath it, and reads how many are done back off the projects each
+   tick — so the count is the truth rather than a number painted once. Only ONE
+   of these runs at a time, however many screens ask for it. */
+let coverWatch = null;
+async function watchCovers(jobId) {
+  if (coverWatch === jobId) return;
+  coverWatch = jobId;
+  const set = (id, text) => { const e = document.getElementById(id); if (e) e.textContent = text; };
+  try {
+    for (;;) {
+      let j, soft;
+      try { [j, soft] = await Promise.all([api('/jobs/' + jobId), api('/projects/upgrade-covers')]); }
+      catch { coverPill(null); return; }
+      const pct = soft.total ? Math.round(soft.done / soft.total * 100) : 0;
+      // the Settings panel, when it happens to be the screen you are on
+      set('hificount', `${num(soft.done)} of ${num(soft.total)} kit${
+        soft.total === 1 ? '' : 's'} have full-size pictures`);
+      const bar = document.getElementById('hifibar');
+      if (bar) bar.style.width = pct + '%';
+      if (j.state === 'running') {
+        coverPill(`Pictures · ${num(soft.done)}/${num(soft.total)}`);
+        if (j.message) set('hifiwhy', j.message);
+        await new Promise((r) => setTimeout(r, 400));
+        continue;
+      }
+      coverPill(null);
+      if (j.state === 'error') toast(j.error || 'That did not work');
+      else {
+        const n = (j.result || {}).upgraded || 0;
+        if (n) toast(`${n} kit${n === 1 ? '' : 's'} now full size`);
+      }
+      render();
+      return;
+    }
+  } finally { coverWatch = null; }
+}
+
 async function catchUpCovers() {
   try {
     const { candidates } = await api('/projects/upgrade-covers');
@@ -3473,14 +3523,7 @@ async function catchUpCovers() {
     /* Started as a job so Settings can show how far it has got, and pick it back
        up if you go and look while it is still running. */
     const { job } = await api('/projects/upgrade-covers?job=1', { method: 'POST' });
-    if (!job) return;
-    for (;;) {
-      const j = await api('/jobs/' + job);
-      if (j.state === 'running') { await new Promise((r) => setTimeout(r, 700)); continue; }
-      const n = (j.result || {}).upgraded || 0;
-      if (n) { toast(`${n} kit${n === 1 ? '' : 's'} now full size`); render(); }
-      return;
-    }
+    if (job) watchCovers(job);
   } catch { /* no connection: the next launch tries again */ }
 }
 

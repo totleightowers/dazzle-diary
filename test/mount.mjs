@@ -12,7 +12,11 @@ import { makeDocument, matches } from './dom.mjs';
 
 const IMAGE = 'https://cdn.shopify.com/kit.jpg';
 
-export async function mount({ width = 390, products = null, catalogue = true, shop = 'dac' } = {}) {
+/* `slowImages` makes picture fetches take a moment, so a test can watch
+   something that is meant to happen WHILE a long fetch runs. Without it every
+   fetch here resolves instantly and the window to observe never exists. */
+export async function mount({ width = 390, products = null, catalogue = true, shop = 'dac',
+                              slowImages = 0 } = {}) {
   const document = makeDocument();
   const files = new Map();          // the native file store
   const net = [];                   // every URL the app asked for, in order
@@ -118,6 +122,7 @@ export async function mount({ width = 390, products = null, catalogue = true, sh
     net.push(decodeURIComponent(raw.replace('/__net/?url=', '')));
     const real = decodeURIComponent(raw.replace('/__net/?url=', ''));
     if (/\.(jpg|jpeg|png|webp)/i.test(real)) {
+      if (slowImages) await new Promise((r) => setTimeout(r, slowImages));
       return { ok: true, status: 200, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
                blob: async () => new globalThis.Blob(['x'], { type: 'image/jpeg' }) };
     }
