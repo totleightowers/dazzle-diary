@@ -1851,7 +1851,7 @@ test('the picture panel has one progress line, and a count that is live', async 
    lived on the Settings screen — so walking away looked exactly like it having
    stopped, and the only way to be sure was to sit there and watch it. */
 test('the picture fetch keeps going, and says so, after you navigate away', async () => {
-  const m = await mount();
+  const m = await mount({ slowImages: 60 });   // long enough to be caught in the act
   await m.sync();
   await emptyLogbook(m);
   const cat = await m.api('/catalogue/search?q=moon');
