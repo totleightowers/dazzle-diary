@@ -826,7 +826,8 @@ const GAPS = [
     has: (p) => p.status !== 'wishlist' && !p.date_ordered && !p.date_received },
   { k: 'price', label: 'No price', has: (p) => p.status !== 'wishlist' && p.price == null },
   { k: 'drills', label: 'No diamond count', has: (p) => !p.drills },
-  { k: 'size', label: 'No canvas size', has: (p) => !p.width_in || !p.height_in }
+  { k: 'size', label: 'No canvas size', has: (p) => !p.width_in || !p.height_in },
+  { k: 'pics', label: 'Small pictures', has: (p) => !!p.pics_small }
 ];
 
 /** The shops she actually owns kits from — not every shop the app knows. */
@@ -2535,9 +2536,14 @@ route(/^#\/summary$/, async () => {
 
 /* ========================================================== #/settings */
 route(/^#\/settings$/, async () => {
-  const [state, stats, gaps] = await Promise.all([
-    api('/state'), api('/stats'), api('/projects/backfill-dates').catch(() => ({ candidates: 0 }))]);
+  const [state, stats, gaps, soft] = await Promise.all([
+    api('/state'), api('/stats'), api('/projects/backfill-dates').catch(() => ({ candidates: 0 })),
+    api('/projects/upgrade-covers').catch(() => ({ candidates: 0 }))]);
   const synced = state.catalogue.syncedAt ? dateText(state.catalogue.syncedAt.slice(0, 10)) : null;
+  /* A fetch already under way when this screen is painted — because it started
+     on launch, or because the screen was painted again — is picked back up
+     rather than looking like nothing is happening. */
+  if (soft.running) setTimeout(() => watchCovers(soft.running), 0);
   setTimeout(() => {
     const r = document.getElementById('restore');
     if (!r) return;
@@ -2702,6 +2708,31 @@ route(/^#\/settings$/, async () => {
             <button class="btn ghost" style="flex:1 1 auto;height:40px;font-size:13px"
                     data-act="backfilldates">Use the day added</button>
           </div>
+        </div>` : ''}
+        ${soft.total ? `
+        <div class="panel pad-in" style="margin-bottom:10px">
+          <div class="row" style="align-items:flex-start">
+            <span class="k" style="flex:1 1 auto;color:var(--ink)">
+              <span style="display:block;font-weight:600" id="hificount">${
+                num(soft.done)} of ${num(soft.total)} kit${
+                soft.total === 1 ? '' : 's'} have full-size pictures</span>
+              <span style="display:block;margin-top:3px;font-size:12px;color:var(--ink-mute)" id="hifiwhy">${
+                soft.candidates
+                  ? 'The rest were saved when pictures were fetched small. Fetching them again '
+                    + 'needs a connection, and replaces them in place — about 1 MB a picture.'
+                  : 'Every kit has the pictures the shop published.'}</span>
+            </span>
+          </div>
+          <div class="progressline" style="margin:4px 0 2px"><i id="hifibar" style="width:${
+            soft.total ? Math.round(soft.done / soft.total * 100) : 0}%"></i></div>
+          ${soft.candidates ? `
+          <div style="display:flex;gap:8px;padding:8px 0">
+            <button class="btn ghost" style="flex:1 1 auto;height:40px;font-size:13px"
+                    data-act="showsmallpics">Show the ${num(soft.candidates)} left</button>
+            <button class="btn ghost" style="flex:1 1 auto;height:40px;font-size:13px"
+                    data-act="upgradecovers"${soft.running ? ' disabled' : ''}>${
+                      soft.running ? 'Fetching…' : 'Get the rest'}</button>
+          </div>` : ''}
         </div>` : ''}
         <button class="btn primary wide" data-act="backup">Create a full backup</button>
         <div id="backupbox"></div>
@@ -2977,6 +3008,20 @@ async function handleClick(e) {
     toast(`${filled} project${filled === 1 ? '' : 's'} dated`);
     render();
   }
+  else if (act === 'upgradecovers') {
+    el.disabled = true;
+    el.textContent = 'Fetching…';
+    try {
+      const { job } = await api('/projects/upgrade-covers?job=1', { method: 'POST' });
+      if (job) watchCovers(job);
+    } catch (e) { toast(e.message); el.disabled = false; render(); }
+  }
+  else if (act === 'showsmallpics') {
+    S.lb = { ...S.lb, gaps: 'pics', open: true };
+    S.filter = 'all'; S.q = '';
+    forgetScroll('#/');
+    go('#/');
+  }
   else if (act === 'shownodates') {
     S.lb = { ...S.lb, gaps: 'dates', open: true };
     S.filter = 'all'; S.q = '';
@@ -3133,7 +3178,22 @@ async function handleClick(e) {
   }
   else if (act === 'bmore') { await loadBrowse(false); }
   else if (act === 'pickcat') {
-    S.fromCatalogue = S.browse.items[Number(el.dataset.i)];
+    const pick = S.browse.items[Number(el.dataset.i)];
+    S.fromCatalogue = pick;
+    /* Adding a canvas you already have splits its hours, photos and progress
+       between two rows, and the old flow gave you no hint until you recognised
+       your own kit halfway through typing it in again. Owning two of the same
+       canvas is a real thing though, so this is an offer, not a refusal. */
+    const mine = await api('/projects/find?shop=' + encodeURIComponent(pick.shop || 'dac')
+                         + '&handle=' + encodeURIComponent(pick.dac_handle || pick.handle || '')
+                         + '&title=' + encodeURIComponent(pick.title || '')).catch(() => ({ id: null }));
+    if (mine.id != null
+        && confirm(`${mine.title} is already in your logbook. Open it?\n\n`
+                 + 'Cancel to add a second copy.')) {
+      S.fromCatalogue = null;
+      go('#/p/' + mine.id);
+      return;
+    }
     go('#/new');
   }
   else if (act === 'importshop') { S.importShop = el.dataset.k; render(); }
@@ -3392,9 +3452,84 @@ window.addEventListener('hashchange', (e) => {
   if (e && e.oldURL && e.newURL && e.oldURL.length > e.newURL.length && depth > 0) depth--;
   return render();          // returned so callers can await a finished render
 });
+/* Kits saved before covers were fetched at full width are still carrying the
+   thumbnail, and there is no moment in normal use to fix them: re-picking the
+   same listing is not a relink, and re-fetching a picture that has not changed
+   is waste. So it happens once, by itself, on the first launch after updating.
+   It needs a connection; anything it cannot reach keeps its mark and is simply
+   tried again next time. */
+/* A hundred kits is a long fetch, and it carries on whatever screen you are
+   looking at — nothing cancels it. The only sign of it used to live on the
+   Settings screen though, so walking away was indistinguishable from it having
+   stopped. This pill rides above every screen instead, and goes back to
+   Settings if you tap it. */
+function coverPill(text) {
+  let el = document.getElementById('coverpill');
+  if (text == null) { el?.remove(); return; }
+  if (!el) {
+    el = document.createElement('button');
+    el.id = 'coverpill';
+    el.className = 'coverpill';
+    el.setAttribute('aria-label', 'Fetching pictures — go to Settings');
+    el.onclick = () => go('#/settings');
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+}
+
+/* Moves the line that is already on the screen, rather than drawing a second
+   one underneath it, and reads how many are done back off the projects each
+   tick — so the count is the truth rather than a number painted once. Only ONE
+   of these runs at a time, however many screens ask for it. */
+let coverWatch = null;
+async function watchCovers(jobId) {
+  if (coverWatch === jobId) return;
+  coverWatch = jobId;
+  const set = (id, text) => { const e = document.getElementById(id); if (e) e.textContent = text; };
+  try {
+    for (;;) {
+      let j, soft;
+      try { [j, soft] = await Promise.all([api('/jobs/' + jobId), api('/projects/upgrade-covers')]); }
+      catch { coverPill(null); return; }
+      const pct = soft.total ? Math.round(soft.done / soft.total * 100) : 0;
+      // the Settings panel, when it happens to be the screen you are on
+      set('hificount', `${num(soft.done)} of ${num(soft.total)} kit${
+        soft.total === 1 ? '' : 's'} have full-size pictures`);
+      const bar = document.getElementById('hifibar');
+      if (bar) bar.style.width = pct + '%';
+      if (j.state === 'running') {
+        coverPill(`Pictures · ${num(soft.done)}/${num(soft.total)}`);
+        if (j.message) set('hifiwhy', j.message);
+        await new Promise((r) => setTimeout(r, 400));
+        continue;
+      }
+      coverPill(null);
+      if (j.state === 'error') toast(j.error || 'That did not work');
+      else {
+        const n = (j.result || {}).upgraded || 0;
+        if (n) toast(`${n} kit${n === 1 ? '' : 's'} now full size`);
+      }
+      render();
+      return;
+    }
+  } finally { coverWatch = null; }
+}
+
+async function catchUpCovers() {
+  try {
+    const { candidates } = await api('/projects/upgrade-covers');
+    if (!candidates) return;
+    toast(`Fetching full-size pictures · ${candidates} kit${candidates === 1 ? '' : 's'}`);
+    /* Started as a job so Settings can show how far it has got, and pick it back
+       up if you go and look while it is still running. */
+    const { job } = await api('/projects/upgrade-covers?job=1', { method: 'POST' });
+    if (job) watchCovers(job);
+  } catch { /* no connection: the next launch tries again */ }
+}
+
 Promise.all([
   api('/prefs').then((p) => { if (p) Object.assign(S.prefs, p); }).catch(() => {}),
   // a timer left running when the app was closed is still running
   api('/timer').then((t) => { S.timer = t || null; }).catch(() => {})
-]).finally(render);
+]).finally(() => { render(); catchUpCovers(); });
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});

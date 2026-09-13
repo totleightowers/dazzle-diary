@@ -133,12 +133,56 @@ async function listingImages(shopId, handle) {
   return live;
 }
 
-async function listingCovers(row) {
+/* Shopify serves a picture at whatever width you ask for, and asking for one at
+   all was the only thing making these soft. These are canvases you zoom into to
+   count drills, so the answer is the original: null means send no width and take
+   the picture as published. A whole logbook of them is about 0.4 GB, which is
+   less than a phone spends on a weekend of photographs.
+
+   COVER_FIDELITY is the level a project's pictures were fetched at, not a flag,
+   so that raising it catches up everything fetched under the old one. 1 was the
+   1600px pass; 2 is the original. */
+const COVER_WIDTH = null;
+const COVER_FIDELITY = 2;
+
+async function listingCovers(row, force = false) {
   if (!row.dac_handle) return [];
   const urls = await listingImages(row.shop || 'dac', row.dac_handle);
   if (!urls.length) return [];
-  return cacheGallery(`${row.shop || 'dac'}-${row.dac_handle}`, urls);
+  return cacheGallery(`${row.shop || 'dac'}-${row.dac_handle}`, urls, COVER_WIDTH, force);
 }
+
+/* Re-fetch one project's listing pictures at full width, over the top of
+   whatever is already there. Filenames do not change, so nothing that points at
+   them has to be rewritten. Returns true if the pictures were replaced. */
+async function hifiCovers(row) {
+  if (!needsHifi(row)) return false;
+  const g = await listingCovers(row, true);
+  if (!g.length) return false;
+  const own = isOwnCover(row.cover) ? [row.cover] : [];
+  const all = [...own, ...g];
+  row.cover = all[0];
+  row.covers = all.length > 1 ? JSON.stringify(all) : null;
+  row.cover_hifi = COVER_FIDELITY;
+  return true;
+}
+
+/* Everything added before covers were fetched at full width is still carrying
+   the thumbnail. Catch them up, once each. */
+export async function upgradeCovers(onProgress) {
+  await catalogue();
+  const rows = await idb.all('projects');
+  let done = 0;
+  for (const row of rows) {
+    if (!needsHifi(row)) continue;
+    if (!await hifiCovers(row)) continue;
+    row.updated_at = nowIso();
+    await idb.put('projects', row); done++; onProgress?.(done, row.title);
+  }
+  return done;
+}
+
+const needsHifi = (r) => !!r && !!r.dac_handle && (Number(r.cover_hifi) || 0) < COVER_FIDELITY;
 
 /* Fill in the blanks on projects you own, from the shops that publish more on
    their product page than in their feed. One request per project that is still
@@ -250,7 +294,7 @@ async function syncOne(shop, job, want) {
 const PROJECT_FIELDS = ['title','artist','status','shape','coverage','width_in','height_in','colors','drills',
   'special','drills_estimated','brand','source','price','price_source','shipping','tax','currency','sold_price','hours','progress',
   'date_ordered','date_received','date_started','date_completed','order_ref','order_total','order_items',
-  'order_flag','dac_handle','shop','cover','covers','notes','holds','rating'];
+  'order_flag','dac_handle','shop','cover','covers','cover_hifi','notes','holds','rating'];
 
 const projects = () => idb.all('projects');
 
@@ -425,26 +469,29 @@ export async function saveFile(path, blobOrBuffer) {
 }
 
 /** Download a whole listing gallery; returns the local filenames. */
-async function cacheGallery(key, urls, width = 600) {
+async function cacheGallery(key, urls, width = COVER_WIDTH, force = false) {
   const out = [];
   for (let i = 0; i < (urls || []).length; i++) {
-    const f = await cacheCover(i === 0 ? key : `${key}-${i}`, urls[i], width);
+    const f = await cacheCover(i === 0 ? key : `${key}-${i}`, urls[i], width, force);
     if (f) out.push(f);
   }
   return out;
 }
 
-async function cacheCover(key, url, width = 600) {
+async function cacheCover(key, url, width = COVER_WIDTH, force = false) {
   if (!url) return null;
   let src = url;
   try {
     const u = new URL(url);
-    if (u.hostname.includes('shopify')) { u.searchParams.set('width', String(width)); src = u.toString(); }
+    // no width at all means the original, which is the point
+    if (width && u.hostname.includes('shopify')) { u.searchParams.set('width', String(width)); src = u.toString(); }
   } catch {}
   const ext = (String(url).match(/\.(png|webp|gif|jpe?g)/i) || ['.jpg'])[0].toLowerCase();
   const name = key + (ext === '.jpeg' ? '.jpg' : ext);
   const n = Native();
-  if (n && n.exists('covers/' + name)) return name;
+  /* The filename carries no width, so a picture already on disk is indistinguishable
+     from a sharp one. Without this, upgrading an old kit silently kept the blur. */
+  if (!force && n && n.exists('covers/' + name)) return name;
   try {
     const res = await fetch(via(src));
     if (!res.ok) return null;
@@ -764,7 +811,10 @@ export async function localApi(path, opts = {}) {
       size: (a, b) => ((b.width_in || 0) * (b.height_in || 0)) - ((a.width_in || 0) * (a.height_in || 0)),
       progress: (a, b) => (b.progress || 0) - (a.progress || 0)
     }[sort] || ((a, b) => b.id - a.id);
-    return rows.sort(cmp);
+    /* Whether a kit's pictures are the small ones is a storage question, and the
+       answer rather than the fidelity number is what the logbook needs — so it
+       travels with the row and nothing outside has to know what level we are on. */
+    return rows.sort(cmp).map(r => ({ ...r, pics_small: needsHifi(r) }));
   }
 
   if (p === '/projects' && m === 'POST') {
@@ -779,6 +829,7 @@ export async function localApi(path, opts = {}) {
         const g = await cacheGallery(`${body.shop}-${body.dac_handle}`, urls.length ? urls : [c.image]);
         body.cover = g[0] || null;
         if (g.length > 1) body.covers = JSON.stringify(g);
+        if (g.length) body.cover_hifi = COVER_FIDELITY;
       }
     }
     const ts = nowIso();
@@ -817,6 +868,7 @@ export async function localApi(path, opts = {}) {
     if (m === 'PATCH') {
       const body = json();
       const was = Number(row.progress) || 0;
+      const wasStatus = row.status;
       // pointing a project at a different listing makes the old pictures wrong;
       // a cover you chose yourself is yours and survives the relink
       const relinked = 'dac_handle' in body && (body.dac_handle || null) !== (row.dac_handle || null);
@@ -830,9 +882,17 @@ export async function localApi(path, opts = {}) {
             const own = isOwnCover(row.cover) ? [row.cover] : [];
             row.cover = own[0] || g[0];
             row.covers = JSON.stringify([...own, ...g]);
+            row.cover_hifi = COVER_FIDELITY;
           }
           await fillFromListing(row);
         } catch { /* covers are cosmetic; never fail a save over them */ }
+      }
+      /* Moving a kit along — onto the board, off it, finished — is when you
+         actually look at the picture, so that is the moment to go and get a
+         sharp one for anything still carrying a thumbnail. */
+      if (!relinked && row.status !== wasStatus && needsHifi(row)) {
+        try { await catalogue(); await hifiCovers(row); }
+        catch { /* covers are cosmetic; never fail a save over them */ }
       }
       // a size with no count is still worth an estimate, however it got here
       estimateIfEmpty(row);
@@ -1398,6 +1458,58 @@ export async function localApi(path, opts = {}) {
     return { candidates: rows.filter(r => r.status !== 'wishlist'
       && !r.date_ordered && !r.date_received
       && /^\d{4}-\d{2}-\d{2}$/.test(String(r.created_at || r.updated_at || '').slice(0, 10))).length };
+  }
+
+  /* Is this listing already in the logbook? Answered the way the order import
+     answers it, so the two agree: the same listing, or failing that the same
+     name — a kit typed in by hand has no listing behind it and is still the
+     same canvas. A wish list entry counts: that is the row you meant to find. */
+  if (p === '/projects/find' && m === 'GET') {
+    const shop = q(url, 'shop');
+    const handle = q(url, 'handle');
+    const title = norm(q(url, 'title') || '');
+    const rows = await projects();
+    const hit = (handle && rows.find(r => r.dac_handle === handle && (r.shop || 'dac') === (shop || 'dac')))
+             || (title && rows.find(r => norm(r.title) === title));
+    return hit ? { id: hit.id, title: hit.title, status: hit.status } : { id: null };
+  }
+
+  /* Pictures fetched before covers went full width. Offered as a count first so
+     Settings can stay quiet when there is nothing to catch up on. */
+  /* Worked out from the projects themselves rather than from a box on one
+     screen, so it is the same answer on any screen and after any reload — and
+     it can say which kits are still waiting, not just how many. */
+  if (p === '/projects/upgrade-covers' && m === 'GET') {
+    const rows = (await projects()).filter(r => !!r.dac_handle);
+    const pending = rows.filter(needsHifi);
+    return {
+      total: rows.length,
+      done: rows.length - pending.length,
+      candidates: pending.length,
+      pending: pending.map(r => ({ id: r.id, title: r.title })),
+      running: [...jobs.values()].find(j => j.kind === 'covers' && j.state === 'running')?.id || null
+    };
+  }
+
+  if (p === '/projects/upgrade-covers' && m === 'POST') {
+    /* Two runs at once would fetch everything twice, so a second ask joins the
+       one already going rather than starting another. */
+    const live = [...jobs.values()].find(j => j.kind === 'covers' && j.state === 'running');
+    if (live) return { job: live.id };
+    if (!q(url, 'job')) return { upgraded: await upgradeCovers() };
+
+    const job = newJob('covers-' + Date.now());
+    job.kind = 'covers';
+    const rows = (await projects()).filter(needsHifi);
+    job.total = rows.length;
+    (async () => {
+      try {
+        await upgradeCovers((n, title) => { job.done = n; job.message = title || ''; });
+        job.result = { upgraded: job.done };
+        job.state = 'done';
+      } catch (e) { job.error = e.message; job.state = 'error'; }
+    })();
+    return { job: job.id };
   }
 
   if (p === '/stats') {

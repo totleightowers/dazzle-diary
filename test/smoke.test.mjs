@@ -11,6 +11,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { mount } from './mount.mjs';
 
+/* The IndexedDB shim outlives a single mount, so a test that means "I do not
+   own this yet" has to say so — picking a kit you already have now opens it
+   instead of adding a second copy. */
+const emptyLogbook = async (m) => {
+  for (const r of await m.api('/projects')) await m.api('/projects/' + r.id, { method: 'DELETE' });
+};
+
 const broke = (m) => /Something went wrong/.test(m.text());
 
 async function app(width = 390) {
@@ -70,6 +77,7 @@ for (const width of [390, 1028]) {
 test('a project picked from the catalogue arrives with its picture', async () => {
   const m = await mount({ width: 1028 });
   await m.sync();
+  await emptyLogbook(m);            // this is the ADD path: nothing here yet
   await m.go('#/browse');
   await m.tap('[data-act="pickcat"]');
   assert.equal(globalThis.location.hash, '#/new');
@@ -299,6 +307,7 @@ test('logging time starts a project that had not been started', async () => {
 test('a kit picked from the catalogue shows its pictures and a way to the shop', async () => {
   const m = await mount();
   await m.sync();
+  await emptyLogbook(m);
   await m.go('#/browse');
   await m.tap('[data-act="pickcat"]');
 
@@ -343,6 +352,7 @@ test('a picture can be pinched, panned and pinched back', async () => {
 test('the dots follow the strip, and tapping one moves it', async () => {
   const m = await mount();
   await m.sync();
+  await emptyLogbook(m);
   await m.go('#/browse');
   await m.tap('[data-act="pickcat"]');
 
@@ -1514,4 +1524,358 @@ test('leaving the import by any other route lets go of a half-read file', async 
   await m.go('#/settings');            // the phone's own Back, a tapped link — same thing
   await m.go('#/import');
   assert.ok(m.find('#csv'), 'the import reopened onto a review of a file already abandoned');
+});
+
+/* A cover is the picture of the canvas you are about to spend eighty hours on.
+   It was fetched at 600px wide — fine for a thumbnail, soft the moment you open
+   it. Shopify serves whatever width you ask for, so asking for a small one was
+   the only thing making these pictures compressed. */
+test('a cover is fetched at full fidelity, not a thumbnail', async () => {
+  const m = await mount();
+  await m.sync();
+  const cat = await m.api('/catalogue/search?q=moon');
+  m.net.length = 0;
+  await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: cat[0].title, shop: cat[0].shop, dac_handle: cat[0].handle }) });
+
+  const shots = m.net.filter((u) => /\.(jpg|jpeg|png|webp)/i.test(u));
+  assert.ok(shots.length, 'adding a kit fetched no pictures at all');
+  for (const u of shots)
+    assert.equal(new URL(u).searchParams.get('width'), null,
+                 'a cover was fetched at a asked-for width, so it is not the original');
+});
+
+/* The pictures already on disk were fetched small, and the filename does not
+   say how wide they are — so the "is it already here?" check kept handing back
+   the soft copy for ever. Existing kits have to be able to catch up. */
+test('kits cached before full fidelity can be upgraded in place', async () => {
+  const m = await mount();
+  await m.sync();
+  const cat = await m.api('/catalogue/search?q=moon');
+  const made = await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: cat[0].title, shop: cat[0].shop, dac_handle: cat[0].handle }) });
+
+  // put it back the way an older version of the app left it
+  const row = await m.api('/projects/' + made.id);
+  await m.api('/projects/' + made.id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cover_hifi: 0 }) });
+
+  const before = await m.api('/projects/upgrade-covers');
+  assert.equal(before.candidates, 1, 'the kit with soft pictures was not offered an upgrade');
+
+  m.net.length = 0;
+  const done = await m.api('/projects/upgrade-covers', { method: 'POST' });
+  assert.equal(done.upgraded, 1, 'the upgrade skipped the kit whose file was already on disk');
+  const shots = m.net.filter((u) => /\.(jpg|jpeg|png|webp)/i.test(u));
+  assert.ok(shots.length, 'the upgrade re-fetched nothing — the on-disk check still short-circuits');
+  for (const u of shots)
+    assert.equal(new URL(u).searchParams.get('width'), null, 'refetched at a reduced width');
+
+  // and it does not keep offering to do work it has already done
+  assert.equal((await m.api('/projects/upgrade-covers')).candidates, 0,
+               'the upgrade offers itself again after finishing');
+  assert.ok(row.cover, 'sanity: the project had a cover to begin with');
+});
+
+/* Moving a kit to Started is the moment you actually look at it. */
+test('changing status fetches full fidelity for a kit still on thumbnails', async () => {
+  const m = await mount();
+  await m.sync();
+  const cat = await m.api('/catalogue/search?q=moon');
+  const made = await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: cat[0].title, shop: cat[0].shop, dac_handle: cat[0].handle }) });
+  await m.api('/projects/' + made.id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cover_hifi: 0 }) });
+
+  m.net.length = 0;
+  await m.api('/projects/' + made.id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'started' }) });
+  const shots = m.net.filter((u) => /\.(jpg|jpeg|png|webp)/i.test(u));
+  assert.ok(shots.length, 'a status change did not hot-fetch the full-fidelity pictures');
+});
+
+/* An offer nobody can find is not an offer. */
+test('the offer to get full-size pictures is in Settings, under Your data', async () => {
+  const m = await mount();
+  await m.sync();
+  const cat = await m.api('/catalogue/search?q=moon');
+  const made = await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: cat[0].title, shop: cat[0].shop, dac_handle: cat[0].handle }) });
+  await m.api('/projects/' + made.id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cover_hifi: 0 }) });
+
+  await m.go('#/settings');
+  assert.ok(m.find('[data-act="upgradecovers"]'), 'Settings never offers to fetch the full-size pictures');
+
+  await m.tap('[data-act="upgradecovers"]');
+  // the button starts a job now, so wait for it the way the screen does
+  for (let i = 0; i < 400; i++) {
+    if (!(await m.api('/projects/upgrade-covers')).candidates) break;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  assert.equal((await m.api('/projects/upgrade-covers')).candidates, 0, 'the button did not do it');
+
+  await m.go('#/settings');
+  assert.equal(m.find('[data-act="upgradecovers"]'), null,
+               'the offer outlived the thing it was offering to fix');
+});
+
+/* Picking a kit you already own used to open a blank New project form, so the
+   only way to notice was to recognise your own canvas halfway through typing it
+   in again — and the logbook would then hold it twice, splitting its hours,
+   photos and progress between two rows. */
+test('picking a kit already in the logbook opens it instead of adding it twice', async () => {
+  const m = await mount();
+  await m.sync();
+  await emptyLogbook(m);
+  const cat = await m.api('/catalogue/search?q=moon');
+  const made = await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: cat[0].title, shop: cat[0].shop, dac_handle: cat[0].handle }) });
+  const before = (await m.api('/projects')).length;
+
+  m.answerConfirms(true);
+  await m.go('#/browse');
+  await m.tap('[data-act="pickcat"]');
+
+  assert.equal(globalThis.location.hash, '#/p/' + made.id, 'it did not open the kit already logged');
+  assert.equal((await m.api('/projects')).length, before, 'a second copy was created anyway');
+});
+
+/* Owning two of the same canvas is a real thing, so the answer is an offer, not
+   a refusal. */
+test('declining opens the New project form so a second copy can still be added', async () => {
+  const m = await mount();
+  await m.sync();
+  await emptyLogbook(m);
+  const cat = await m.api('/catalogue/search?q=moon');
+  await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: cat[0].title, shop: cat[0].shop, dac_handle: cat[0].handle }) });
+
+  m.answerConfirms(false);
+  await m.go('#/browse');
+  await m.tap('[data-act="pickcat"]');
+  assert.equal(globalThis.location.hash, '#/new', 'saying no did not let a second copy be added');
+});
+
+/* A kit typed in by hand has no listing behind it, and is still the same canvas. */
+test('a kit added by hand is recognised by name, with no listing link', async () => {
+  const m = await mount();
+  await m.sync();
+  await emptyLogbook(m);
+  const cat = await m.api('/catalogue/search?q=moon');
+  const typed = await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: cat[0].title.toUpperCase() }) });   // no shop, no handle
+
+  m.answerConfirms(true);
+  await m.go('#/browse');
+  await m.tap('[data-act="pickcat"]');
+  assert.equal(globalThis.location.hash, '#/p/' + typed.id, 'the one typed in by hand went unrecognised');
+});
+
+/* Kits saved before covers went full width cannot be caught up by saving them —
+   re-picking the same listing is not a relink, and refetching a picture that has
+   not changed is waste. So the catching up happens once, by itself, on the first
+   launch after updating. */
+test('kits still on thumbnails are caught up on launch, without being asked', async () => {
+  const first = await mount();
+  await first.sync();
+  await emptyLogbook(first);
+  const cat = await first.api('/catalogue/search?q=moon');
+  const made = await first.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: cat[0].title, shop: cat[0].shop, dac_handle: cat[0].handle }) });
+  // put it back the way a version before full-fidelity covers left it
+  await first.api('/projects/' + made.id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cover_hifi: 0 }) });
+  assert.equal((await first.api('/projects/upgrade-covers')).candidates, 1);
+
+  // the next launch
+  const next = await mount();
+  await next.settle();
+  await next.settle();
+
+  assert.equal((await next.api('/projects/upgrade-covers')).candidates, 0,
+               'launching did not catch up the kits still on thumbnails');
+  const shots = next.net.filter((u) => /\.(jpg|jpeg|png|webp)/i.test(u));
+  assert.ok(shots.length, 'launching fetched no pictures at all');
+  for (const u of shots)
+    assert.equal(new URL(u).searchParams.get('width'), null, 'launch refetched at a reduced width');
+});
+
+/* Covers were fetched at 1600 before they were fetched at full size, and those
+   kits were marked done. A mark that only says "done" cannot tell the two
+   apart, so they would have kept the smaller picture for ever. */
+test('kits upgraded to the old 1600px size are caught up again on launch', async () => {
+  const first = await mount();
+  await first.sync();
+  await emptyLogbook(first);
+  const cat = await first.api('/catalogue/search?q=moon');
+  const made = await first.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: cat[0].title, shop: cat[0].shop, dac_handle: cat[0].handle }) });
+  // exactly how a version that fetched 1600px left it
+  await first.api('/projects/' + made.id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cover_hifi: 1 }) });
+
+  assert.equal((await first.api('/projects/upgrade-covers')).candidates, 1,
+               'a kit stuck at 1600px was treated as already done');
+
+  const next = await mount();
+  await next.settle(); await next.settle();
+  assert.equal((await next.api('/projects/upgrade-covers')).candidates, 0, 'launch did not catch it up');
+});
+
+/* The Settings panel said only how many were left, in a box it rewrote itself,
+   with nothing on screen once the page was painted again — so there was no way
+   to tell what had been done, what was left, or whether anything was happening. */
+test('the picture upgrade reports what is done, not only what is left', async () => {
+  const m = await mount();
+  await m.sync();
+  await emptyLogbook(m);
+  const cat = await m.api('/catalogue/search?q=moon');
+  const made = await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: cat[0].title, shop: cat[0].shop, dac_handle: cat[0].handle }) });
+  await m.api('/projects/' + made.id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cover_hifi: 0 }) });
+
+  const before = await m.api('/projects/upgrade-covers');
+  assert.equal(before.total, 1, 'it does not say how many kits it is counting');
+  assert.equal(before.done, 0);
+  assert.equal(before.candidates, 1);
+  assert.deepEqual(before.pending.map((p) => p.id), [made.id], 'it cannot name what is left');
+
+  await m.api('/projects/upgrade-covers', { method: 'POST' });
+  const after = await m.api('/projects/upgrade-covers');
+  assert.equal(after.done, 1, 'a finished kit is not counted as done');
+  assert.deepEqual(after.pending, []);
+});
+
+/* A count worked out from a box on one screen dies with that screen. Worked out
+   from the projects themselves it is right on any screen, at any time. */
+test('what is done survives a reload, because it is read off the projects', async () => {
+  const first = await mount();
+  await first.sync();
+  await emptyLogbook(first);
+  const cat = await first.api('/catalogue/search?q=moon');
+  for (const t of [cat[0], cat[1]].filter(Boolean))
+    await first.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: t.title, shop: t.shop, dac_handle: t.handle }) });
+  const all = await first.api('/projects');
+  await first.api('/projects/' + all[0].id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cover_hifi: 0 }) });
+
+  const seen = await first.api('/projects/upgrade-covers');
+  const next = await mount();                       // a reload
+  const again = await next.api('/projects/upgrade-covers');
+  assert.equal(again.total, seen.total, 'the total reset on reload');
+  assert.ok(again.total > 0, 'sanity: there are kits to count');
+});
+
+/* Progress you cannot see is indistinguishable from nothing happening. */
+test('the picture upgrade runs as a job, so its progress can be watched', async () => {
+  const m = await mount();
+  await m.sync();
+  await emptyLogbook(m);
+  const cat = await m.api('/catalogue/search?q=moon');
+  const made = await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: cat[0].title, shop: cat[0].shop, dac_handle: cat[0].handle }) });
+  await m.api('/projects/' + made.id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cover_hifi: 0 }) });
+
+  const { job } = await m.api('/projects/upgrade-covers?job=1', { method: 'POST' });
+  assert.ok(job, 'the upgrade does not report itself as a job');
+  let j;
+  for (let i = 0; i < 400; i++) {
+    j = await m.api('/jobs/' + job);
+    if (j.state !== 'running') break;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  assert.equal(j.state, 'done', 'the job never finished: ' + (j.error || ''));
+  assert.equal(j.total, 1, 'the job never said how much there was to do');
+  assert.equal(j.done, 1);
+});
+
+/* And the logbook can show you which ones they are. */
+test('the logbook can filter to kits without full-size pictures', async () => {
+  const m = await mount();
+  await m.sync();
+  await emptyLogbook(m);
+  const cat = await m.api('/catalogue/search?q=moon');
+  const made = await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: cat[0].title, shop: cat[0].shop, dac_handle: cat[0].handle }) });
+  await m.api('/projects/' + made.id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cover_hifi: 0 }) });
+
+  await m.go('#/');
+  await m.tap('[data-act="lbfilters"]');
+  assert.ok(m.find('[data-act="lbgaps"][data-k="pics"]'),
+            'the logbook cannot show which kits are still on small pictures');
+});
+
+/* Two bars for one thing, and a count painted once that then sat still while
+   the fetch ran — "1 of 128" however many had actually been done. */
+test('the picture panel has one progress line, and a count that is live', async () => {
+  const m = await mount();
+  await m.sync();
+  await emptyLogbook(m);
+  const cat = await m.api('/catalogue/search?q=moon');
+  const made = await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: cat[0].title, shop: cat[0].shop, dac_handle: cat[0].handle }) });
+  await m.api('/projects/' + made.id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cover_hifi: 0 }) });
+
+  await m.go('#/settings');
+  const panel = m.find('[data-act="upgradecovers"]').closest('.panel');
+  assert.equal(panel.querySelectorAll('.progressline').length, 1,
+               'the picture panel draws more than one progress line');
+  assert.ok(panel.querySelector('#hificount'), 'the count cannot be updated in place');
+  assert.ok(panel.querySelector('#hifibar'), 'the bar cannot be moved in place');
+  assert.match(panel.querySelector('#hificount').textContent, /0 of 1 kit/);
+
+  await m.tap('[data-act="upgradecovers"]');
+  /* The second line used to appear only once the fetch was under way, inside the
+     box the job drew for itself. Scoped to this panel: the diamonds-placed bar
+     further up the screen is a different thing and has every right to be there. */
+  const live = m.find('#hificount').closest('.panel');
+  assert.equal(live.querySelectorAll('.progressline').length, 1,
+               'a second progress line appears while the fetch is running');
+
+  for (let i = 0; i < 400; i++) {
+    if (!(await m.api('/projects/upgrade-covers')).candidates) break;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  await m.settle();
+  await m.go('#/settings');
+  assert.match(m.text(), /1 of 1 kit/, 'the count never caught up with what was done');
+});
+
+/* Fetching a hundred kits takes a while, and the only sign it was happening
+   lived on the Settings screen — so walking away looked exactly like it having
+   stopped, and the only way to be sure was to sit there and watch it. */
+test('the picture fetch keeps going, and says so, after you navigate away', async () => {
+  const m = await mount({ slowImages: 60 });   // long enough to be caught in the act
+  await m.sync();
+  await emptyLogbook(m);
+  const cat = await m.api('/catalogue/search?q=moon');
+  const made = await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: cat[0].title, shop: cat[0].shop, dac_handle: cat[0].handle }) });
+  await m.api('/projects/' + made.id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cover_hifi: 0 }) });
+
+  await m.go('#/settings');
+  await m.tap('[data-act="upgradecovers"]');
+  await m.go('#/');                       // walk away
+
+  assert.ok(m.find('#coverpill'), 'nothing anywhere says the fetch is still going');
+
+  for (let i = 0; i < 400; i++) {
+    if (!(await m.api('/projects/upgrade-covers')).candidates) break;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  assert.equal((await m.api('/projects/upgrade-covers')).candidates, 0,
+               'walking away stopped the fetch');
+  // the watcher notices it has finished on its next tick, then clears the pill
+  for (let i = 0; i < 60; i++) {
+    if (!m.find('#coverpill')) break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  assert.equal(m.find('#coverpill'), null, 'the sign outlived the fetch it was about');
 });
