@@ -2292,6 +2292,12 @@ function paintBrowseBody() {
   // an empty result is exactly when you might want to fetch the shops again,
   // so the indicator belongs on that screen too
   const pull = `<div class="pull" id="pull"><span id="pulltext"></span></div>`;
+  /* Before anything returns early: an empty result used to leave the previous
+     search's count sitting above "Nothing found", which read as results the
+     screen was refusing to show. */
+  const countEl = document.getElementById('browsecount');
+  if (countEl) countEl.textContent = B.items.length
+    ? `${B.items.length}${B.more ? '+' : ''} kit${B.items.length === 1 ? '' : 's'}` : '';
   if (!B.items.length) {
     body.innerHTML = pull + (B.loading
       ? `<p style="margin:28px 0;text-align:center;color:var(--ink-mute);font-size:13px">Looking…</p>`
@@ -2299,9 +2305,6 @@ function paintBrowseBody() {
          <p>Try a different name, or pick another shop.</p></div>`);
     return;
   }
-  const countEl = document.getElementById('browsecount');
-  if (countEl) countEl.textContent = B.items.length
-    ? `${B.items.length}${B.more ? '+' : ''} kit${B.items.length === 1 ? '' : 's'}` : '';
   body.innerHTML = pull + `
     <div class="group-body" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr));padding:16px 0 0">
       ${B.items.map((c, i) => `

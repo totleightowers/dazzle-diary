@@ -1879,3 +1879,27 @@ test('the picture fetch keeps going, and says so, after you navigate away', asyn
   }
   assert.equal(m.find('#coverpill'), null, 'the sign outlived the fetch it was about');
 });
+
+/* The count above the results was left behind when a search found nothing: the
+   empty state returned before the label was touched, so "3 kits" sat above
+   "Nothing found" and looked like results the screen was refusing to show. */
+test('a search that finds nothing clears the count above it', async () => {
+  const m = await mount();
+  await m.sync();
+  await m.go('#/browse');
+
+  const q = m.find('#bq');
+  q.value = 'moon';
+  await q.oninput();
+  await new Promise((r) => setTimeout(r, 320));
+  await m.settle();
+  assert.match(m.find('#browsecount').textContent, /kit/, 'a search with hits shows no count');
+
+  q.value = 'zzzzzzzz';
+  await q.oninput();
+  await new Promise((r) => setTimeout(r, 320));
+  await m.settle();
+  assert.ok(m.text().includes('Nothing found'), 'sanity: the search should have found nothing');
+  assert.equal(m.find('#browsecount').textContent, '',
+               'the count from the previous search is still sitting above "Nothing found"');
+});
