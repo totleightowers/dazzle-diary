@@ -1903,3 +1903,79 @@ test('a search that finds nothing clears the count above it', async () => {
   assert.equal(m.find('#browsecount').textContent, '',
                'the count from the previous search is still sitting above "Nothing found"');
 });
+
+/* A price already set is not blank, so the blanks-only fill never corrects one.
+   When an order history says a different figure — a discount applied after the
+   kit was logged — that difference has to be offered separately, and offered
+   without putting anything you typed yourself at risk. */
+test('an order history offers to correct prices it disagrees with', async () => {
+  const m = await mount();
+  await m.sync();
+  await emptyLogbook(m);
+  const cat = await m.api('/catalogue/search?q=moon');
+  const made = await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: cat[0].title, shop: cat[0].shop, dac_handle: cat[0].handle,
+                           price: 999, price_source: 'order' }) });
+
+  const csv = 'Order,Date,Payment Status,Fulfillment Status,Total,Products\n'
+            + `#900,2026/03/07,paid,delivered,£12.34,${cat[0].title}\n`;
+  const pre = await m.api('/import/preview?shop=dac', { method: 'POST', body: csv });
+  const dupe = pre.kits.find((k) => k.duplicate);
+  assert.ok(dupe, 'the kit already logged was not recognised as a duplicate');
+  assert.ok(dupe.priceUpdate, 'the preview does not notice the order disagrees on price');
+  assert.equal(dupe.priceUpdate.from, 999);
+  assert.equal(dupe.priceUpdate.to, 12.34);
+  assert.equal(dupe.priceUpdate.yours, false);
+  assert.equal(pre.summary.priceChanges, 1, 'the summary does not count what it could correct');
+
+  const r = await m.api('/import/prices', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kits: pre.kits.filter((k) => k.priceUpdate) }) });
+  assert.equal(r.updated, 1);
+  const after = await m.api('/projects/' + made.id);
+  assert.equal(after.price, 12.34, 'the price was not corrected');
+  assert.equal(after.price_source, 'order');
+});
+
+/* A figure you typed is the one thing an import must never quietly replace. */
+test('a price you typed yourself is left alone, and said to be left alone', async () => {
+  const m = await mount();
+  await m.sync();
+  await emptyLogbook(m);
+  const cat = await m.api('/catalogue/search?q=moon');
+  const made = await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: cat[0].title, shop: cat[0].shop, dac_handle: cat[0].handle }) });
+  await m.api('/projects/' + made.id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ price: 42 }) });      // typed, so price_source becomes "you"
+
+  const csv = 'Order,Date,Payment Status,Fulfillment Status,Total,Products\n'
+            + `#901,2026/03/07,paid,delivered,£12.34,${cat[0].title}\n`;
+  const pre = await m.api('/import/preview?shop=dac', { method: 'POST', body: csv });
+  const dupe = pre.kits.find((k) => k.duplicate);
+  assert.equal(dupe.priceUpdate.yours, true, 'it cannot tell a figure you typed from one it set');
+  assert.equal(pre.summary.priceYours, 1, 'the summary does not say what it is leaving alone');
+
+  await m.api('/import/prices', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kits: pre.kits.filter((k) => k.priceUpdate) }) });
+  assert.equal((await m.api('/projects/' + made.id)).price, 42, 'it overwrote a price you typed');
+});
+
+/* The offer has to be reachable, and separate from the blanks-only fill. */
+test('the price correction is offered on the duplicates tab, as its own button', async () => {
+  const m = await mount();
+  await m.sync();
+  await emptyLogbook(m);
+  const cat = await m.api('/catalogue/search?q=moon');
+  await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: cat[0].title, shop: cat[0].shop, dac_handle: cat[0].handle,
+                           price: 999, price_source: 'order' }) });
+
+  await m.go('#/import');
+  await m.dropCsv('Order,Date,Payment Status,Fulfillment Status,Total,Products\n'
+                + `#902,2026/03/07,paid,delivered,£12.34,${cat[0].title}\n`);
+  await m.tap('[data-act="itab"][data-k="dupe"]');
+
+  assert.ok(m.find('[data-act="importprices"]'), 'the duplicates tab never offers to fix the price');
+  await m.tap('[data-act="importprices"]');
+  const all = await m.api('/projects');
+  assert.equal(all[0].price, 12.34, 'tapping it did not correct the price');
+});
