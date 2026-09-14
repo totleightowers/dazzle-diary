@@ -708,9 +708,22 @@ export async function localApi(path, opts = {}) {
     const byId = new Map(rows.map(r => [r.id, r]));
     for (const k of preview.kits || []) {
       if (!k.duplicate || k.duplicateId == null) continue;
-      k.fills = importFills(byId.get(k.duplicateId), k);
+      const have = byId.get(k.duplicateId);
+      k.fills = importFills(have, k);
       k.fillCount = Object.keys(k.fills || {}).length;
+      /* A price already set is not blank, so the fill above will never correct
+         one — and a discount applied after a kit was logged makes the logged
+         figure wrong. Say so separately, and say whose figure it is: one you
+         typed yourself is never replaced without being asked. */
+      if (have && k.price != null && have.price != null
+          && Math.abs(Number(have.price) - Number(k.price)) >= 0.005) {
+        k.priceUpdate = { from: Number(have.price), to: Number(k.price),
+                          yours: have.price_source === 'you' };
+      }
     }
+    const changes = (preview.kits || []).filter(k => k.priceUpdate);
+    preview.summary.priceChanges = changes.filter(k => !k.priceUpdate.yours).length;
+    preview.summary.priceYours = changes.filter(k => k.priceUpdate.yours).length;
     /* A line the catalogue cannot match is not necessarily a line you do not
        own: shops retire listings, and a kit bought last May may simply not be
        sold any more. The order still knows when it was bought, and the logbook
@@ -729,6 +742,26 @@ export async function localApi(path, opts = {}) {
     preview.summary.fillable = [...(preview.kits || []), ...(preview.skipped || [])]
       .filter(k => k.fillCount > 0).length;
     return preview;
+  }
+
+  /* Correcting a price is its own decision, kept apart from the blanks-only
+     fill so that saying yes to one is never quietly saying yes to the other. */
+  if (p === '/import/prices' && m === 'POST') {
+    const kits = json().kits || [];
+    let updated = 0, kept = 0;
+    for (const k of kits) {
+      if (!k.priceUpdate) continue;
+      const row = await idb.get('projects', Number(k.duplicateId));
+      if (!row) continue;
+      if (row.price_source === 'you') { kept++; continue; }
+      if (k.price == null || Math.abs(Number(row.price) - Number(k.price)) < 0.005) continue;
+      row.price = Number(k.price);
+      row.price_source = k.priceSource || 'order';
+      row.updated_at = nowIso();
+      await idb.put('projects', row);
+      updated++;
+    }
+    return { updated, kept };
   }
 
   if (p === '/import/fill' && m === 'POST') {
@@ -869,6 +902,7 @@ export async function localApi(path, opts = {}) {
       const body = json();
       const was = Number(row.progress) || 0;
       const wasStatus = row.status;
+      const wasPrice = row.price ?? null;
       // pointing a project at a different listing makes the old pictures wrong;
       // a cover you chose yourself is yours and survives the relink
       const relinked = 'dac_handle' in body && (body.dac_handle || null) !== (row.dac_handle || null);
@@ -893,6 +927,13 @@ export async function localApi(path, opts = {}) {
       if (!relinked && row.status !== wasStatus && needsHifi(row)) {
         try { await catalogue(); await hifiCovers(row); }
         catch { /* covers are cosmetic; never fail a save over them */ }
+      }
+      /* Whose figure a price is decides whether an import may ever replace it,
+         so the rule cannot live only in the form: a price changed through any
+         route, without saying where it came from, is yours. */
+      if ('price' in body && !('price_source' in body)
+          && (body.price ?? null) !== (wasPrice ?? null)) {
+        row.price_source = row.price == null ? null : 'you';
       }
       // a size with no count is still worth an estimate, however it got here
       estimateIfEmpty(row);

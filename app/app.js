@@ -2008,6 +2008,22 @@ function paintImportReview() {
           Fill in ${sum.fillable} project${sum.fillable === 1 ? '' : 's'}</button>
       ` : ''}
 
+      ${tab === 'dupe' && (sum.priceChanges || sum.priceYours) ? `
+        <div class="notice" style="margin-top:16px">${svg('info', 18)}
+          <span>${sum.priceChanges
+            ? `This order says a different price for <strong>${sum.priceChanges}</strong> of these —
+               a discount applied after they were logged, most often. Filling in blanks never
+               touches a price that is already set, so this is its own decision.`
+            : 'This order says a different price for some of these.'}${
+            sum.priceYours
+              ? ` <strong>${sum.priceYours}</strong> ${sum.priceYours === 1 ? 'is a figure' : 'are figures'}
+                  you typed yourself, and ${sum.priceYours === 1 ? 'it is' : 'they are'} left alone.`
+              : ''}</span></div>
+        ${sum.priceChanges ? `
+        <button class="btn wide" style="margin-top:10px" data-act="importprices">
+          Update ${sum.priceChanges} price${sum.priceChanges === 1 ? '' : 's'}</button>` : ''}
+      ` : ''}
+
       ${tab === 'skipped' ? `
         <section class="group" data-status="none" style="margin-top:16px">
           <header><span class="dot" style="background:var(--ink-faint)"></span>
@@ -3201,6 +3217,19 @@ async function handleClick(e) {
   }
   else if (act === 'importshop') { S.importShop = el.dataset.k; render(); }
   else if (act === 'importback') { forgetImport(); render(); }
+  else if (act === 'importprices') {
+    const kits = (S.importPreview.kits || []).filter((k) => k.priceUpdate && !k.priceUpdate.yours);
+    if (!kits.length) { toast('No prices to update'); return; }
+    el.disabled = true;
+    try {
+      const r = await api('/import/prices', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kits }) });
+      toast(r.updated ? `${r.updated} price${r.updated === 1 ? '' : 's'} updated`
+                      : 'Nothing needed changing');
+      forgetImport();
+      go('#/');
+    } catch (e) { toast(e.message); el.disabled = false; }
+  }
   else if (act === 'itab') { S.importTab = el.dataset.k; paintImportReview(); }
   /* An order history knows when you bought things. The import only ever created
      what was missing, so the one question a logbook cannot answer for itself —
