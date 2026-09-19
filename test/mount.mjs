@@ -193,11 +193,30 @@ export async function mount({ width = 390, products = null, catalogue = true, sh
   /* Tap something that is actually on screen. If the selector matches nothing,
      say so loudly — a test that silently taps nothing proves nothing. */
   const tap = async (selector) => {
+    /* Screens draw some of their content after loading it, so wait a moment for
+       the thing to appear — a tap that raced a busy machine used to fail with
+       "nothing on screen" while the list was still loading. Still loud if it
+       never comes. */
+    for (let i = 0; i < 150 && !document.querySelector(selector); i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
     const el = document.querySelector(selector);
     if (!el) throw new Error(`nothing on screen matches ${selector}`);
     el.dispatchEvent({ type: 'click' });
     await settle();
     return el;
+  };
+
+  /* Wait for something to become true, rather than for a fixed time. A tap
+     whose handler waits on the database finishes when it finishes; a fixed
+     settle guessed how long that takes, and under load guessed wrong. */
+  const until = async (check, ms = 3000) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      if (await check()) return true;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    return false;
   };
 
   const sync = async () => {
@@ -225,7 +244,7 @@ export async function mount({ width = 390, products = null, catalogue = true, sh
   };
 
   return {
-    document, window: win, api, app, go, tap, settle, sync, seed, fire, files, downloads, dropCsv, net, dacScripts, dacForgotten,
+    document, window: win, api, app, go, tap, settle, until, sync, seed, fire, files, downloads, dropCsv, net, dacScripts, dacForgotten,
     html: () => document.documentElement.innerHTML,
     text: () => document.documentElement.textContent,
     screen: () => (document.getElementById('main') || app).innerHTML,

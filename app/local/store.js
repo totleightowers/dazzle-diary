@@ -1554,10 +1554,10 @@ export async function localApi(path, opts = {}) {
       if ((r.shop || 'dac') !== 'dac' || !r.dac_handle) continue;
       if (!DAC_STATUS[r.status]) continue;
       const c = cache.rows.find(x => x.shop === 'dac' && x.handle === r.dac_handle);
-      if (!c || !c.variant_id) { missing.push(r.title); continue; }
+      if (!c || !c.variant_id || !c.sku) { missing.push(r.title); continue; }
       if (seen.has(c.variant_id)) continue;      // two of a kit share one legend
       seen.add(c.variant_id);
-      kits.push({ variant: c.variant_id, handle: c.handle, name: r.title });
+      kits.push({ variant: c.variant_id, handle: c.handle, sku: c.sku, name: r.title });
     }
     /* The first run marks only a few, so you can check them on DAC before the
        rest are touched: "Already purchased" is a toggle. */

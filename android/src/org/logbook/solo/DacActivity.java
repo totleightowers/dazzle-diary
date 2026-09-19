@@ -136,7 +136,11 @@ public class DacActivity extends Activity {
                — a redirect, or a reload the press caused — only watches: a
                second press would un-mark it. */
             loads++;
-            web.evaluateJavascript(loads == 1 ? markJs : watchJs, null);
+            // which SKU this page is for, then the script (core/dacsync.js)
+            JSONObject k = kits.optJSONObject(index);
+            String prep = k == null ? "" : k.optString("prep", "");
+            if (prep.isEmpty()) return;          // the poll will time the kit out
+            web.evaluateJavascript(prep + "\n" + (loads == 1 ? markJs : watchJs), null);
             return;
         }
 

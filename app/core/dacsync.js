@@ -23,115 +23,130 @@
 
 /* ------------------------------------------------------------ marking */
 
-/* Self-contained: no imports, no closures — it is sent as source text. */
+/* Self-contained: no imports, no closures — it is sent as source text.
+
+   Whether a kit is ticked is NOT read off the page. DAC keeps the answer as a
+   list of SKUs — `?section_id=already-purchased-data`, the same list its own
+   page reads — with ticked-by-hand entries as "MA:<sku>" and un-ticked ones as
+   "MR:<sku>". So the script asks that list before pressing and asks it again
+   afterwards to confirm. The button is a toggle; this presses it only when
+   DAC's own list says the kit is not there. */
 export async function markPurchased(env) {
-  const { document, sleep, out } = env;
+  const { document, fetch, sleep, out } = env;
   out.state = 'working';
-  const text = (el) => String(el.textContent || '').replace(/\s+/g, ' ').trim();
+  const press = env.press !== false;
+  const sku = String(env.sku || '');
+  const loc = env.location || (typeof location !== 'undefined' ? location : { origin: '', pathname: '' });
   const shown = env.isShown || function (el) {
     if (!el || !el.getClientRects || !el.getClientRects().length) return false;
+    if (el.classList && el.classList.contains('hidden')) return false;
     const cs = el.ownerDocument && el.ownerDocument.defaultView
       ? el.ownerDocument.defaultView.getComputedStyle(el) : null;
-    return !cs || (cs.visibility !== 'hidden' && cs.display !== 'none' && cs.opacity !== '0');
+    return !cs || (cs.visibility !== 'hidden' && cs.display !== 'none');
   };
-  // tolerant of the wording being split across pieces with no space between
-  const MARKED = /you\s*already\s*purchased\s*this\s*product/i;
-  const OFFER = /already\s*purchased\s*this\s*\?/i;
-
-  /* The elements that actually hold some wording — not the containers around
-     them. Every ancestor's text includes its children's, hidden or not, so an
-     ancestor would "say" whatever is hidden inside it. */
-  const holding = (re) => Array.from(document.querySelectorAll('body *'))
-    .filter((el) => re.test(text(el)) && !Array.from(el.children || []).some((c) => re.test(text(c))));
-
-  /* The pink "You already purchased this product." pill. Its markup is on the
-     page either way, hidden until the kit is marked — so only the element
-     holding those words counts, and only when IT is showing. Asking whether
-     any visible element's text included the words was true on every page:
-     the containers around the hidden pill are visible. */
-  const marked = () => holding(MARKED).some(shown);
-
-  /* "Already purchased this?" — found in ANY element (it need not be a real
-     button), taking the most specific one saying it, then the nearest real
-     control around it; clicking inside a widget reaches its handler either
-     way. Never anything that also says "You already purchased": that one
-     holds the ⓧ that UN-marks a kit. */
-  const CONTROL = /^(BUTTON|A|LABEL)$/;
-  const offer = () => {
-    const hits = holding(OFFER).filter((el) => !MARKED.test(text(el)) && shown(el));
-    if (!hits.length) return null;
-    hits.sort((a, b) => text(a).length - text(b).length
-      || (a.querySelectorAll ? a.querySelectorAll('*').length : 0) - (b.querySelectorAll ? b.querySelectorAll('*').length : 0));
-    let el = hits[0];
-    for (let up = el, n = 0; up && n < 5; up = up.parentElement, n++) {
-      if (CONTROL.test(up.tagName || '') || (up.getAttribute && up.getAttribute('role') === 'button')) {
-        // the control must not also carry the pill's wording
-        if (!MARKED.test(text(up))) el = up;
-        break;
-      }
-    }
-    return el;
-  };
-
-  /* What was on the page, for when a kit could not be ticked: what said
-     "purchased", which scripts the signed-in page loaded, and anything that
-     hides content from a script (frames, shadow roots). Emails and sign-in
-     signatures are scrubbed before any of it leaves the page. */
   const scrub = (v) => String(v || '')
     .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '[email]')
-    .replace(/(data-auth-digest|digest|token)(["'=:\s]+)[^"'\s,}]+/gi, '$1$2[removed]');
+    .replace(/(data-auth-digest|digest|token|password)(["'=:\s]+)[^"'\s,}&]+/gi, '$1$2[removed]');
+  const text = (el) => String(el.textContent || '').replace(/\s+/g, ' ').trim();
+
+  /* What was on the page, when a kit could not be ticked. */
   const diagnose = () => {
-    const all = Array.from(document.querySelectorAll('body *'));
-    const cands = all.filter((el) => /purchas/i.test(text(el)) && text(el).length < 240)
-      .sort((a, b) => text(a).length - text(b).length).slice(0, 10)
-      .map((el) => ({
-        tag: el.tagName || '', id: scrub(el.id), cls: scrub(String(el.className || '')).slice(0, 160),
-        role: el.getAttribute ? (el.getAttribute('role') || '') : '',
-        parent: el.parentElement ? (el.parentElement.tagName || '') + '.' + scrub(String(el.parentElement.className || '')).slice(0, 80) : '',
-        text: scrub(text(el)).slice(0, 120), shown: !!shown(el),
-        html: scrub(String(el.outerHTML || '')).slice(0, 600)
-      }));
-    const scripts = Array.from(document.querySelectorAll('script[src]')).map((x) => scrub(x.src || ''))
-      .filter((u) => !/google|facebook|fbcdn|tiktok|pinterest|snapchat|bing|hotjar|clarity|doubleclick/i.test(u))
-      .slice(0, 80);
-    const frames = Array.from(document.querySelectorAll('iframe')).map((f) => scrub(f.src || '(inline)')).slice(0, 20);
-    const shadows = all.filter((el) => el.shadowRoot).map((el) => el.tagName).slice(0, 20);
-    const loc = env.location || (typeof location !== 'undefined' ? location : { pathname: '' });
-    return { page: String(loc.pathname || ''), cands, scripts, frames, shadows };
+    const widgets = Array.from(document.querySelectorAll('[data-update-state], [data-already-purchased-indicator]'))
+      .slice(0, 12).map((el) => ({
+        sku: scrub(el.getAttribute && el.getAttribute('data-product-variant-sku')),
+        indicator: !!(el.hasAttribute && el.hasAttribute('data-already-purchased-indicator')),
+        updates: !!(el.hasAttribute && el.hasAttribute('data-update-state')),
+        cls: scrub(String(el.className || '')).slice(0, 120), shown: !!shown(el),
+        text: scrub(text(el)).slice(0, 80) }));
+    return { page: String(loc.pathname || ''), sku, widgets };
   };
 
-  /* Pressing is only ever safe once the page has SETTLED. If DAC draws the
-     button first and swaps in the pill only after checking the account, acting
-     at once would press it on a kit that is already marked — and un-mark it.
-     So the button must have been showing, with no pill, for `settle` looks in
-     a row. And a script that must not press (because this kit's page already
-     had its press) only watches. */
-  const press = env.press !== false;
-  const settle = env.settle ?? 7;
-  let pressed = false;
-  let steady = 0;
-  for (let i = 0; i < 50; i++) {
-    if (marked()) { out.state = pressed ? 'marked' : 'already'; return; }
-    if (press && !pressed) {
-      const b = offer();
-      steady = b ? steady + 1 : 0;
-      if (b && steady >= settle) { b.click(); pressed = true; }
+  // DAC's own list of what this account owns
+  const decode = (t) => t.replace(/&quot;|&#34;/g, '"').replace(/&#39;|&#x27;/g, "'")
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  const owned = async () => {
+    const r = await fetch(String(loc.origin || '') + '/?section_id=already-purchased-data&_=' + Date.now(),
+                          { credentials: 'same-origin' });
+    const html = await r.text();
+    const m = html.match(/<pre[^>]*data-already-purchased-skus[^>]*>([\s\S]*?)<\/pre>/i);
+    if (!m) throw new Error('DAC did not send the list of kits this account owns');
+    const list = JSON.parse(decode(m[1]).trim() || '[]');
+    if (!Array.isArray(list)) throw new Error('the owned list was not a list');
+    return list.map(String);
+  };
+  const has = (list) => !list.includes('MR:' + sku) && (list.includes(sku) || list.includes('MA:' + sku));
+
+  /* The requests the press makes, recorded so a faster version could make them
+     directly. Only the address, the method and the NAMES of what was sent. */
+  const seen = [];
+  const watch = () => {
+    const w = env.window || (typeof window !== 'undefined' ? window : null);
+    if (!w) return () => {};
+    const f0 = w.fetch, x0 = w.XMLHttpRequest && w.XMLHttpRequest.prototype.open;
+    const keys = (b) => { try { return Object.keys(JSON.parse(b)); } catch (e) {
+      return b && typeof b.keys === 'function' ? Array.from(b.keys()) : []; } };
+    if (f0) w.fetch = function (u, o) {
+      seen.push({ via: 'fetch', method: (o && o.method) || 'GET', url: scrub(String(u)).split('?')[0], sent: keys(o && o.body) });
+      return f0.apply(this, arguments);
+    };
+    if (x0) w.XMLHttpRequest.prototype.open = function (m, u) {
+      seen.push({ via: 'xhr', method: m, url: scrub(String(u)).split('?')[0] });
+      return x0.apply(this, arguments);
+    };
+    return () => { if (f0) w.fetch = f0; if (x0) w.XMLHttpRequest.prototype.open = x0; };
+  };
+
+  if (!sku) { out.state = 'failed'; out.error = 'no SKU for this kit'; out.found = diagnose(); return; }
+  let list;
+  try { list = await owned(); }
+  catch (e) { out.state = 'failed'; out.error = String(e && e.message || e); out.found = diagnose(); return; }
+  if (has(list)) { out.state = 'already'; return; }
+  if (!press) {
+    // a page that loaded again for this kit: never press, only see if it worked
+    for (let i = 0; i < 10; i++) {
+      await sleep(1000);
+      try { if (has(await owned())) { out.state = 'already'; return; } } catch (e) { /* keep looking */ }
     }
-    await sleep(300);
+    out.state = 'unconfirmed'; out.found = diagnose(); return;
   }
-  out.state = pressed ? 'unconfirmed' : (press ? 'missing' : 'unconfirmed');
-  try { out.found = diagnose(); } catch (e) { out.found = { error: String(e && e.message || e) }; }
+
+  // the kit's own "Already purchased this?" — marked as the indicator that updates
+  // state, for exactly this SKU. The ⓧ also updates state, but is not an indicator.
+  const offer = () => Array.from(document.querySelectorAll('[data-update-state]')).find((el) =>
+    el.getAttribute('data-product-variant-sku') === sku
+    && el.hasAttribute('data-already-purchased-indicator') && shown(el)) || null;
+  let el = null;
+  for (let i = 0; i < 40 && !el; i++) { el = offer(); if (!el) await sleep(300); }
+  if (!el) { out.state = 'missing'; out.found = diagnose(); return; }
+
+  const restore = watch();
+  el.click();
+  let ok = false;
+  for (let i = 0; i < 15 && !ok; i++) {
+    await sleep(1000);
+    try { ok = has(await owned()); } catch (e) { /* keep looking */ }
+  }
+  restore();
+  out.request = seen.filter((r) => !/section_id=already-purchased-data/.test(r.url)).slice(0, 6);
+  out.state = ok ? 'marked' : 'unconfirmed';
+  if (!ok) out.found = diagnose();
 }
 
-/* `press: false` is for a page that loaded again during the same kit — the
-   first page may already have pressed, and a second press un-marks. Each page
-   runs it at most once. */
+/* `press: false` is for a page that loaded again during the same kit: the first
+   may already have pressed, and a second press un-marks. Each page runs it at
+   most once. The kit's SKU is set just before, by `buildMarkPrep`. */
 export function buildMarkScript({ press = true } = {}) {
   return 'window.__ap || (' + markPurchased.toString() + ')({'
-    + 'document: document, press: ' + (press ? 'true' : 'false') + ','
+    + 'document: document, fetch: fetch.bind(window), window: window, location: location,'
+    + 'press: ' + (press ? 'true' : 'false') + ', sku: window.__apSku || "",'
     + 'sleep: function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); },'
     + 'out: (window.__ap = {})'
     + '});';
+}
+
+/** Run before the mark script on a kit's page: which SKU this page is for. */
+export function buildMarkPrep(sku) {
+  return 'window.__apSku = ' + JSON.stringify(String(sku || '')) + ';';
 }
 
 /* A result only counts if it was read on THAT kit's page. The screen opens the

@@ -5,135 +5,143 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { markPurchased, buildMarkScript, runLegends, buildLegendScript,
+import { markPurchased, buildMarkScript, buildMarkPrep, runLegends, buildLegendScript,
          readSyncResult, cleanColour } from '../app/core/dacsync.js';
 
 /* ------------------------------------------------------------ marking */
 
-/** A product page in miniature, drawn from the two states DAC shows. */
-function productPage({ marked = false, button = true, appearsAfter = 0, pillInMarkup = true } = {}) {
+/** A signed-in DAC product page, with DAC's owned list behind it. */
+function dacPage({ sku = 'DAC-1S', owned = [], takes = true, offerShown = true, cards = ['DAC-9S'], listOk = true, escaped = false } = {}) {
+  const server = { list: [...owned] };
   const clicks = [];
-  const els = [];
-  const el = (tag, textContent, shown, onClick) => {
-    const e = { tagName: tag, textContent, shown, children: [],
-                click() { clicks.push(textContent); onClick && onClick(); } };
-    els.push(e); return e;
-  };
-  // the pill, with the ⓧ that UN-marks, is always in the markup; shown when marked
-  const pill = el('div', 'You already purchased this product.', marked);
-  const unmark = el('button', 'You already purchased this product. ⓧ', marked, () => { pill.shown = false; });
-  let offer = null;
-  let tries = 0;
-  const makeOffer = () => {
-    offer = el('button', 'Already purchased this?', !marked, () => { pill.shown = true; unmark.shown = true; offer.shown = false; });
-  };
-  if (button && !appearsAfter) makeOffer();
-  if (!pillInMarkup) { pill.shown = false; }
+  const node = (attrs, cls, text, onClick) => ({
+    attrs, className: cls, textContent: text, shown: true,
+    getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; },
+    hasAttribute(k) { return k in this.attrs; },
+    click() { clicks.push(this.className); onClick && onClick(); } });
+  const offer = node({ 'data-already-purchased-indicator': '', 'data-update-state': '', 'data-product-variant-sku': sku },
+                     'to-hide offer', 'Already purchased this?', () => { if (takes) server.list.push('MA:' + sku); });
+  offer.shown = offerShown;
+  const unmark = node({ 'data-update-state': '', 'data-product-variant-sku': sku }, 'unmark', '',
+                      () => server.list.push('MR:' + sku));
+  const pill = node({ 'data-already-purchased-indicator': '', 'data-product-variant-sku': sku }, 'hidden pill',
+                    'You already purchased this product.');
+  const cardNodes = cards.map((c) => node({ 'data-already-purchased-indicator': '', 'data-update-state': '',
+                                             'data-product-variant-sku': c }, 'card ' + c, 'ALREADY PURCHASED'));
+  const all = [offer, unmark, pill, ...cardNodes];
   const document = {
     querySelectorAll(sel) {
-      tries++;
-      if (button && appearsAfter && !offer && tries > appearsAfter) makeOffer();
-      if (sel === 'body *') return els;
-      return els.filter((e) => e.tagName === 'button');
-    }
+      if (sel === '[data-update-state]') return all.filter((n) => n.hasAttribute('data-update-state'));
+      return all.filter((n) => n.hasAttribute('data-update-state') || n.hasAttribute('data-already-purchased-indicator'));
+    } };
+  const fetches = [];
+  const fetch = async (url) => {
+    fetches.push(url);
+    if (!listOk) return { text: async () => '<html>nothing here</html>' };
+    let json = JSON.stringify(server.list);
+    if (escaped) json = json.replace(/"/g, '&quot;');
+    return { text: async () => `<div><pre data-already-purchased-skus>${json}</pre></div>` };
   };
-  return { document, clicks, pill, isShown: (e) => !!e.shown };
+  return { document, fetch, clicks, server, fetches, offer, unmark, isShown: (e) => e.shown !== false };
 }
-const mark = async (page, opts = {}) => {
+const tick = async (page, opts = {}) => {
   const out = {};
-  await markPurchased({ document: page.document, sleep: async () => {}, out, isShown: page.isShown, ...opts });
-  return out.state;
+  await markPurchased({ document: page.document, fetch: page.fetch, sleep: async () => {}, out,
+    isShown: page.isShown, location: { origin: 'https://dac.test', pathname: '/products/kit' },
+    sku: 'DAC-1S', window: null, ...opts });
+  return out;
 };
 
-test('an unmarked kit gets its button pressed, and the pill confirms it', async () => {
-  const page = productPage();
-  assert.equal(await mark(page), 'marked');
-  assert.deepEqual(page.clicks, ['Already purchased this?']);
-  assert.equal(page.pill.shown, true);
+test('an unticked kit is ticked, and DAC\'s own list confirms it', async () => {
+  const page = dacPage();
+  const out = await tick(page);
+  assert.equal(out.state, 'marked');
+  assert.deepEqual(page.clicks, ['to-hide offer']);
+  assert.ok(page.server.list.includes('MA:DAC-1S'));
 });
 
-/* It is a toggle. Pressing anything on a marked kit risks UN-marking it. */
-test('a kit already marked is left completely alone', async () => {
-  const page = productPage({ marked: true });
-  assert.equal(await mark(page), 'already');
-  assert.deepEqual(page.clicks, [], 'it pressed something on a kit that was already marked');
-  assert.equal(page.pill.shown, true, 'the kit is no longer marked');
+/* It is a toggle: DAC's list is asked first, and a kit on it is never touched. */
+test('a kit already on DAC\'s list is left completely alone', async () => {
+  for (const owned of [['DAC-1S'], ['MA:DAC-1S']]) {
+    const page = dacPage({ owned });
+    assert.equal((await tick(page)).state, 'already', `owned as ${owned[0]} was not seen`);
+    assert.deepEqual(page.clicks, [], `it pressed a kit already owned as ${owned[0]}`);
+  }
 });
 
-/* If DAC ever shows the button AND the pill together, the only thing standing
-   between us and un-marking the kit is checking the pill first. */
-test('when the pill and the button both show, it still presses nothing', async () => {
-  const page = productPage({ marked: true });
-  page.document.querySelectorAll('button').find((b) => /^Already/.test(b.textContent)).shown = true;
-  assert.equal(await mark(page), 'already');
-  assert.deepEqual(page.clicks, [], 'it pressed the toggle on a kit that was already marked');
+test('a kit un-ticked on DAC ("MR:") counts as not owned, and is ticked', async () => {
+  const page = dacPage({ owned: ['MA:DAC-1S', 'MR:DAC-1S'] });
+  page.server.list = ['MR:DAC-1S'];
+  const out = await tick(page);
+  assert.deepEqual(page.clicks, ['to-hide offer']);
+  // the list now has both; DAC's own page hides the pill while MR is there
+  assert.equal(out.state, 'unconfirmed', 'a kit still marked MR was reported as ticked');
 });
 
-/* The ⓧ says "this product", the button says "this?" — the question mark is
-   what keeps them apart, even with the ⓧ showing and no pill detected. */
-test('the ⓧ alone, showing, is never pressed', async () => {
-  const page = productPage({ button: false });
-  page.document.querySelectorAll('button')[0].shown = true;     // the ⓧ
-  page.pill.textContent = '';                                     // and no pill to see
-  assert.equal(await mark(page), 'already',
-    'with the ⓧ showing, its own text says the kit is marked');
-  assert.deepEqual(page.clicks, [], 'it pressed the ⓧ that un-marks');
+test('the ⓧ is never pressed, though it updates state for the same SKU', async () => {
+  const page = dacPage({ offerShown: false });
+  page.unmark.shown = true;
+  const out = await tick(page);
+  assert.equal(out.state, 'missing');
+  assert.deepEqual(page.clicks, [], 'it pressed the ⓧ, which un-ticks the kit');
 });
 
-test('the pill\'s ⓧ is never mistaken for the button, even though both say "already purchased"', async () => {
-  const page = productPage();
-  await mark(page);
-  assert.ok(!page.clicks.some((t) => /You already purchased/.test(t)), 'it pressed the ⓧ that un-marks');
+test('other kits\' widgets on the page are never pressed', async () => {
+  const page = dacPage({ offerShown: false, cards: ['DAC-9S', 'DAC-1S-OTHER'] });
+  const out = await tick(page);
+  assert.equal(out.state, 'missing');
+  assert.deepEqual(page.clicks, [], 'it pressed a recommended kit\'s widget');
 });
 
-/* The dangerous case: DAC draws the button, THEN notices the kit is marked. */
-test('a button that turns into the pill a moment later is never pressed', async () => {
-  const page = productPage({ marked: true });
-  const buttons = page.document.querySelectorAll('button');
-  const offer = buttons.find((b) => /^Already/.test(b.textContent));
-  const unmark = buttons.find((b) => /^You already/.test(b.textContent));
-  // looks exactly like an unmarked kit at first: button showing, no pill, no ⓧ…
-  offer.shown = true; page.pill.shown = false; unmark.shown = false;
-  let looks = 0;
-  const qsa = page.document.querySelectorAll.bind(page.document);
-  page.document.querySelectorAll = (sel) => {
-    // …then DAC catches up, a few looks in
-    if (++looks === 8) { offer.shown = false; page.pill.shown = true; unmark.shown = true; }
-    return qsa(sel);
-  };
-  assert.equal(await mark(page), 'already');
-  assert.deepEqual(page.clicks, [], 'it pressed before the page had settled, un-marking the kit');
+test('a page told only to watch never presses', async () => {
+  const page = dacPage();
+  const out = await tick(page, { press: false });
+  assert.deepEqual(page.clicks, []);
+  assert.equal(out.state, 'unconfirmed');
 });
 
-test('a page told only to watch never presses, even an unmarked kit', async () => {
-  const page = productPage();
-  assert.equal(await mark(page, { press: false }), 'unconfirmed');
+test('an owned list that cannot be read stops it before anything is pressed', async () => {
+  const page = dacPage({ listOk: false });
+  const out = await tick(page);
+  assert.equal(out.state, 'failed');
   assert.deepEqual(page.clicks, []);
 });
 
-test('the pill sitting hidden in the page markup does not count as marked', async () => {
-  const page = productPage({ marked: false });
-  assert.equal(page.pill.shown, false);
-  assert.equal(await mark(page), 'marked', 'a hidden pill was read as "already purchased"');
-});
-
-test('a button DAC draws late is still found', async () => {
-  const page = productPage({ appearsAfter: 5 });
-  assert.equal(await mark(page), 'marked');
-});
-
-test('no button at all is reported, not guessed at', async () => {
-  const page = productPage({ button: false });
-  assert.equal(await mark(page), 'missing');
+test('no SKU stops it before anything is pressed', async () => {
+  const page = dacPage();
+  const out = await tick(page, { sku: '' });
+  assert.equal(out.state, 'failed');
   assert.deepEqual(page.clicks, []);
+  assert.equal(page.fetches.length, 0);
 });
 
-test('it presses the button once, never twice', async () => {
-  const page = productPage();
-  // a button that does nothing: the pill never appears
-  page.document.querySelectorAll('button')[1].click = function () { page.clicks.push(this.textContent); };
-  assert.equal(await mark(page), 'unconfirmed');
+test('a press that does not take is pressed once, never again', async () => {
+  const page = dacPage({ takes: false });
+  const out = await tick(page);
+  assert.equal(out.state, 'unconfirmed');
   assert.equal(page.clicks.length, 1, 'it kept pressing a toggle');
+  assert.ok(out.found, 'no report of what was on the page');
+});
+
+test('the owned list is read even when DAC escapes it for HTML', async () => {
+  const page = dacPage({ owned: ['DAC-1S'], escaped: true });
+  assert.equal((await tick(page)).state, 'already');
+});
+
+test('the request a press makes is recorded, with names but no values and no emails', async () => {
+  const page = dacPage();
+  const win = { fetch: async () => ({ ok: true }), XMLHttpRequest: null };
+  page.offer.click = function () {
+    page.clicks.push(this.className);
+    win.fetch('https://api.dac.test/customers/someone@example.com/mark?x=1',
+              { method: 'POST', body: JSON.stringify({ sku: 'DAC-1S', email: 'someone@example.com' }) });
+    page.server.list.push('MA:DAC-1S');
+  };
+  const out = await tick(page, { window: win });
+  assert.equal(out.state, 'marked');
+  assert.deepEqual(out.request, [{ via: 'fetch', method: 'POST',
+    url: 'https://api.dac.test/customers/[email]/mark', sent: ['sku', 'email'] }]);
+  assert.doesNotMatch(JSON.stringify(out), /someone@example\.com/);
 });
 
 /* ------------------------------------------------------------ legends */
@@ -213,6 +221,10 @@ test('the injected scripts are the tested functions, and parse', () => {
   assert.match(mk, /^window\.__ap \|\|/, 'a page could run it twice');
   assert.match(mk, /press: true/);
   assert.match(buildMarkScript({ press: false }), /press: false/);
+  const prep = buildMarkPrep('DAC-1S"; alert(1); "');
+  const box = {};
+  new Function('window', prep)(box);
+  assert.equal(box.__apSku, 'DAC-1S"; alert(1); "', 'a SKU could break out of the prep');
   const lg = buildLegendScript(['111', '222']);
   assert.ok(lg.includes(runLegends.toString()));
   assert.doesNotThrow(() => new Function(lg));
@@ -244,99 +256,6 @@ test('only sane colours survive the trip back', () => {
   assert.equal(cleanColour({ code: '310', hex: 'javascript:1' }).hex, null);
   assert.deepEqual(readSyncResult({ dd: { results: [{ variant: '../x', owned: true,
     colors: { status: 'available', codes: ['310'] } }] } }).legends, {});
-});
-
-/* ------------------------------------------- finding the real control */
-
-/** A tiny tree: enough for parentElement and querySelectorAll('*'). */
-function tree(spec, parent = null, all = [], clicks = []) {
-  const node = { tagName: spec.tag, className: spec.cls || '', id: '', parentElement: parent,
-    shown: spec.shown !== false, children: [], attrs: spec.attrs || {},
-    getAttribute(k) { return this.attrs[k] ?? null; },
-    get textContent() { return (spec.text || '') + this.children.map((c) => c.textContent).join(''); },
-    get outerHTML() { return `<${spec.tag.toLowerCase()} ${Object.entries(this.attrs).map(([k, v]) => `${k}="${v}"`).join(' ')}>${this.textContent}</${spec.tag.toLowerCase()}>`; },
-    querySelectorAll() { const out = []; const walk = (n) => n.children.forEach((c) => { out.push(c); walk(c); }); walk(this); return out; },
-    click() { clicks.push(this); spec.onClick && spec.onClick(); } };
-  all.push(node);
-  node.children = (spec.kids || []).map((k) => tree(k, node, all, clicks).node);
-  return { node, all, clicks };
-}
-function pageFrom(root, extra = {}) {
-  const { all, clicks } = tree(root);
-  const document = { querySelectorAll: (sel) => (sel === 'body *' ? all : sel === 'script[src]' ? (extra.scripts || []) : []) };
-  return { document, clicks, all, isShown: (e) => e.shown !== false };
-}
-
-test('a plain div saying "Already purchased this?" is pressed, not just real buttons', async () => {
-  let pill;
-  const page = pageFrom({ tag: 'DIV', kids: [
-    { tag: 'DIV', cls: 'ap-offer', text: 'Already purchased this?', onClick: () => { pill.shown = true; } },
-    { tag: 'DIV', cls: 'ap-pill', text: 'You already purchased this product.', shown: false } ] });
-  pill = page.all.find((n) => n.className === 'ap-pill');
-  assert.equal(await mark(page), 'marked', 'a div control was never found');
-  assert.equal(page.clicks[0].className, 'ap-offer');
-});
-
-test('wording split across pieces with no space between still reads as the question', async () => {
-  let pill;
-  const page = pageFrom({ tag: 'DIV', kids: [
-    { tag: 'BUTTON', cls: 'offer', kids: [{ tag: 'SPAN', text: 'Already purchased' }, { tag: 'SPAN', text: 'this?' }],
-      onClick: () => { pill.shown = true; } },
-    { tag: 'DIV', cls: 'pill', text: 'You already purchased this product.', shown: false } ] });
-  pill = page.all.find((n) => n.className === 'pill');
-  assert.equal(await mark(page), 'marked', '"Already purchasedthis?" was not recognised');
-});
-
-test('the text inside a button presses the button around it', async () => {
-  let pill;
-  const page = pageFrom({ tag: 'DIV', kids: [
-    { tag: 'BUTTON', cls: 'the-control', kids: [{ tag: 'SPAN', cls: 'label', text: 'Already purchased this?' }],
-      onClick: () => { pill.shown = true; } },
-    { tag: 'DIV', cls: 'pill', text: 'You already purchased this product.', shown: false } ] });
-  pill = page.all.find((n) => n.className === 'pill');
-  await mark(page);
-  assert.equal(page.clicks[0].className, 'the-control', 'it clicked the label, not the button holding it');
-});
-
-test('a kit that could not be ticked reports what was on the page, with nothing private in it', async () => {
-  const page = pageFrom({ tag: 'DIV', kids: [
-    { tag: 'SECTION', cls: 'purchase-widget', attrs: { 'data-email': 'someone@example.com', 'data-auth-digest': 'abc123' },
-      text: 'Purchase history for someone@example.com' } ] },
-    { scripts: [{ src: 'https://cdn.example/already-purchased.js' }, { src: 'https://www.google-analytics.com/x.js' }] });
-  const out = {};
-  await markPurchased({ document: page.document, sleep: async () => {}, out, isShown: page.isShown,
-                        location: { pathname: '/products/kit' } });
-  assert.equal(out.state, 'missing');
-  const report = JSON.stringify(out.found);
-  assert.ok(out.found.cands.length >= 1, 'it did not say what on the page mentioned "purchased"');
-  assert.deepEqual(out.found.scripts, ['https://cdn.example/already-purchased.js'], 'the scripts were not listed, or trackers were kept');
-  assert.doesNotMatch(report, /someone@example\.com/, 'an email address leaked into the report');
-  assert.doesNotMatch(report, /abc123/, 'a sign-in signature leaked into the report');
-  assert.equal(out.found.page, '/products/kit');
-});
-
-/* What happened on the real page: the pill's markup is always there, hidden,
-   inside visible containers — so "is any visible element saying 'You already
-   purchased'?" was true everywhere, and nothing was ever pressed. */
-test('a hidden pill inside visible containers does not make every kit look marked', async () => {
-  let pill;
-  const page = pageFrom({ tag: 'MAIN', kids: [{ tag: 'SECTION', cls: 'product-info', kids: [
-    { tag: 'H1', text: 'Princess & The Pea Kitty' },
-    { tag: 'DIV', cls: 'ap-widget', kids: [
-      { tag: 'BUTTON', cls: 'ap-offer', kids: [{ tag: 'SPAN', text: 'Already purchased this?' }],
-        onClick: () => { pill.shown = true; } },
-      { tag: 'DIV', cls: 'ap-pill', shown: false, kids: [
-        { tag: 'SPAN', text: 'You already purchased this product.' },
-        { tag: 'BUTTON', cls: 'ap-unmark', text: 'ⓧ' } ] } ] } ] }] });
-  pill = page.all.find((n) => n.className === 'ap-pill');
-  const words = page.all.find((n) => n.textContent === 'You already purchased this product.');
-  const shownNow = (e) => { for (let x = e; x; x = x.parentElement) if (x.shown === false) return false; return true; };
-  const out = {};
-  await markPurchased({ document: page.document, sleep: async () => {}, out, isShown: shownNow });
-  assert.equal(out.state, 'marked', 'the visible containers around a hidden pill were read as "already purchased"');
-  assert.equal(page.clicks[0].className, 'ap-offer');
-  assert.ok(shownNow(words), 'sanity: the pill now shows');
-  assert.ok(!page.clicks.some((c) => c.className === 'ap-unmark'), 'it pressed the ⓧ');
 });
 
 /* ---------------------------------------------- reading the right page */

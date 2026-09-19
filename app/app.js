@@ -2,7 +2,7 @@ import { api, isStandalone } from './api.js';
 import { statusFromDates, applyStatus, parseHolds, openHold, heldDays,
          ALL_STATUSES } from './core/status.js';
 import { productUrl, shopById, displayCurrency, SHOPS, CURRENCIES } from './core/shops.js';
-import { buildMarkScript, buildLegendScript, buildReadMark } from './core/dacsync.js';
+import { buildMarkScript, buildMarkPrep, buildLegendScript, buildReadMark } from './core/dacsync.js';
 const SHOP_BY_NAME = Object.fromEntries(SHOPS.map((s) => [s.name, s]));
 /* Dazzle Diary — the whole client. Vanilla; no build step. */
 
@@ -3159,7 +3159,7 @@ async function handleClick(e) {
     const box = document.getElementById('dacbox');
     if (box) box.innerHTML = '<p style="margin:0 0 8px;font-size:12px;color:var(--ink-mute)">Waiting for Diamond Art Club\u2026</p>';
     // each kit carries the expression that reads its result off ITS page only
-    n.dacSync(JSON.stringify(batch.map((k) => ({ ...k, read: buildReadMark(k.handle) }))),
+    n.dacSync(JSON.stringify(batch.map((k) => ({ ...k, prep: buildMarkPrep(k.sku), read: buildReadMark(k.handle) }))),
               buildMarkScript({ press: true }), buildMarkScript({ press: false }),
               buildLegendScript(batch.map((k) => k.variant)));
   }
