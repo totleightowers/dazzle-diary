@@ -8,7 +8,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync as readdirSyncFs } from 'node:fs';
 import { mount } from './mount.mjs';
 
 /* The IndexedDB shim outlives a single mount, so a test that means "I do not
@@ -2128,4 +2128,18 @@ test('a sign-in closed early is said so, and changes nothing', async () => {
   assert.ok(said && /closed before it finished/.test(said.textContent),
             'closing the DAC screen early went unremarked');
   assert.equal((await m.api('/colours')).legends, before, 'a cancelled sign-in changed the colour lists');
+});
+
+/* The app is compiled against Android's own stubs, which lack the method javac
+   needs to build a lambda — so a lambda compiles fine on an ordinary JDK and
+   then fails the real build with no useful message. None allowed. */
+test('the Android source has no lambdas or method references', () => {
+  const dir = new URL('../android/src/org/logbook/solo/', import.meta.url);
+  for (const f of readdirSyncFs(dir).filter((n) => n.endsWith('.java'))) {
+    const code = readFileSync(new URL(f, dir), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')      // comments
+      .replace(/"(?:\\.|[^"\\])*"/g, '""');                          // strings
+    assert.doesNotMatch(code, /\)\s*->|\w\s*->\s*[{\w(]/, `${f} has a lambda`);
+    assert.doesNotMatch(code, /\w::\w/, `${f} has a method reference`);
+  }
 });

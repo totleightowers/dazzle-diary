@@ -9,6 +9,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
 import android.view.ViewGroup;
+import android.webkit.ValueCallback;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -53,6 +54,9 @@ public class DacActivity extends Activity {
     private boolean running;
     private boolean finished;
     private final Handler main = new Handler(Looper.getMainLooper());
+    /* No lambdas anywhere in this app: it compiles against Android's own stubs,
+       which lack what javac needs to build one. Anonymous classes instead. */
+    private final Runnable pollTask = new Runnable() { @Override public void run() { poll(); } };
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -101,13 +105,15 @@ public class DacActivity extends Activity {
         String host = u.getHost() == null ? "" : u.getHost();
         if (!host.equals("www.diamondartclub.com") && !host.equals("diamondartclub.com")) return;
         final String path = u.getPath() == null ? "" : u.getPath();
-        web.evaluateJavascript(CHECK, value -> {
-            String signedIn = unquote(value);
-            if ("true".equals(signedIn)) { start(); return; }
-            // signed in now, but landed on Shopify's own account page: go to DAC's
-            boolean account = path.startsWith("/account") && !path.startsWith("/account/login")
-                && !path.contains("register") && !path.contains("reset") && !path.contains("activate");
-            if ("none".equals(signedIn) && account) web.loadUrl(ACCOUNT);
+        web.evaluateJavascript(CHECK, new ValueCallback<String>() {
+            @Override public void onReceiveValue(String value) {
+                String signedIn = unquote(value);
+                if ("true".equals(signedIn)) { start(); return; }
+                // signed in now, but landed on Shopify's own account page: go to DAC's
+                boolean account = path.startsWith("/account") && !path.startsWith("/account/login")
+                    && !path.contains("register") && !path.contains("reset") && !path.contains("activate");
+                if ("none".equals(signedIn) && account) web.loadUrl(ACCOUNT);
+            }
         });
     }
 
@@ -115,22 +121,24 @@ public class DacActivity extends Activity {
         running = true;
         say("Signed in. Adding your kits and fetching their colours…");
         web.evaluateJavascript(script, null);
-        main.postDelayed(this::poll, 1200);
+        main.postDelayed(pollTask, 1200);
     }
 
     private void poll() {
         if (finished) return;
-        web.evaluateJavascript(READ, value -> {
-            try {
-                String text = unquote(value);
-                if (text == null || "null".equals(text)) { main.postDelayed(this::poll, 1200); return; }
-                JSONObject dd = new JSONObject(text);
-                if (dd.optBoolean("done")) { deliver(text); return; }
-                JSONObject p = dd.optJSONObject("progress");
-                if (p != null) say("Kit " + Math.min(p.optInt("done") + 1, p.optInt("total"))
-                    + " of " + p.optInt("total") + " · " + p.optString("now", ""));
-            } catch (Exception ignored) { /* not ready yet */ }
-            main.postDelayed(this::poll, 1200);
+        web.evaluateJavascript(READ, new ValueCallback<String>() {
+            @Override public void onReceiveValue(String value) {
+                try {
+                    String text = unquote(value);
+                    if (text == null || "null".equals(text)) { main.postDelayed(pollTask, 1200); return; }
+                    JSONObject dd = new JSONObject(text);
+                    if (dd.optBoolean("done")) { deliver(text); return; }
+                    JSONObject p = dd.optJSONObject("progress");
+                    if (p != null) say("Kit " + Math.min(p.optInt("done") + 1, p.optInt("total"))
+                        + " of " + p.optInt("total") + " · " + p.optString("now", ""));
+                } catch (Exception ignored) { /* not ready yet */ }
+                main.postDelayed(pollTask, 1200);
+            }
         });
     }
 
@@ -149,7 +157,9 @@ public class DacActivity extends Activity {
         finish();
     }
 
-    private void say(String text) { main.post(() -> status.setText(text)); }
+    private void say(final String text) {
+        main.post(new Runnable() { @Override public void run() { status.setText(text); } });
+    }
 
     /** evaluateJavascript hands back a JSON value: unwrap a string to its text. */
     private static String unquote(String json) {

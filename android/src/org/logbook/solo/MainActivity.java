@@ -270,12 +270,13 @@ public class MainActivity extends Activity {
         public boolean dacSync(String script) {
             mustBeOurPage();
             if (script == null || script.isEmpty() || script.length() > 512 * 1024) return false;
-            runOnUiThread(() -> {
+            final String s = script;
+            runOnUiThread(new Runnable() { @Override public void run() {
                 try {
                     startActivityForResult(new Intent(MainActivity.this, DacActivity.class)
-                        .putExtra(DacActivity.EXTRA_SCRIPT, script), DAC_SYNC);
+                        .putExtra(DacActivity.EXTRA_SCRIPT, s), DAC_SYNC);
                 } catch (Exception e) { hand(null); }
-            });
+            } });
             return true;
         }
 
