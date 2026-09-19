@@ -5,159 +5,181 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { markPurchased, buildMarkScript, buildMarkPrep, runLegends, buildLegendScript,
+import { tickAll, buildTickScript, runLegends, buildLegendScript,
          readSyncResult, cleanColour } from '../app/core/dacsync.js';
 
-/* ------------------------------------------------------------ marking */
+/* ------------------------------------------------------------ ticking */
 
-/** A signed-in DAC product page, with DAC's owned list behind it. */
-function dacPage({ sku = 'DAC-1S', owned = [], takes = true, offerShown = true, cards = ['DAC-9S'], listOk = true, escaped = false } = {}) {
-  const server = { list: [...owned] };
-  const clicks = [];
-  const node = (attrs, cls, text, onClick) => ({
-    attrs, className: cls, textContent: text, shown: true,
-    getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; },
-    hasAttribute(k) { return k in this.attrs; },
-    click() { clicks.push(this.className); onClick && onClick(); } });
-  const offer = node({ 'data-already-purchased-indicator': '', 'data-update-state': '', 'data-product-variant-sku': sku },
-                     'to-hide offer', 'Already purchased this?', () => { if (takes) server.list.push('MA:' + sku); });
-  offer.shown = offerShown;
-  const unmark = node({ 'data-update-state': '', 'data-product-variant-sku': sku }, 'unmark', '',
-                      () => server.list.push('MR:' + sku));
-  const pill = node({ 'data-already-purchased-indicator': '', 'data-product-variant-sku': sku }, 'hidden pill',
-                    'You already purchased this product.');
-  const cardNodes = cards.map((c) => node({ 'data-already-purchased-indicator': '', 'data-update-state': '',
-                                             'data-product-variant-sku': c }, 'card ' + c, 'ALREADY PURCHASED'));
-  const all = [offer, unmark, pill, ...cardNodes];
-  const document = {
-    querySelectorAll(sel) {
-      if (sel === '[data-update-state]') return all.filter((n) => n.hasAttribute('data-update-state'));
-      return all.filter((n) => n.hasAttribute('data-update-state') || n.hasAttribute('data-already-purchased-indicator'));
+/** DAC's ALPManager in miniature: updatePurchased toggles, and answers with the
+ *  resulting state, the way the real one does. */
+function alp({ ticked = [], signsIn = true, format = 'array', fails = [], orders = [] } = {}) {
+  const state = new Map(ticked.map((s) => [s, 'MA']));
+  const calls = [];
+  const M = {
+    auth_token: signsIn ? 'tok' : null,
+    async updatePurchased(sku) {
+      calls.push(sku);
+      if (fails.includes(sku)) throw new Error('Failed to update purchased product state.');
+      state.set(sku, state.get(sku) === 'MA' ? 'MR' : 'MA');
+      // kits bought by order are listed as the bare SKU, whatever else is marked
+      const list = [...orders, ...[...state].map(([s, v]) => v + ':' + s)];
+      return format === 'string' ? list.join(',') : list;
     } };
-  const fetches = [];
-  const fetch = async (url) => {
-    fetches.push(url);
-    if (!listOk) return { text: async () => '<html>nothing here</html>' };
-    let json = JSON.stringify(server.list);
-    if (escaped) json = json.replace(/"/g, '&quot;');
-    return { text: async () => `<div><pre data-already-purchased-skus>${json}</pre></div>` };
-  };
-  return { document, fetch, clicks, server, fetches, offer, unmark, isShown: (e) => e.shown !== false };
+  return { window: { ALPManager: M }, calls, state };
 }
-const tick = async (page, opts = {}) => {
+const kit = (n) => ({ variant: String(100 + n), sku: 'DAC-' + n + 'S', name: 'Kit ' + n });
+const tickRun = async (dac, kits, opts = {}) => {
   const out = {};
-  await markPurchased({ document: page.document, fetch: page.fetch, sleep: async () => {}, out,
-    isShown: page.isShown, location: { origin: 'https://dac.test', pathname: '/products/kit' },
-    sku: 'DAC-1S', window: null, ...opts });
+  await tickAll({ window: dac.window, sleep: async () => {}, kits, out, ...opts });
   return out;
 };
 
-test('an unticked kit is ticked, and DAC\'s own list confirms it', async () => {
-  const page = dacPage();
-  const out = await tick(page);
-  assert.equal(out.state, 'marked');
-  assert.deepEqual(page.clicks, ['to-hide offer']);
-  assert.ok(page.server.list.includes('MA:DAC-1S'));
+test('an unticked kit is ticked with one call, no page opened', async () => {
+  const dac = alp();
+  const out = await tickRun(dac, [kit(1)]);
+  assert.equal(out.results[0].state, 'marked');
+  assert.deepEqual(dac.calls, ['DAC-1S']);
+  assert.equal(dac.state.get('DAC-1S'), 'MA');
 });
 
-/* It is a toggle: DAC's list is asked first, and a kit on it is never touched. */
-test('a kit already on DAC\'s list is left completely alone', async () => {
-  for (const owned of [['DAC-1S'], ['MA:DAC-1S']]) {
-    const page = dacPage({ owned });
-    assert.equal((await tick(page)).state, 'already', `owned as ${owned[0]} was not seen`);
-    assert.deepEqual(page.clicks, [], `it pressed a kit already owned as ${owned[0]}`);
-  }
+/* It is a toggle: a call on a ticked kit un-ticks it. The reply says so, and a
+   second call puts it right — it is never left un-ticked. */
+test('a kit that turns out to be ticked already is ticked again, never left off', async () => {
+  const dac = alp({ ticked: ['DAC-1S'] });
+  const out = await tickRun(dac, [kit(1)]);
+  assert.equal(out.results[0].state, 'marked');
+  assert.equal(dac.calls.length, 2, 'it left the kit un-ticked after the toggle');
+  assert.equal(dac.state.get('DAC-1S'), 'MA');
 });
 
-test('a kit un-ticked on DAC ("MR:") counts as not owned, and is ticked', async () => {
-  const page = dacPage({ owned: ['MA:DAC-1S', 'MR:DAC-1S'] });
-  page.server.list = ['MR:DAC-1S'];
-  const out = await tick(page);
-  assert.deepEqual(page.clicks, ['to-hide offer']);
-  // the list now has both; DAC's own page hides the pill while MR is there
-  assert.equal(out.state, 'unconfirmed', 'a kit still marked MR was reported as ticked');
+/* A kit bought by order is listed as its bare SKU; un-ticked by hand it is ALSO
+   "MR:" — and DAC's own page then hides it. Bare SKU present is not enough. */
+test('a kit bought by order but un-ticked ("MR:") is not taken as ticked', async () => {
+  const dac = alp({ orders: ['DAC-1S'], ticked: ['DAC-1S'] });
+  const out = await tickRun(dac, [kit(1)]);
+  assert.equal(dac.calls.length, 2, 'a reply saying MR: was read as ticked, leaving the kit hidden');
+  assert.equal(dac.state.get('DAC-1S'), 'MA');
+  assert.equal(out.results[0].state, 'marked');
 });
 
-test('the ⓧ is never pressed, though it updates state for the same SKU', async () => {
-  const page = dacPage({ offerShown: false });
-  page.unmark.shown = true;
-  const out = await tick(page);
-  assert.equal(out.state, 'missing');
-  assert.deepEqual(page.clicks, [], 'it pressed the ⓧ, which un-ticks the kit');
+test('a kit that already has its colour list is never touched', async () => {
+  const dac = alp();
+  const out = await tickRun(dac, [kit(1), kit(2)], { have: ['101'] });
+  assert.deepEqual(dac.calls, ['DAC-2S'], 'it called DAC for a kit that already had colours');
+  assert.equal(out.results[0].state, 'skipped');
+  assert.equal(out.results[1].state, 'marked');
 });
 
-test('other kits\' widgets on the page are never pressed', async () => {
-  const page = dacPage({ offerShown: false, cards: ['DAC-9S', 'DAC-1S-OTHER'] });
-  const out = await tick(page);
-  assert.equal(out.state, 'missing');
-  assert.deepEqual(page.clicks, [], 'it pressed a recommended kit\'s widget');
+test('a reply given as text rather than a list is read the same way', async () => {
+  const dac = alp({ format: 'string' });
+  assert.equal((await tickRun(dac, [kit(1)])).results[0].state, 'marked');
 });
 
-test('a page told only to watch never presses', async () => {
-  const page = dacPage();
-  const out = await tick(page, { press: false });
-  assert.deepEqual(page.clicks, []);
-  assert.equal(out.state, 'unconfirmed');
+test('the trial ticks only as many as it is allowed, and leaves the rest', async () => {
+  const dac = alp();
+  const out = await tickRun(dac, [kit(1), kit(2), kit(3), kit(4)], { limit: 2, have: ['101'] });
+  assert.deepEqual(out.results.map((r) => r.state), ['skipped', 'marked', 'marked', 'deferred']);
+  assert.equal(dac.calls.length, 2);
 });
 
-test('an owned list that cannot be read stops it before anything is pressed', async () => {
-  const page = dacPage({ listOk: false });
-  const out = await tick(page);
-  assert.equal(out.state, 'failed');
-  assert.deepEqual(page.clicks, []);
+test('a DAC error on one kit is reported, and the rest carry on', async () => {
+  const dac = alp({ fails: ['DAC-1S'] });
+  const out = await tickRun(dac, [kit(1), kit(2)]);
+  assert.equal(out.results[0].state, 'failed');
+  assert.match(out.results[0].error, /Failed to update/);
+  assert.equal(out.results[1].state, 'marked');
 });
 
-test('no SKU stops it before anything is pressed', async () => {
-  const page = dacPage();
-  const out = await tick(page, { sku: '' });
-  assert.equal(out.state, 'failed');
-  assert.deepEqual(page.clicks, []);
-  assert.equal(page.fetches.length, 0);
+test('with no service on the page and no details to sign in with, nothing is called', async () => {
+  const dac = alp({ signsIn: false });
+  const out = await tickRun(dac, [kit(1)]);
+  assert.match(out.error, /No signed-in DAC page offered/);
+  assert.deepEqual(dac.calls, []);
+  assert.equal(out.done, true);
 });
 
-test('a press that does not take is pressed once, never again', async () => {
-  const page = dacPage({ takes: false });
-  const out = await tick(page);
-  assert.equal(out.state, 'unconfirmed');
-  assert.equal(page.clicks.length, 1, 'it kept pressing a toggle');
-  assert.ok(out.found, 'no report of what was on the page');
-});
+/* ------------------------------------------------------ calling the API directly */
 
-test('the owned list is read even when DAC escapes it for HTML', async () => {
-  const page = dacPage({ owned: ['DAC-1S'], escaped: true });
-  assert.equal((await tick(page)).state, 'already');
-});
-
-test('the request a press makes is recorded in full, so it can be made directly', async () => {
-  const page = dacPage();
-  const win = { fetch: async () => ({ ok: true }), XMLHttpRequest: null };
-  page.offer.click = function () {
-    page.clicks.push(this.className);
-    win.fetch('https://api.dac.test/projects/create?x=1',
-              { method: 'POST', body: JSON.stringify({ sku: 'DAC-1S', from_app: 'already-purchased' }) });
-    page.server.list.push('MA:DAC-1S');
+/** DAC's ticking service over HTTP, toggling the way the real one does. */
+function alpApi({ ticked = [], acceptDigest = 'sig' } = {}) {
+  const state = new Map(ticked.map((s) => [s, 'MA']));
+  const calls = [];
+  const fetch = async (url, opts = {}) => {
+    calls.push({ url, method: opts.method || 'GET', headers: opts.headers || {}, body: opts.body });
+    const json = (status, body) => ({ ok: status < 400, status, json: async () => body, text: async () => '' });
+    if (url.startsWith('/products/')) return { ok: true, status: 200, text: async () => PROBE_HTML };
+    const u = new URL(url);
+    if (u.pathname === '/api/customer/identify') {
+      return JSON.parse(opts.body).digest === acceptDigest ? json(200, { auth_token: 'alp-tok' }) : json(401, {});
+    }
+    if (u.pathname === '/api/update_purchased') {
+      if (opts.headers.Authorization !== 'Bearer alp-tok') return json(401, {});
+      const sku = JSON.parse(opts.body).sku;
+      state.set(sku, state.get(sku) === 'MA' ? 'MR' : 'MA');
+      return json(200, { new_value: [...state].map(([s, v]) => v + ':' + s) });
+    }
+    return json(404, {});
   };
-  const out = await tick(page, { window: win });
-  assert.equal(out.state, 'marked');
-  assert.deepEqual(out.request, [{ via: 'fetch', method: 'POST',
-    url: 'https://api.dac.test/projects/create?x=1', sent: { sku: 'DAC-1S', from_app: 'already-purchased' } }]);
+  return { fetch, calls, state };
+}
+const PROBE_HTML = '<html><div id="already-purchased-init" data-customer-id="42" data-customer-email="a@b.c" '
+  + 'data-customer-real-email="a@b.c" data-customer-first-name="J" data-digest="sig"></div>'
+  + '<script>ALPManager.initialize({ shop: "diamond-art-club.myshopify.com" })</script></html>';
+const initDoc = (attrs) => ({ getElementById: (id) => id === 'already-purchased-init'
+  ? { getAttribute: (k) => attrs[k] ?? null } : null });
+
+test('with no service on the page, it signs in to the API itself and ticks', async () => {
+  const api = alpApi();
+  const out = {};
+  await tickAll({ window: {}, document: initDoc({ 'data-customer-id': '42', 'data-customer-email': 'a@b.c',
+    'data-customer-first-name': 'J', 'data-digest': 'sig' }), fetch: api.fetch,
+    location: { host: 'www.diamondartclub.com' }, sleep: async () => {}, kits: [kit(1)], out });
+  assert.equal(out.error, null);
+  assert.equal(out.via, 'api');
+  assert.equal(out.results[0].state, 'marked');
+  const who = api.calls.find((c) => c.url.includes('/identify'));
+  assert.deepEqual(JSON.parse(who.body), { customer: { id: '42', email: 'a@b.c', real_email: '', first_name: 'J' }, digest: 'sig' });
+  assert.match(who.url, /shop=www\.diamondartclub\.com/);
 });
 
-/* The script that sends the tick is only served to a signed-in page, and stays
-   in the page after running — so the report takes it whole. */
-test('a kit that could not be ticked reports the page\'s own tick script, whole', async () => {
-  const page = dacPage({ offerShown: false });
-  const code = 'document.querySelectorAll("[data-update-state]").forEach(el => el.onclick = () => fetch("/x", {body: JSON.stringify({from_app: "already-purchased"})}))';
-  const qsa = page.document.querySelectorAll.bind(page.document);
-  page.document.querySelectorAll = (sel) => sel === 'script'
-    ? [{ src: '', textContent: code }, { src: '', textContent: 'console.log(1)' }, { src: 'https://cdn.test/dac-owned.js', textContent: '' }]
-    : qsa(sel);
-  const out = await tick(page);
-  assert.equal(out.state, 'missing');
-  assert.equal(out.found.scripts.length, 2, 'it kept an unrelated script, or dropped the tick script');
-  assert.equal(out.found.scripts[0].body, code, 'the tick script was not taken whole');
-  assert.equal(out.found.scripts[1].src, 'https://cdn.test/dac-owned.js');
-  assert.match(out.found.ownedRaw, /data-already-purchased-skus/, 'the raw owned list was not kept');
+test('if the page lacks the sign-in details, a kit page is fetched for them, not opened', async () => {
+  const api = alpApi();
+  const out = {};
+  await tickAll({ window: {}, document: initDoc({}), fetch: api.fetch, probe: '/products/kit-1',
+    location: { host: 'www.diamondartclub.com' }, sleep: async () => {}, kits: [kit(1)], out });
+  assert.equal(out.results[0].state, 'marked');
+  assert.equal(api.calls[0].url, '/products/kit-1', 'it did not fetch a page for the details');
+  assert.match(api.calls.find((c) => c.url.includes('/identify')).url, /shop=diamond-art-club\.myshopify\.com/,
+    'the shop named on the page was not used');
+});
+
+test('directly, too, a toggled-off kit is ticked again', async () => {
+  const api = alpApi({ ticked: ['DAC-1S'] });
+  const out = {};
+  await tickAll({ window: {}, document: initDoc({ 'data-digest': 'sig' }), fetch: api.fetch,
+    location: { host: 'x' }, sleep: async () => {}, kits: [kit(1)], out });
+  assert.equal(out.results[0].state, 'marked');
+  assert.equal(api.state.get('DAC-1S'), 'MA');
+});
+
+test('a refused sign-in to the API stops it before any kit is ticked', async () => {
+  const api = alpApi({ acceptDigest: 'other' });
+  const out = {};
+  await tickAll({ window: {}, document: initDoc({ 'data-digest': 'sig' }), fetch: api.fetch,
+    location: { host: 'x' }, sleep: async () => {}, kits: [kit(1)], out });
+  assert.match(out.error, /did not accept the sign-in/);
+  assert.equal(api.calls.filter((c) => c.url.includes('update_purchased')).length, 0);
+});
+
+test('the tick script is the tested function, parses, and carries the kits', () => {
+  const src = buildTickScript([kit(1)], { limit: 3, probe: '/products/x' });
+  assert.ok(src.includes(tickAll.toString()));
+  assert.doesNotThrow(() => new Function(src));
+  assert.match(src, /^window\.__tk \|\|/, 'a page could run it twice');
+  assert.match(src, /limit: 3/);
+  assert.match(src, /"sku":"DAC-1S"/);
+  assert.match(buildTickScript([kit(1)]), /limit: null/);
+  assert.match(src, /probe: "\/products\/x"/);
 });
 
 /* ------------------------------------------------------------ legends */
@@ -230,17 +252,7 @@ test('a refused sign-in stops it before any kit is read', async () => {
 
 /* ------------------------------------------------------------ scripts */
 
-test('the injected scripts are the tested functions, and parse', () => {
-  const mk = buildMarkScript();
-  assert.ok(mk.includes(markPurchased.toString()));
-  assert.doesNotThrow(() => new Function(mk));
-  assert.match(mk, /^window\.__ap \|\|/, 'a page could run it twice');
-  assert.match(mk, /press: true/);
-  assert.match(buildMarkScript({ press: false }), /press: false/);
-  const prep = buildMarkPrep('DAC-1S"; alert(1); "');
-  const box = {};
-  new Function('window', prep)(box);
-  assert.equal(box.__apSku, 'DAC-1S"; alert(1); "', 'a SKU could break out of the prep');
+test('the legend script is the tested function, and parses', () => {
   const lg = buildLegendScript(['111', '222']);
   assert.ok(lg.includes(runLegends.toString()));
   assert.doesNotThrow(() => new Function(lg));
@@ -249,16 +261,17 @@ test('the injected scripts are the tested functions, and parse', () => {
 
 /* ------------------------------------------------------------ results */
 
-test('a result reports what was marked, what already was, and what was not found', () => {
+test('a result reports what was ticked, what already had colours, and what failed', () => {
   const r = readSyncResult({
-    marks: [{ variant: '111', state: 'marked' }, { variant: '222', state: 'already' },
-            { variant: '333', state: 'missing', name: 'Gone Kit' }, { variant: '444', state: 'sneaky' }],
+    tk: { results: [{ variant: '111', state: 'marked' }, { variant: '222', state: 'skipped' },
+                    { variant: '333', state: 'failed', name: 'Gone Kit' }, { variant: '444', state: 'deferred' }] },
     dd: { results: [
       { variant: '111', owned: true, colors: { status: 'available', codes: [{ code: '310', hex: '000000' }] } },
       { variant: '222', owned: true, colors: { status: 'checking' } } ] } });
   assert.equal(r.marked, 1);
   assert.equal(r.already, 1);
-  assert.deepEqual(r.missing, [{ variant: '333', state: 'missing', name: 'Gone Kit' }]);
+  assert.equal(r.deferred, 1);
+  assert.deepEqual(r.missing, [{ variant: '333', state: 'failed', name: 'Gone Kit' }]);
   assert.equal(r.pending, 1);
   assert.deepEqual(Object.keys(r.legends), ['111']);
 });
@@ -274,26 +287,3 @@ test('only sane colours survive the trip back', () => {
     colors: { status: 'available', codes: ['310'] } }] } }).legends, {});
 });
 
-/* ---------------------------------------------- reading the right page */
-import { readMarkFor, buildReadMark } from '../app/core/dacsync.js';
-
-test('a result is only read off the kit\'s own page, not the one still showing from before', () => {
-  const done = { state: 'marked' };
-  assert.equal(readMarkFor({ location: { pathname: '/en-gb/products/lofi-cali-girl' }, ap: done, handle: 'aries' }), null,
-    'the last kit\'s "ticked" was read as this kit\'s');
-  assert.equal(readMarkFor({ location: { pathname: '/en-gb/products/aries' }, ap: done, handle: 'aries' }),
-    JSON.stringify(done));
-  assert.equal(readMarkFor({ location: { pathname: '/products/aries/' }, ap: done, handle: 'aries' }), JSON.stringify(done));
-  assert.equal(readMarkFor({ location: { pathname: '/products/big-aries' }, ap: done, handle: 'aries' }), null,
-    'a handle that merely ends the same way was accepted');
-  assert.equal(readMarkFor({ location: { pathname: '/products/aries' }, ap: null, handle: 'aries' }), null);
-});
-
-test('the read expression is the tested function, and a handle cannot break out of it', () => {
-  const expr = buildReadMark('aries');
-  assert.ok(expr.includes(readMarkFor.toString()));
-  assert.doesNotThrow(() => new Function('return ' + expr));
-  assert.doesNotThrow(() => new Function('return ' + buildReadMark('x"}),alert(1),({"')));
-  const run = new Function('location', 'window', 'return ' + buildReadMark('x"}),alert(1),({"'));
-  assert.equal(run({ pathname: '/products/other' }, { __ap: { state: 'marked' } }), null);
-});

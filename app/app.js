@@ -2,7 +2,7 @@ import { api, isStandalone } from './api.js';
 import { statusFromDates, applyStatus, parseHolds, openHold, heldDays,
          ALL_STATUSES } from './core/status.js';
 import { productUrl, shopById, displayCurrency, SHOPS, CURRENCIES } from './core/shops.js';
-import { buildMarkScript, buildMarkPrep, buildLegendScript, buildReadMark } from './core/dacsync.js';
+import { buildTickScript, buildLegendScript } from './core/dacsync.js';
 const SHOP_BY_NAME = Object.fromEntries(SHOPS.map((s) => [s.name, s]));
 /* Dazzle Diary — the whole client. Vanilla; no build step. */
 
@@ -3144,24 +3144,20 @@ async function handleClick(e) {
       toast(missing.length ? 'Update all shops first, so DAC kits can be matched' : 'No DAC kits to send');
       return;
     }
-    /* "Already purchased" is a toggle. The first run does three, so you can
-       look at them on DAC before the rest are touched. */
-    const batch = piloted ? kits : kits.slice(0, 3);
-    if (!confirm((piloted
-          ? `This ticks "Already purchased this?" on ${batch.length} DAC kit${batch.length === 1 ? '' : 's'} `
-          : `A first try: this ticks "Already purchased this?" on just ${batch.length} DAC kits `)
-        + 'in the Diamond Art Club account you sign into next, then fetches their colour lists.\n\n'
-        + 'A kit already ticked is left alone. Your logbook is not changed.'
-        + (piloted ? '' : `\n\nCheck those ${batch.length} on DAC afterwards; the next run does the other ${
-            kits.length - batch.length}.`)
+    /* Kits that already have colours are never touched. Of the rest, a first
+       run ticks three, so you can look at them on DAC before the others are. */
+    const limit = piloted ? null : 3;
+    if (!confirm('Sign into the Diamond Art Club account to use, and this ticks "Already purchased" '
+        + (piloted ? `on your ${kits.length} DAC kits` : 'on 3 of your DAC kits as a first try')
+        + ' through DAC\'s own service, then fetches their colour lists. Kits that already have '
+        + 'colours are left alone. Your logbook is not changed.'
         + (missing.length ? `\n\n${missing.length} could not be matched to a DAC listing `
                            + 'and will be skipped \u2014 Update all shops may fix that.' : ''))) return;
     const box = document.getElementById('dacbox');
     if (box) box.innerHTML = '<p style="margin:0 0 8px;font-size:12px;color:var(--ink-mute)">Waiting for Diamond Art Club\u2026</p>';
-    // each kit carries the expression that reads its result off ITS page only
-    n.dacSync(JSON.stringify(batch.map((k) => ({ ...k, prep: buildMarkPrep(k.sku), read: buildReadMark(k.handle) }))),
-              buildMarkScript({ press: true }), buildMarkScript({ press: false }),
-              buildLegendScript(batch.map((k) => k.variant)));
+    n.dacSync(JSON.stringify(kits),
+              buildTickScript(kits, { limit, probe: '/products/' + encodeURIComponent(kits[0].handle) }),
+              buildLegendScript(kits.map((k) => k.variant)));
   }
   else if (act === 'dacforget') {
     try { window.LogbookNative?.dacForget?.(); } catch { /* nothing to forget */ }
@@ -3637,7 +3633,8 @@ window.__dacSyncDone = async (text) => {
     if (r.error && !r.legends && !r.marked && !r.already) { toast(r.error); render(); return; }
     const parts = [];
     if (r.marked) parts.push(`${r.marked} ticked`);
-    if (r.already) parts.push(`${r.already} already ticked`);
+    if (r.already) parts.push(`${r.already} already had colours`);
+    if (r.deferred) parts.push(`${r.deferred} left for the next run`);
     parts.push(`${r.legends} colour list${r.legends === 1 ? '' : 's'}`);
     if (r.pending) parts.push(`${r.pending} still being checked by DAC`);
     if (r.missing.length) parts.push(`${r.missing.length} not done`);
