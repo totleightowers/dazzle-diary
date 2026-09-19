@@ -2,7 +2,7 @@ import { api, isStandalone } from './api.js';
 import { statusFromDates, applyStatus, parseHolds, openHold, heldDays,
          ALL_STATUSES } from './core/status.js';
 import { productUrl, shopById, displayCurrency, SHOPS, CURRENCIES } from './core/shops.js';
-import { buildSyncScript } from './core/dacsync.js';
+import { buildMarkScript, buildLegendScript } from './core/dacsync.js';
 const SHOP_BY_NAME = Object.fromEntries(SHOPS.map((s) => [s.name, s]));
 /* Dazzle Diary — the whole client. Vanilla; no build step. */
 
@@ -3139,20 +3139,27 @@ async function handleClick(e) {
   else if (act === 'dacsync') {
     const n = window.LogbookNative;
     if (!n || typeof n.dacSync !== 'function') { toast('This needs the Android app'); return; }
-    const { kits, missing } = await api('/dac/kits');
+    const { kits, missing, piloted } = await api('/dac/kits');
     if (!kits.length) {
       toast(missing.length ? 'Update all shops first, so DAC kits can be matched' : 'No DAC kits to send');
       return;
     }
-    if (!confirm(`This adds ${kits.length} DAC kit${kits.length === 1 ? '' : 's'} to the Diamond Art Club `
-               + 'account you sign into next, as purchased, and fetches their colour lists.\n\n'
-               + 'Kits already on that account are left alone, so it is safe to run again. '
-               + 'Your logbook is not changed.'
-               + (missing.length ? `\n\n${missing.length} could not be matched to a DAC listing `
-                                  + 'and will be skipped — Update all shops may fix that.' : ''))) return;
+    /* "Already purchased" is a toggle. The first run does three, so you can
+       look at them on DAC before the rest are touched. */
+    const batch = piloted ? kits : kits.slice(0, 3);
+    if (!confirm((piloted
+          ? `This ticks "Already purchased this?" on ${batch.length} DAC kit${batch.length === 1 ? '' : 's'} `
+          : `A first try: this ticks "Already purchased this?" on just ${batch.length} DAC kits `)
+        + 'in the Diamond Art Club account you sign into next, then fetches their colour lists.\n\n'
+        + 'A kit already ticked is left alone. Your logbook is not changed.'
+        + (piloted ? '' : `\n\nCheck those ${batch.length} on DAC afterwards; the next run does the other ${
+            kits.length - batch.length}.`)
+        + (missing.length ? `\n\n${missing.length} could not be matched to a DAC listing `
+                           + 'and will be skipped \u2014 Update all shops may fix that.' : ''))) return;
     const box = document.getElementById('dacbox');
-    if (box) box.innerHTML = '<p style="margin:0 0 8px;font-size:12px;color:var(--ink-mute)">Waiting for Diamond Art Club…</p>';
-    n.dacSync(buildSyncScript(kits));
+    if (box) box.innerHTML = '<p style="margin:0 0 8px;font-size:12px;color:var(--ink-mute)">Waiting for Diamond Art Club\u2026</p>';
+    n.dacSync(JSON.stringify(batch), buildMarkScript({ press: true }), buildMarkScript({ press: false }),
+              buildLegendScript(batch.map((k) => k.variant)));
   }
   else if (act === 'dacforget') {
     try { window.LogbookNative?.dacForget?.(); } catch { /* nothing to forget */ }
@@ -3625,12 +3632,14 @@ window.__dacSyncDone = async (text) => {
   try {
     const r = await api('/dac/legends', { method: 'POST',
       headers: { 'Content-Type': 'application/json' }, body: text });
-    if (r.error && !r.legends && !r.created && !r.existing) { toast(r.error); render(); return; }
-    const parts = [`${r.legends} colour list${r.legends === 1 ? '' : 's'}`];
-    if (r.created) parts.push(`${r.created} added to DAC`);
+    if (r.error && !r.legends && !r.marked && !r.already) { toast(r.error); render(); return; }
+    const parts = [];
+    if (r.marked) parts.push(`${r.marked} ticked`);
+    if (r.already) parts.push(`${r.already} already ticked`);
+    parts.push(`${r.legends} colour list${r.legends === 1 ? '' : 's'}`);
     if (r.pending) parts.push(`${r.pending} still being checked by DAC`);
-    if (r.failed) parts.push(`${r.failed} failed`);
-    toast(parts.join(' · '));
+    if (r.missing.length) parts.push(`${r.missing.length} not done`);
+    toast(parts.join(' \u00b7 '));
   } catch (e) { toast(e.message || 'Could not read what DAC sent back'); }
   render();
 };

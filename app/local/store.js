@@ -1538,42 +1538,38 @@ export async function localApi(path, opts = {}) {
     return hit ? { id: hit.id, title: hit.title, status: hit.status } : { id: null };
   }
 
-  /* Every DAC kit in the logbook, described the way DAC's logbook wants it.
-     A wish list kit is not bought, so it is not sent. A kit the catalogue
-     cannot link to a DAC variant cannot carry a legend, so it is listed as
-     missing rather than sent half-described. */
+  /* Every DAC kit you own, with what it takes to open its product page. A wish
+     list kit is not bought, so it is never marked as purchased. A kit the
+     catalogue cannot link to a DAC listing is listed as missing instead. */
   if (p === '/dac/kits' && m === 'GET') {
     await catalogue();
-    const pref = ((await idb.get('meta', 'prefs')) || {}).currency || 'GBP';
     const kits = [], missing = [], seen = new Set();
     for (const r of await projects()) {
       if ((r.shop || 'dac') !== 'dac' || !r.dac_handle) continue;
-      const status = DAC_STATUS[r.status];
-      if (!status) continue;
+      if (!DAC_STATUS[r.status]) continue;
       const c = cache.rows.find(x => x.shop === 'dac' && x.handle === r.dac_handle);
-      if (!c || !c.variant_id || !c.product_id) { missing.push(r.title); continue; }
+      if (!c || !c.variant_id) { missing.push(r.title); continue; }
       if (seen.has(c.variant_id)) continue;      // two of a kit share one legend
       seen.add(c.variant_id);
-      kits.push({
-        variant: c.variant_id, product: c.product_id, name: r.title, status,
-        shape: /round/i.test(r.shape || c.shape || '') ? 'round' : 'square',
-        drill: /partial/i.test(r.coverage || c.coverage || '') ? 'partial' : 'full',
-        currency: pref
-      });
+      kits.push({ variant: c.variant_id, handle: c.handle, name: r.title });
     }
-    return { kits, missing };
+    /* The first run marks only a few, so you can check them on DAC before the
+       rest are touched: "Already purchased" is a toggle. */
+    const piloted = !!((await idb.get('meta', 'dac')) || {}).piloted;
+    return { kits, missing, piloted };
   }
 
-  /* What a sync brought back. Only legends are kept: whatever else the result
-     says, nothing on a project changes. */
+  /* What a run brought back. Only legends are kept: nothing on a project
+     changes, whatever the result says. */
   if (p === '/dac/legends' && m === 'POST') {
     const r = readSyncResult(json());
     const all = (await idb.get('meta', 'legends')) || {};
     const at = nowIso();
     for (const [v, codes] of Object.entries(r.legends)) all[v] = { codes, at };
     await idb.put('meta', all, 'legends');
-    return { legends: Object.keys(r.legends).length, created: r.created, existing: r.existing,
-             pending: r.pending, failed: r.failed, error: r.error, problems: r.problems.slice(0, 5),
+    if (r.marked || r.already) await idb.put('meta', { piloted: true }, 'dac');
+    return { legends: Object.keys(r.legends).length, marked: r.marked, already: r.already,
+             pending: r.pending, missing: r.missing.slice(0, 20), error: r.error,
              total: Object.keys(all).length };
   }
 

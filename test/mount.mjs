@@ -45,7 +45,7 @@ export async function mount({ width = 390, products = null, catalogue = true, sh
       remove: (p) => files.delete(p),
       isSystemDark: () => true,
       // the DAC screen: record what would be run there, and forget on request
-      dacSync: (script) => { dacScripts.push(script); return true; },
+      dacSync: (kits, mark, watch, legends) => { dacScripts.push({ kits: JSON.parse(kits), mark, watch, legends }); return true; },
       dacForget: () => { dacForgotten.n++; return true; },
       setBarColor() {},
       saveDownload: (name, b64, mime) => {

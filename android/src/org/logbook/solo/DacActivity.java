@@ -1,12 +1,12 @@
 package org.logbook.solo;
 
 import android.app.Activity;
-import android.content.Intent;
 import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.view.Gravity;
 import android.view.ViewGroup;
 import android.webkit.ValueCallback;
@@ -16,6 +16,7 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.json.JSONTokener;
 import java.io.File;
@@ -23,45 +24,66 @@ import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Signs into a Diamond Art Club account and borrows the drill legends of the
- * kits you own, by adding them to that account the way DAC's own logbook does.
+ * Signs into a Diamond Art Club account, ticks "Already purchased this?" on the
+ * product page of each kit you own, then reads their drill legends.
  *
- * This screen is deliberately cut off from the app. Its WebView has NO
- * JavascriptInterface: DAC's page — and every script DAC loads on it — has no
- * way to reach Dazzle Diary. The app hands over a script to run (see
- * core/dacsync.js); this screen runs it on DAC's own page, from DAC's own
- * origin, and only ever READS the result it leaves behind. That result is
- * written to a file for the app, which treats it as untrusted.
+ * A kit only unlocks its legend when it came from an order or that box was
+ * ticked; adding it to DAC's logbook by hand does not count. So this presses
+ * DAC's own button, on DAC's own page, as you would.
  *
- * No password passes through here. You sign in on DAC's own pages.
+ * Three steps, one page at a time:
+ *   sign in  — you do this, on DAC's pages; nothing here sees the password
+ *   mark     — each kit's product page gets the mark script (core/dacsync.js)
+ *   legends  — DAC's account page gets the read-only legend script
+ *
+ * This screen is cut off from the app. Its WebView has NO JavascriptInterface:
+ * nothing DAC loads can reach Dazzle Diary. Java only READS what the scripts
+ * leave on the page, and the app treats that as untrusted.
+ *
+ * No lambdas: the app compiles against Android's own stubs, which cannot build
+ * one. Anonymous classes instead.
  */
 public class DacActivity extends Activity {
 
-    static final String EXTRA_SCRIPT = "script";
+    static final String EXTRA_KITS = "kits";
+    static final String EXTRA_MARK = "mark";
+    static final String EXTRA_WATCH = "watch";
+    static final String EXTRA_LEGENDS = "legends";
     static final String RESULT_FILE = "dac-sync.json";
-    private static final String ACCOUNT = "https://www.diamondartclub.com/pages/account";
 
-    /* Is this page signed in? DAC's account page carries the answer for its own
-       logbook: "true", "false", or no element at all on other pages. */
+    private static final String BASE = "https://www.diamondartclub.com";
+    private static final String ACCOUNT = BASE + "/pages/account";
     private static final String CHECK =
         "(function(){var e=document.getElementById('logbook-customer-data');"
         + "return e?e.getAttribute('data-logged-in'):'none';})()";
-    private static final String READ = "JSON.stringify(window.__dd||null)";
+    private static final String READ_MARK = "JSON.stringify(window.__ap||null)";
+    private static final String READ_LEGENDS = "JSON.stringify(window.__dd||null)";
+    private static final long KIT_LIMIT_MS = 45000;
+
+    private static final int SIGNIN = 0, MARK = 1, LEGENDS = 2;
 
     private WebView web;
     private TextView status;
-    private String script;
-    private boolean running;
+    private JSONArray kits;
+    private String markJs, watchJs, legendJs;
+    private final JSONArray marks = new JSONArray();
+    private int phase = SIGNIN;
+    private int index;               // the kit being marked
+    private int loads;               // product pages loaded for this kit
+    private long kitStarted;
+    private boolean legendsStarted;
     private boolean finished;
     private final Handler main = new Handler(Looper.getMainLooper());
-    /* No lambdas anywhere in this app: it compiles against Android's own stubs,
-       which lack what javac needs to build one. Anonymous classes instead. */
-    private final Runnable pollTask = new Runnable() { @Override public void run() { poll(); } };
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
-        script = getIntent().getStringExtra(EXTRA_SCRIPT);
-        if (script == null || script.isEmpty()) { finish(); return; }
+        try { kits = new JSONArray(getIntent().getStringExtra(EXTRA_KITS)); } catch (Exception e) { kits = null; }
+        markJs = getIntent().getStringExtra(EXTRA_MARK);
+        watchJs = getIntent().getStringExtra(EXTRA_WATCH);
+        legendJs = getIntent().getStringExtra(EXTRA_LEGENDS);
+        if (kits == null || kits.length() == 0 || markJs == null || watchJs == null || legendJs == null) {
+            finish(); return;
+        }
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -80,7 +102,7 @@ public class DacActivity extends Activity {
 
         web = new WebView(this);
         WebSettings s = web.getSettings();
-        s.setJavaScriptEnabled(true);          // DAC's pages, and the sign-in, need it
+        s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setAllowFileAccess(false);
         s.setAllowContentAccess(false);
@@ -88,7 +110,6 @@ public class DacActivity extends Activity {
 
         web.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
-                // stay in here for signing in; anything that is not https goes nowhere
                 return !"https".equals(r.getUrl().getScheme());
             }
             @Override public void onPageFinished(WebView v, String url) { onPage(url); }
@@ -99,17 +120,35 @@ public class DacActivity extends Activity {
         web.loadUrl(ACCOUNT);
     }
 
+    private static boolean isDac(Uri u) {
+        String h = u.getHost() == null ? "" : u.getHost();
+        return h.equals("www.diamondartclub.com") || h.equals("diamondartclub.com");
+    }
+
     private void onPage(String url) {
-        if (running || finished) return;
-        Uri u = Uri.parse(url);
-        String host = u.getHost() == null ? "" : u.getHost();
-        if (!host.equals("www.diamondartclub.com") && !host.equals("diamondartclub.com")) return;
+        if (finished) return;
+        final Uri u = Uri.parse(url);
+        if (!isDac(u)) return;
         final String path = u.getPath() == null ? "" : u.getPath();
+
+        if (phase == MARK) {
+            if (!path.contains("/products/")) return;
+            /* The first page for a kit may press. Any later page for the SAME kit
+               — a redirect, or a reload the press caused — only watches: a
+               second press would un-mark it. */
+            loads++;
+            web.evaluateJavascript(loads == 1 ? markJs : watchJs, null);
+            return;
+        }
+
         web.evaluateJavascript(CHECK, new ValueCallback<String>() {
             @Override public void onReceiveValue(String value) {
                 String signedIn = unquote(value);
-                if ("true".equals(signedIn)) { start(); return; }
-                // signed in now, but landed on Shopify's own account page: go to DAC's
+                if ("true".equals(signedIn)) {
+                    if (phase == SIGNIN) { phase = MARK; index = 0; openKit(); }
+                    else if (phase == LEGENDS && !legendsStarted) startLegends();
+                    return;
+                }
                 boolean account = path.startsWith("/account") && !path.startsWith("/account/login")
                     && !path.contains("register") && !path.contains("reset") && !path.contains("activate");
                 if ("none".equals(signedIn) && account) web.loadUrl(ACCOUNT);
@@ -117,41 +156,98 @@ public class DacActivity extends Activity {
         });
     }
 
-    private void start() {
-        running = true;
-        say("Signed in. Adding your kits and fetching their colours…");
-        web.evaluateJavascript(script, null);
-        main.postDelayed(pollTask, 1200);
+    /* ------------------------------------------------------------ marking */
+
+    private void openKit() {
+        if (finished) return;
+        if (index >= kits.length()) {
+            phase = LEGENDS;
+            say("Fetching the colour lists…");
+            web.loadUrl(ACCOUNT);
+            return;
+        }
+        JSONObject k = kits.optJSONObject(index);
+        String handle = k == null ? "" : k.optString("handle", "");
+        String variant = k == null ? "" : k.optString("variant", "");
+        if (handle.isEmpty() || !variant.matches("\\d{1,20}")) { record("failed"); return; }
+        loads = 0;
+        kitStarted = SystemClock.uptimeMillis();
+        say("Kit " + (index + 1) + " of " + kits.length() + " · " + k.optString("name", ""));
+        web.loadUrl(BASE + "/products/" + Uri.encode(handle) + "?variant=" + variant);
+        pollMark(index);
     }
 
-    private void poll() {
-        if (finished) return;
-        web.evaluateJavascript(READ, new ValueCallback<String>() {
-            @Override public void onReceiveValue(String value) {
-                try {
-                    String text = unquote(value);
-                    if (text == null || "null".equals(text)) { main.postDelayed(pollTask, 1200); return; }
-                    JSONObject dd = new JSONObject(text);
-                    if (dd.optBoolean("done")) { deliver(text); return; }
-                    JSONObject p = dd.optJSONObject("progress");
-                    if (p != null) say("Kit " + Math.min(p.optInt("done") + 1, p.optInt("total"))
-                        + " of " + p.optInt("total") + " · " + p.optString("now", ""));
-                } catch (Exception ignored) { /* not ready yet */ }
-                main.postDelayed(pollTask, 1200);
-            }
-        });
+    private void pollMark(final int forKit) {
+        main.postDelayed(new Runnable() { @Override public void run() {
+            if (finished || phase != MARK || forKit != index) return;
+            web.evaluateJavascript(READ_MARK, new ValueCallback<String>() {
+                @Override public void onReceiveValue(String value) {
+                    if (finished || phase != MARK || forKit != index) return;
+                    String state = null;
+                    try {
+                        String text = unquote(value);
+                        if (text != null && !"null".equals(text)) state = new JSONObject(text).optString("state", null);
+                    } catch (Exception ignored) { state = null; }
+                    boolean done = state != null && !"working".equals(state);
+                    if (done) { record(state); return; }
+                    if (SystemClock.uptimeMillis() - kitStarted > KIT_LIMIT_MS) { record("timeout"); return; }
+                    pollMark(forKit);
+                }
+            });
+        } }, 700);
+    }
+
+    private void record(String state) {
+        JSONObject k = kits.optJSONObject(index);
+        try {
+            marks.put(new JSONObject()
+                .put("variant", k == null ? "" : k.optString("variant", ""))
+                .put("name", k == null ? "" : k.optString("name", ""))
+                .put("state", state));
+        } catch (Exception ignored) { /* nothing to add */ }
+        index++;
+        openKit();
+    }
+
+    /* ------------------------------------------------------------ legends */
+
+    private void startLegends() {
+        legendsStarted = true;
+        web.evaluateJavascript(legendJs, null);
+        pollLegends();
+    }
+
+    private void pollLegends() {
+        main.postDelayed(new Runnable() { @Override public void run() {
+            if (finished) return;
+            web.evaluateJavascript(READ_LEGENDS, new ValueCallback<String>() {
+                @Override public void onReceiveValue(String value) {
+                    try {
+                        String text = unquote(value);
+                        if (text != null && !"null".equals(text)) {
+                            JSONObject dd = new JSONObject(text);
+                            if (dd.optBoolean("done")) { deliver(dd); return; }
+                            JSONObject p = dd.optJSONObject("progress");
+                            if (p != null) say("Colour list " + Math.min(p.optInt("done") + 1, p.optInt("total"))
+                                + " of " + p.optInt("total"));
+                        }
+                    } catch (Exception ignored) { /* not ready yet */ }
+                    pollLegends();
+                }
+            });
+        } }, 1000);
     }
 
     /** Hand the result to the app through a file, and go back. */
-    private void deliver(String text) {
+    private void deliver(JSONObject dd) {
         finished = true;
         try {
+            JSONObject out = new JSONObject().put("marks", marks).put("dd", dd);
             File dir = new File(getFilesDir(), "media");
             //noinspection ResultOfMethodCallIgnored
             dir.mkdirs();
-            try (FileOutputStream out = new FileOutputStream(new File(dir, RESULT_FILE))) {
-                out.write(text.getBytes(StandardCharsets.UTF_8));
-            }
+            FileOutputStream f = new FileOutputStream(new File(dir, RESULT_FILE));
+            try { f.write(out.toString().getBytes(StandardCharsets.UTF_8)); } finally { f.close(); }
             setResult(RESULT_OK);
         } catch (Exception e) { setResult(RESULT_CANCELED); }
         finish();

@@ -264,18 +264,20 @@ public class MainActivity extends Activity {
             if (!pageTrusted) throw new SecurityException("not available to this page");
         }
 
-        /** Open the Diamond Art Club screen and run the given script there once
-         *  signed in. The result comes back to window.__dacSyncDone. */
+        /** Open the Diamond Art Club screen: sign in, tick each kit, read the
+         *  legends. The result comes back to window.__dacSyncDone. */
         @JavascriptInterface
-        public boolean dacSync(String script) {
+        public boolean dacSync(String kits, String mark, String watch, String legends) {
             mustBeOurPage();
-            if (script == null || script.isEmpty() || script.length() > 512 * 1024) return false;
-            final String s = script;
+            if (kits == null || mark == null || watch == null || legends == null) return false;
+            if (kits.length() + mark.length() + watch.length() + legends.length() > 512 * 1024) return false;
+            final Intent go = new Intent(MainActivity.this, DacActivity.class)
+                .putExtra(DacActivity.EXTRA_KITS, kits)
+                .putExtra(DacActivity.EXTRA_MARK, mark)
+                .putExtra(DacActivity.EXTRA_WATCH, watch)
+                .putExtra(DacActivity.EXTRA_LEGENDS, legends);
             runOnUiThread(new Runnable() { @Override public void run() {
-                try {
-                    startActivityForResult(new Intent(MainActivity.this, DacActivity.class)
-                        .putExtra(DacActivity.EXTRA_SCRIPT, s), DAC_SYNC);
-                } catch (Exception e) { hand(null); }
+                try { startActivityForResult(go, DAC_SYNC); } catch (Exception e) { hand(null); }
             } });
             return true;
         }

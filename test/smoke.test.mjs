@@ -10,6 +10,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync as readdirSyncFs } from 'node:fs';
 import { mount } from './mount.mjs';
+import * as idbDirect from '../app/local/idb.js';
 
 /* The IndexedDB shim outlives a single mount, so a test that means "I do not
    own this yet" has to say so — picking a kit you already have now opens it
@@ -2011,15 +2012,14 @@ async function legendMount() {
   return { m, add };
 }
 
-test('the kits sent to DAC are the DAC kits you own, described in DAC\'s words', async () => {
+test('the kits sent to DAC are the DAC kits you own, with their product page', async () => {
   const { m, add } = await legendMount();
   await add('Moon Eater', 'moon-eater', 'received');
   await add('Wild Bloom', 'wild-bloom', 'wishlist');
   await add('Typed In', null, 'started');
   const { kits, missing } = await m.api('/dac/kits');
   assert.equal(kits.length, 1, 'a wish list or unlinked kit was sent as if owned');
-  assert.deepEqual(kits[0], { variant: '101', product: '1', name: 'Moon Eater',
-    status: 'received_not_started', shape: 'square', drill: 'full', currency: 'GBP' });
+  assert.deepEqual(kits[0], { variant: '101', handle: 'moon-eater', name: 'Moon Eater' });
   assert.deepEqual(missing, []);
 });
 
@@ -2038,12 +2038,13 @@ test('bringing legends back changes nothing on any project', async () => {
   const before = await m.api('/projects/' + p.id);
 
   const r = await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ done: true, results: [
-      { variant: '101', outcome: 'created',
+    body: JSON.stringify({ marks: [{ variant: '101', state: 'marked', status: 'completed' }],
+      dd: { done: true, results: [
+      { variant: '101', owned: true,
         colors: { status: 'available', codes: [{ code: '310', name: 'Black', hex: '000000' },
                                                { code: 'B5200', name: 'Snow White', hex: 'ffffff' }] } },
       // even if a result claimed a different status, nothing reads it
-      { variant: '101', outcome: 'existing', status: 'completed' } ] }) });
+      { variant: '101', owned: true, status: 'completed' } ] } }) });
   assert.equal(r.legends, 1);
 
   const after = await m.api('/projects/' + p.id);
@@ -2057,11 +2058,11 @@ test('a project shows its legend, and the stash can be searched by drill', async
   const moon = await add('Moon Eater', 'moon-eater', 'received');
   await add('Wild Bloom', 'wild-bloom', 'received');
   await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ results: [
-      { variant: '101', outcome: 'created', colors: { status: 'available',
+    body: JSON.stringify({ dd: { results: [
+      { variant: '101', owned: true, colors: { status: 'available',
         codes: [{ code: '310', name: 'Black', hex: '000000' }, { code: '3865', name: 'Winter White', hex: 'f9f7f1' }] } },
-      { variant: '202', outcome: 'created', colors: { status: 'available',
-        codes: [{ code: '3865', name: 'Winter White', hex: 'f9f7f1' }] } } ] }) });
+      { variant: '202', owned: true, colors: { status: 'available',
+        codes: [{ code: '3865', name: 'Winter White', hex: 'f9f7f1' }] } } ] } }) });
 
   const legend = await m.api('/projects/' + moon.id + '/legend');
   assert.equal(legend.colours.length, 2);
@@ -2080,10 +2081,10 @@ test('a legend brought back later adds to the ones already kept', async () => {
   await add('Moon Eater', 'moon-eater', 'received');
   await add('Wild Bloom', 'wild-bloom', 'received');
   const send = (results) => m.api('/dac/legends', { method: 'POST',
-    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ results }) });
-  await send([{ variant: '101', outcome: 'created', colors: { status: 'available', codes: ['310'] } },
-              { variant: '202', outcome: 'created', colors: { status: 'checking' } }]);
-  const second = await send([{ variant: '202', outcome: 'existing',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dd: { results } }) });
+  await send([{ variant: '101', owned: true, colors: { status: 'available', codes: ['310'] } },
+              { variant: '202', owned: true, colors: { status: 'checking' } }]);
+  const second = await send([{ variant: '202', owned: true,
                                colors: { status: 'available', codes: ['3865'] } }]);
   assert.equal(second.total, 2, 'the second sync threw away the first one\'s legends');
 });
@@ -2095,11 +2096,16 @@ test('Settings sends your DAC kits to the DAC screen, and a result becomes swatc
   await m.go('#/settings');
   await m.tap('[data-act="dacsync"]');
   assert.equal(m.dacScripts.length, 1, 'nothing was handed to the DAC screen');
-  assert.ok(m.dacScripts[0].includes('"variant":"101"'), 'the script does not carry the kit');
+  const sent = m.dacScripts[0];
+  assert.deepEqual(sent.kits.map((k) => k.handle), ['moon-eater'], 'the DAC screen was not told which page to open');
+  assert.match(sent.mark, /press: true/);
+  assert.match(sent.watch, /press: false/, 'a reloaded page would be allowed to press again');
+  assert.ok(sent.legends.includes('"101"'), 'the legend script does not know which kit to read');
 
   // what the DAC screen would hand back
-  await m.window.__dacSyncDone(JSON.stringify({ done: true, results: [{ variant: '101', outcome: 'created',
-    colors: { status: 'available', codes: [{ code: '310', name: 'Black', hex: '000000' }] } }] }));
+  await m.window.__dacSyncDone(JSON.stringify({ marks: [{ variant: '101', state: 'marked' }],
+    dd: { done: true, results: [{ variant: '101', owned: true,
+      colors: { status: 'available', codes: [{ code: '310', name: 'Black', hex: '000000' }] } }] } }));
   await m.settle();
 
   await m.go('#/p/' + moon.id);
@@ -2107,6 +2113,34 @@ test('Settings sends your DAC kits to the DAC screen, and a result becomes swatc
   await m.tap('.swatch[data-k="310"]');
   assert.equal(globalThis.location.hash, '#/colours');
   assert.ok(m.text().includes('Moon Eater'), 'tapping a colour did not find the kit holding it');
+});
+
+/* "Already purchased" is a toggle: the first run touches only a few kits, so
+   they can be checked on DAC before the rest are. */
+test('the first run ticks only three kits, and the next does the rest', async () => {
+  const kitsIn = ['a', 'b', 'c', 'd', 'e'].map((x, i) => DAC_KIT(10 + i, 900 + i, 'Kit ' + x));
+  const m = await mount({ products: kitsIn });
+  await m.sync();
+  await emptyLogbook(m);
+  // earlier tests have already had their trial; this one needs a fresh start
+  await idbDirect.del('meta', 'dac');
+  for (const k of kitsIn)
+    await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: k.title, shop: 'dac', dac_handle: k.handle, status: 'received' }) });
+  m.answerConfirms(true);
+
+  assert.equal((await m.api('/dac/kits')).piloted, false, 'sanity: this should be a first run');
+  await m.go('#/settings');
+  await m.tap('[data-act="dacsync"]');
+  assert.equal(m.dacScripts[0].kits.length, 3, 'the first run was not a short trial');
+
+  // the trial comes back having ticked them
+  await m.window.__dacSyncDone(JSON.stringify({
+    marks: m.dacScripts[0].kits.map((k) => ({ variant: k.variant, state: 'marked' })), dd: { done: true, results: [] } }));
+  await m.settle();
+  await m.go('#/settings');
+  await m.tap('[data-act="dacsync"]');
+  assert.equal(m.dacScripts[1].kits.length, 5, 'after the trial, the next run did not do them all');
 });
 
 test('declining the warning sends nothing to DAC', async () => {
