@@ -1,16 +1,146 @@
 /**
- * The script that runs on Diamond Art Club's page, run here against a stand-in
- * for DAC instead. It is the same function text that gets injected, so this is
- * the only way to prove what it will do to a real account before it does it.
+ * The scripts that run on Diamond Art Club's pages, run here against stand-ins
+ * instead. They are the same function text that gets injected, so this is the
+ * only way to prove what they will do to a real account before they do it.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runSync, buildSyncScript, readSyncResult, cleanColour } from '../app/core/dacsync.js';
+import { markPurchased, buildMarkScript, runLegends, buildLegendScript,
+         readSyncResult, cleanColour } from '../app/core/dacsync.js';
+
+/* ------------------------------------------------------------ marking */
+
+/** A product page in miniature, drawn from the two states DAC shows. */
+function productPage({ marked = false, button = true, appearsAfter = 0, pillInMarkup = true } = {}) {
+  const clicks = [];
+  const els = [];
+  const el = (tag, textContent, shown, onClick) => {
+    const e = { tagName: tag, textContent, shown, children: [],
+                click() { clicks.push(textContent); onClick && onClick(); } };
+    els.push(e); return e;
+  };
+  // the pill, with the ⓧ that UN-marks, is always in the markup; shown when marked
+  const pill = el('div', 'You already purchased this product.', marked);
+  const unmark = el('button', 'You already purchased this product. ⓧ', marked, () => { pill.shown = false; });
+  let offer = null;
+  let tries = 0;
+  const makeOffer = () => {
+    offer = el('button', 'Already purchased this?', !marked, () => { pill.shown = true; unmark.shown = true; offer.shown = false; });
+  };
+  if (button && !appearsAfter) makeOffer();
+  if (!pillInMarkup) { pill.shown = false; }
+  const document = {
+    querySelectorAll(sel) {
+      tries++;
+      if (button && appearsAfter && !offer && tries > appearsAfter) makeOffer();
+      if (sel === 'body *') return els;
+      return els.filter((e) => e.tagName === 'button');
+    }
+  };
+  return { document, clicks, pill, isShown: (e) => !!e.shown };
+}
+const mark = async (page, opts = {}) => {
+  const out = {};
+  await markPurchased({ document: page.document, sleep: async () => {}, out, isShown: page.isShown, ...opts });
+  return out.state;
+};
+
+test('an unmarked kit gets its button pressed, and the pill confirms it', async () => {
+  const page = productPage();
+  assert.equal(await mark(page), 'marked');
+  assert.deepEqual(page.clicks, ['Already purchased this?']);
+  assert.equal(page.pill.shown, true);
+});
+
+/* It is a toggle. Pressing anything on a marked kit risks UN-marking it. */
+test('a kit already marked is left completely alone', async () => {
+  const page = productPage({ marked: true });
+  assert.equal(await mark(page), 'already');
+  assert.deepEqual(page.clicks, [], 'it pressed something on a kit that was already marked');
+  assert.equal(page.pill.shown, true, 'the kit is no longer marked');
+});
+
+/* If DAC ever shows the button AND the pill together, the only thing standing
+   between us and un-marking the kit is checking the pill first. */
+test('when the pill and the button both show, it still presses nothing', async () => {
+  const page = productPage({ marked: true });
+  page.document.querySelectorAll('button').find((b) => /^Already/.test(b.textContent)).shown = true;
+  assert.equal(await mark(page), 'already');
+  assert.deepEqual(page.clicks, [], 'it pressed the toggle on a kit that was already marked');
+});
+
+/* The ⓧ says "this product", the button says "this?" — the question mark is
+   what keeps them apart, even with the ⓧ showing and no pill detected. */
+test('the ⓧ alone, showing, is never pressed', async () => {
+  const page = productPage({ button: false });
+  page.document.querySelectorAll('button')[0].shown = true;     // the ⓧ
+  page.pill.textContent = '';                                     // and no pill to see
+  assert.equal(await mark(page), 'already',
+    'with the ⓧ showing, its own text says the kit is marked');
+  assert.deepEqual(page.clicks, [], 'it pressed the ⓧ that un-marks');
+});
+
+test('the pill\'s ⓧ is never mistaken for the button, even though both say "already purchased"', async () => {
+  const page = productPage();
+  await mark(page);
+  assert.ok(!page.clicks.some((t) => /You already purchased/.test(t)), 'it pressed the ⓧ that un-marks');
+});
+
+/* The dangerous case: DAC draws the button, THEN notices the kit is marked. */
+test('a button that turns into the pill a moment later is never pressed', async () => {
+  const page = productPage({ marked: true });
+  const buttons = page.document.querySelectorAll('button');
+  const offer = buttons.find((b) => /^Already/.test(b.textContent));
+  const unmark = buttons.find((b) => /^You already/.test(b.textContent));
+  // looks exactly like an unmarked kit at first: button showing, no pill, no ⓧ…
+  offer.shown = true; page.pill.shown = false; unmark.shown = false;
+  let looks = 0;
+  const qsa = page.document.querySelectorAll.bind(page.document);
+  page.document.querySelectorAll = (sel) => {
+    // …then DAC catches up, a few looks in
+    if (++looks === 8) { offer.shown = false; page.pill.shown = true; unmark.shown = true; }
+    return qsa(sel);
+  };
+  assert.equal(await mark(page), 'already');
+  assert.deepEqual(page.clicks, [], 'it pressed before the page had settled, un-marking the kit');
+});
+
+test('a page told only to watch never presses, even an unmarked kit', async () => {
+  const page = productPage();
+  assert.equal(await mark(page, { press: false }), 'unconfirmed');
+  assert.deepEqual(page.clicks, []);
+});
+
+test('the pill sitting hidden in the page markup does not count as marked', async () => {
+  const page = productPage({ marked: false });
+  assert.equal(page.pill.shown, false);
+  assert.equal(await mark(page), 'marked', 'a hidden pill was read as "already purchased"');
+});
+
+test('a button DAC draws late is still found', async () => {
+  const page = productPage({ appearsAfter: 5 });
+  assert.equal(await mark(page), 'marked');
+});
+
+test('no button at all is reported, not guessed at', async () => {
+  const page = productPage({ button: false });
+  assert.equal(await mark(page), 'missing');
+  assert.deepEqual(page.clicks, []);
+});
+
+test('it presses the button once, never twice', async () => {
+  const page = productPage();
+  // a button that does nothing: the pill never appears
+  page.document.querySelectorAll('button')[1].click = function () { page.clicks.push(this.textContent); };
+  assert.equal(await mark(page), 'unconfirmed');
+  assert.equal(page.clicks.length, 1, 'it kept pressing a toggle');
+});
+
+/* ------------------------------------------------------------ legends */
 
 const API = 'https://logbook-app-theta.vercel.app/api';
 
-/** A DAC account in miniature: who is signed in, and which variants it holds. */
-function fakeDac({ signedIn = true, owned = {}, legends = {}, pendingLegend = [], refuse = false } = {}) {
+function fakeDac({ signedIn = true, owned = {}, legends = {}, pending = [], refuse = false } = {}) {
   const attrs = signedIn
     ? { 'data-logged-in': 'true', 'data-customer-id': '42', 'data-customer-email': 'x@example.com',
         'data-customer-first-name': 'J', 'data-auth-digest': 'sig', 'data-customer-country': 'GB' }
@@ -18,119 +148,100 @@ function fakeDac({ signedIn = true, owned = {}, legends = {}, pendingLegend = []
   const el = { getAttribute: (k) => (k in attrs ? attrs[k] : null) };
   const document = { getElementById: (id) => (id === 'logbook-customer-data' ? el : null) };
   const calls = [];
-  const account = new Map(Object.entries(owned));
   const json = (status, body) => ({ ok: status < 400, status, json: async () => body });
-
   const fetch = async (url, opts = {}) => {
     calls.push({ url, method: opts.method || 'GET', headers: opts.headers || {}, body: opts.body });
-    if (url === API + '/identify') {
-      if (refuse) return json(401, { error: 'no' });
-      const b = JSON.parse(opts.body);
-      return b.digest === 'sig' ? json(200, { data: { token: 'tok' } }) : json(401, {});
-    }
+    if (url === API + '/identify') return refuse ? json(401, {}) : json(200, { data: { token: 'tok' } });
     if (opts.headers?.Authorization !== 'Bearer tok') return json(401, {});
     const u = new URL(url);
     if (u.pathname === '/api/drills') {
       const v = u.searchParams.get('variant');
-      if (!account.has(v)) return json(200, { project: null });
-      const colors = pendingLegend.includes(v) ? { status: 'checking' }
-        : { status: 'available', codes: legends[v] || [] };
-      return json(200, { project: account.get(v), colors });
-    }
-    if (u.pathname === '/api/projects/create') {
-      const f = Object.fromEntries(opts.body.entries());
-      account.set(f['from_product.variant'], { id: 'p' + account.size, name: f.name });
-      return json(200, { data: { id: 'p' + account.size } });
+      if (!owned[v]) return json(200, { project: null });
+      return json(200, { project: owned[v],
+        colors: pending.includes(v) ? { status: 'checking' } : { status: 'available', codes: legends[v] || [] } });
     }
     return json(404, {});
   };
-  return { document, fetch, calls, account };
+  return { document, fetch, calls };
 }
-
-const kit = (variant, name = 'Kit ' + variant) =>
-  ({ variant, product: 'prod' + variant, name, status: 'received_not_started', shape: 'square', drill: 'full', currency: 'GBP' });
-const run = (dac, kits) => {
+const legendsFor = async (dac, variants) => {
   const out = {};
-  return runSync({ document: dac.document, fetch: dac.fetch, FormData, sleep: async () => {}, kits, out })
-    .then(() => out);
+  await runLegends({ document: dac.document, fetch: dac.fetch, sleep: async () => {}, variants, out });
+  return out;
 };
 
-test('a kit not on the account is added, then its legend is fetched', async () => {
-  const dac = fakeDac({ legends: { 111: [{ code: '310', name: 'Black', hex: '000000' }] } });
-  const out = await run(dac, [kit('111', 'Little Wanderer')]);
+test('legends are read for owned kits, and nothing on the account is changed', async () => {
+  const dac = fakeDac({ owned: { 111: { id: 'p1' } }, legends: { 111: [{ code: '310', name: 'Black', hex: '000000' }] } });
+  const out = await legendsFor(dac, ['111', '222']);
   assert.equal(out.error, null);
   assert.equal(out.done, true);
-  assert.equal(out.results[0].outcome, 'created');
   assert.deepEqual(out.results[0].colors.codes, [{ code: '310', name: 'Black', hex: '000000' }]);
-  const made = dac.calls.find((c) => c.url.endsWith('/projects/create'));
-  const sent = Object.fromEntries(made.body.entries());
-  assert.equal(sent['from_product.variant'], '111', 'the entry is not linked to its variant, so no legend');
-  assert.equal(sent['from_product.id'], 'prod111');
-  assert.equal(sent.status, 'received_not_started');
-});
-
-/* Running it twice must not put everything on the account twice. */
-test('a kit already on the account is never added again', async () => {
-  const dac = fakeDac({ owned: { 111: { id: 'p0' } }, legends: { 111: [{ code: '310' }] } });
-  const out = await run(dac, [kit('111')]);
-  assert.equal(out.results[0].outcome, 'existing');
-  assert.equal(dac.calls.filter((c) => c.url.endsWith('/projects/create')).length, 0,
-               'it added a kit that was already there');
-});
-
-test('a legend still being checked is reported as pending, not as a failure', async () => {
-  const dac = fakeDac({ pendingLegend: ['111'] });
-  const out = await run(dac, [kit('111')]);
-  const r = readSyncResult(out);
-  assert.equal(r.created, 1);
-  assert.equal(r.pending, 1, 'a kit waiting on DAC was counted as a failure');
-  assert.equal(r.failed, 0);
-  assert.deepEqual(r.legends, {});
+  assert.equal(out.results[1].owned, false);
+  assert.deepEqual([...new Set(dac.calls.map((c) => c.method))], ['POST', 'GET']);
+  assert.equal(dac.calls.filter((c) => c.method === 'POST').length, 1, 'it wrote to the account');
+  assert.equal(dac.calls[0].url, API + '/identify', 'the only POST is signing in');
 });
 
 test('it signs in the way DAC\'s own page does, and sends the country header', async () => {
-  const dac = fakeDac({ legends: { 111: [{ code: '310' }] } });
-  await run(dac, [kit('111')]);
-  const who = dac.calls[0];
-  assert.equal(who.url, API + '/identify');
-  assert.deepEqual(JSON.parse(who.body), {
-    customer: { id: '42', email: 'x@example.com', first_name: 'J' }, digest: 'sig' });
-  const later = dac.calls.find((c) => c.url.includes('/drills'));
-  assert.equal(later.headers['x-customer-country'], 'GB');
+  const dac = fakeDac({ owned: { 111: {} } });
+  await legendsFor(dac, ['111']);
+  assert.deepEqual(JSON.parse(dac.calls[0].body),
+    { customer: { id: '42', email: 'x@example.com', first_name: 'J' }, digest: 'sig' });
+  assert.equal(dac.calls[1].headers['x-customer-country'], 'GB');
 });
 
 test('not being signed in stops it before anything is sent', async () => {
   const dac = fakeDac({ signedIn: false });
-  const out = await run(dac, [kit('111')]);
+  const out = await legendsFor(dac, ['111']);
   assert.match(out.error, /not signed in/);
-  assert.equal(dac.calls.length, 0, 'it talked to DAC without a signed-in account');
-  assert.equal(out.done, true);
+  assert.equal(dac.calls.length, 0);
 });
 
-test('a refused sign-in stops it before any kit is touched', async () => {
+test('a refused sign-in stops it before any kit is read', async () => {
   const dac = fakeDac({ refuse: true });
-  const out = await run(dac, [kit('111')]);
+  const out = await legendsFor(dac, ['111']);
   assert.match(out.error, /did not accept the sign-in/);
-  assert.equal(dac.calls.filter((c) => !c.url.endsWith('/identify')).length, 0);
+  assert.equal(dac.calls.length, 1);
 });
 
-/* The script that actually gets injected must be the same code tested above. */
-test('the injected script is the tested function, with the kits embedded safely', () => {
-  const src = buildSyncScript([kit('111', 'Frejya, "Goddess" </script> & War')]);
-  assert.ok(src.includes(runSync.toString()), 'the injected script is not the function under test');
-  assert.doesNotThrow(() => new Function(src), 'the injected script does not parse');
-  assert.ok(src.includes('window.__dd'), 'the result has nowhere to land');
+/* ------------------------------------------------------------ scripts */
+
+test('the injected scripts are the tested functions, and parse', () => {
+  const mk = buildMarkScript();
+  assert.ok(mk.includes(markPurchased.toString()));
+  assert.doesNotThrow(() => new Function(mk));
+  assert.match(mk, /^window\.__ap \|\|/, 'a page could run it twice');
+  assert.match(mk, /press: true/);
+  assert.match(buildMarkScript({ press: false }), /press: false/);
+  const lg = buildLegendScript(['111', '222']);
+  assert.ok(lg.includes(runLegends.toString()));
+  assert.doesNotThrow(() => new Function(lg));
+  assert.ok(lg.includes('window.__dd'));
 });
 
-/* What comes back was written on someone else's page. */
+/* ------------------------------------------------------------ results */
+
+test('a result reports what was marked, what already was, and what was not found', () => {
+  const r = readSyncResult({
+    marks: [{ variant: '111', state: 'marked' }, { variant: '222', state: 'already' },
+            { variant: '333', state: 'missing', name: 'Gone Kit' }, { variant: '444', state: 'sneaky' }],
+    dd: { results: [
+      { variant: '111', owned: true, colors: { status: 'available', codes: [{ code: '310', hex: '000000' }] } },
+      { variant: '222', owned: true, colors: { status: 'checking' } } ] } });
+  assert.equal(r.marked, 1);
+  assert.equal(r.already, 1);
+  assert.deepEqual(r.missing, [{ variant: '333', state: 'missing', name: 'Gone Kit' }]);
+  assert.equal(r.pending, 1);
+  assert.deepEqual(Object.keys(r.legends), ['111']);
+});
+
 test('only sane colours survive the trip back', () => {
   assert.deepEqual(cleanColour({ code: '310', name: 'Black', hex: '000000' }),
                    { code: '310', name: 'Black', hex: '#000000' });
   assert.deepEqual(cleanColour('B5200'), { code: 'B5200', name: null, hex: null });
   assert.equal(cleanColour({ code: '<img onerror=x>' }), null);
   assert.equal(cleanColour({ code: '' }), null);
-  assert.equal(cleanColour(null), null);
   assert.equal(cleanColour({ code: '310', hex: 'javascript:1' }).hex, null);
-  const r = readSyncResult({ results: [{ variant: '../../etc', outcome: 'created' }] });
-  assert.deepEqual(r.legends, {}, 'a variant that is not a number was accepted');
+  assert.deepEqual(readSyncResult({ dd: { results: [{ variant: '../x', owned: true,
+    colors: { status: 'available', codes: ['310'] } }] } }).legends, {});
 });
