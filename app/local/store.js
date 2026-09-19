@@ -1555,7 +1555,9 @@ export async function localApi(path, opts = {}) {
     }
     /* The first run marks only a few, so you can check them on DAC before the
        rest are touched: "Already purchased" is a toggle. */
-    const piloted = !!((await idb.get('meta', 'dac')) || {}).piloted;
+    /* Kept under its own key: an earlier version counted "already ticked" as a
+       successful trial, and a bug made every kit look already ticked. */
+    const piloted = !!((await idb.get('meta', 'dacTrial')) || {}).done;
     return { kits, missing, piloted };
   }
 
@@ -1567,7 +1569,8 @@ export async function localApi(path, opts = {}) {
     const at = nowIso();
     for (const [v, codes] of Object.entries(r.legends)) all[v] = { codes, at };
     await idb.put('meta', all, 'legends');
-    if (r.marked || r.already) await idb.put('meta', { piloted: true }, 'dac');
+    // a trial counts only once a press has been seen to work
+    if (r.marked) await idb.put('meta', { done: true, at }, 'dacTrial');
     return { legends: Object.keys(r.legends).length, marked: r.marked, already: r.already,
              pending: r.pending, missing: r.missing.slice(0, 20), error: r.error,
              total: Object.keys(all).length };

@@ -245,3 +245,96 @@ test('only sane colours survive the trip back', () => {
   assert.deepEqual(readSyncResult({ dd: { results: [{ variant: '../x', owned: true,
     colors: { status: 'available', codes: ['310'] } }] } }).legends, {});
 });
+
+/* ------------------------------------------- finding the real control */
+
+/** A tiny tree: enough for parentElement and querySelectorAll('*'). */
+function tree(spec, parent = null, all = [], clicks = []) {
+  const node = { tagName: spec.tag, className: spec.cls || '', id: '', parentElement: parent,
+    shown: spec.shown !== false, children: [], attrs: spec.attrs || {},
+    getAttribute(k) { return this.attrs[k] ?? null; },
+    get textContent() { return (spec.text || '') + this.children.map((c) => c.textContent).join(''); },
+    get outerHTML() { return `<${spec.tag.toLowerCase()} ${Object.entries(this.attrs).map(([k, v]) => `${k}="${v}"`).join(' ')}>${this.textContent}</${spec.tag.toLowerCase()}>`; },
+    querySelectorAll() { const out = []; const walk = (n) => n.children.forEach((c) => { out.push(c); walk(c); }); walk(this); return out; },
+    click() { clicks.push(this); spec.onClick && spec.onClick(); } };
+  all.push(node);
+  node.children = (spec.kids || []).map((k) => tree(k, node, all, clicks).node);
+  return { node, all, clicks };
+}
+function pageFrom(root, extra = {}) {
+  const { all, clicks } = tree(root);
+  const document = { querySelectorAll: (sel) => (sel === 'body *' ? all : sel === 'script[src]' ? (extra.scripts || []) : []) };
+  return { document, clicks, all, isShown: (e) => e.shown !== false };
+}
+
+test('a plain div saying "Already purchased this?" is pressed, not just real buttons', async () => {
+  let pill;
+  const page = pageFrom({ tag: 'DIV', kids: [
+    { tag: 'DIV', cls: 'ap-offer', text: 'Already purchased this?', onClick: () => { pill.shown = true; } },
+    { tag: 'DIV', cls: 'ap-pill', text: 'You already purchased this product.', shown: false } ] });
+  pill = page.all.find((n) => n.className === 'ap-pill');
+  assert.equal(await mark(page), 'marked', 'a div control was never found');
+  assert.equal(page.clicks[0].className, 'ap-offer');
+});
+
+test('wording split across pieces with no space between still reads as the question', async () => {
+  let pill;
+  const page = pageFrom({ tag: 'DIV', kids: [
+    { tag: 'BUTTON', cls: 'offer', kids: [{ tag: 'SPAN', text: 'Already purchased' }, { tag: 'SPAN', text: 'this?' }],
+      onClick: () => { pill.shown = true; } },
+    { tag: 'DIV', cls: 'pill', text: 'You already purchased this product.', shown: false } ] });
+  pill = page.all.find((n) => n.className === 'pill');
+  assert.equal(await mark(page), 'marked', '"Already purchasedthis?" was not recognised');
+});
+
+test('the text inside a button presses the button around it', async () => {
+  let pill;
+  const page = pageFrom({ tag: 'DIV', kids: [
+    { tag: 'BUTTON', cls: 'the-control', kids: [{ tag: 'SPAN', cls: 'label', text: 'Already purchased this?' }],
+      onClick: () => { pill.shown = true; } },
+    { tag: 'DIV', cls: 'pill', text: 'You already purchased this product.', shown: false } ] });
+  pill = page.all.find((n) => n.className === 'pill');
+  await mark(page);
+  assert.equal(page.clicks[0].className, 'the-control', 'it clicked the label, not the button holding it');
+});
+
+test('a kit that could not be ticked reports what was on the page, with nothing private in it', async () => {
+  const page = pageFrom({ tag: 'DIV', kids: [
+    { tag: 'SECTION', cls: 'purchase-widget', attrs: { 'data-email': 'someone@example.com', 'data-auth-digest': 'abc123' },
+      text: 'Purchase history for someone@example.com' } ] },
+    { scripts: [{ src: 'https://cdn.example/already-purchased.js' }, { src: 'https://www.google-analytics.com/x.js' }] });
+  const out = {};
+  await markPurchased({ document: page.document, sleep: async () => {}, out, isShown: page.isShown,
+                        location: { pathname: '/products/kit' } });
+  assert.equal(out.state, 'missing');
+  const report = JSON.stringify(out.found);
+  assert.ok(out.found.cands.length >= 1, 'it did not say what on the page mentioned "purchased"');
+  assert.deepEqual(out.found.scripts, ['https://cdn.example/already-purchased.js'], 'the scripts were not listed, or trackers were kept');
+  assert.doesNotMatch(report, /someone@example\.com/, 'an email address leaked into the report');
+  assert.doesNotMatch(report, /abc123/, 'a sign-in signature leaked into the report');
+  assert.equal(out.found.page, '/products/kit');
+});
+
+/* What happened on the real page: the pill's markup is always there, hidden,
+   inside visible containers — so "is any visible element saying 'You already
+   purchased'?" was true everywhere, and nothing was ever pressed. */
+test('a hidden pill inside visible containers does not make every kit look marked', async () => {
+  let pill;
+  const page = pageFrom({ tag: 'MAIN', kids: [{ tag: 'SECTION', cls: 'product-info', kids: [
+    { tag: 'H1', text: 'Princess & The Pea Kitty' },
+    { tag: 'DIV', cls: 'ap-widget', kids: [
+      { tag: 'BUTTON', cls: 'ap-offer', kids: [{ tag: 'SPAN', text: 'Already purchased this?' }],
+        onClick: () => { pill.shown = true; } },
+      { tag: 'DIV', cls: 'ap-pill', shown: false, kids: [
+        { tag: 'SPAN', text: 'You already purchased this product.' },
+        { tag: 'BUTTON', cls: 'ap-unmark', text: 'ⓧ' } ] } ] } ] }] });
+  pill = page.all.find((n) => n.className === 'ap-pill');
+  const words = page.all.find((n) => n.textContent === 'You already purchased this product.');
+  const shownNow = (e) => { for (let x = e; x; x = x.parentElement) if (x.shown === false) return false; return true; };
+  const out = {};
+  await markPurchased({ document: page.document, sleep: async () => {}, out, isShown: shownNow });
+  assert.equal(out.state, 'marked', 'the visible containers around a hidden pill were read as "already purchased"');
+  assert.equal(page.clicks[0].className, 'ap-offer');
+  assert.ok(shownNow(words), 'sanity: the pill now shows');
+  assert.ok(!page.clicks.some((c) => c.className === 'ap-unmark'), 'it pressed the ⓧ');
+});
