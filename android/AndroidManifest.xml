@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="org.logbook.solo"
-    android:versionCode="80"
-    android:versionName="3.26">
+    android:versionCode="81"
+    android:versionName="3.27">
 
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
 
@@ -31,5 +31,8 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Signs into Diamond Art Club to borrow drill legends. Not exported:
+             nothing outside this app can open it. -->
+        <activity android:name=".DacActivity" android:exported="false" />
     </application>
 </manifest>

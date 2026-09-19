@@ -387,6 +387,11 @@ export function toRow(shop, p, ctx, currency) {
     // prices are always in the shop's own currency, which is not always yours
     currency: f.currency || currency || shop.currency || 'USD',
     handle: p.handle || (p.slug || String(p.id)),
+    /* The shop's own IDs for the listing and the variant bought. DAC's logbook
+       links an entry to its kit by these, and that link is what carries the
+       kit's drill legend with it. */
+    product_id: p.id != null ? String(p.id) : null,
+    variant_id: v.id != null ? String(v.id) : null,
     title: f.title,
     artist: f.artist,
     type: f.type !== undefined ? f.type : (p.product_type || null),

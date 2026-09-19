@@ -20,6 +20,8 @@ export async function mount({ width = 390, products = null, catalogue = true, sh
   const document = makeDocument();
   const files = new Map();          // the native file store
   const net = [];                   // every URL the app asked for, in order
+  const dacScripts = [];            // scripts handed to the DAC screen
+  const dacForgotten = { n: 0 };
   const downloads = [];
   const listeners = Object.create(null);
   const confirms = [];
@@ -42,6 +44,9 @@ export async function mount({ width = 390, products = null, catalogue = true, sh
       exists: (p) => files.has(p),
       remove: (p) => files.delete(p),
       isSystemDark: () => true,
+      // the DAC screen: record what would be run there, and forget on request
+      dacSync: (script) => { dacScripts.push(script); return true; },
+      dacForget: () => { dacForgotten.n++; return true; },
       setBarColor() {},
       saveDownload: (name, b64, mime) => {
         downloads.push({ name, mime, text: Buffer.from(b64, 'base64').toString('utf8') });
@@ -220,7 +225,7 @@ export async function mount({ width = 390, products = null, catalogue = true, sh
   };
 
   return {
-    document, window: win, api, app, go, tap, settle, sync, seed, fire, files, downloads, dropCsv, net,
+    document, window: win, api, app, go, tap, settle, sync, seed, fire, files, downloads, dropCsv, net, dacScripts, dacForgotten,
     html: () => document.documentElement.innerHTML,
     text: () => document.documentElement.textContent,
     screen: () => (document.getElementById('main') || app).innerHTML,

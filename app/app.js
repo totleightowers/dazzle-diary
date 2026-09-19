@@ -2,6 +2,7 @@ import { api, isStandalone } from './api.js';
 import { statusFromDates, applyStatus, parseHolds, openHold, heldDays,
          ALL_STATUSES } from './core/status.js';
 import { productUrl, shopById, displayCurrency, SHOPS, CURRENCIES } from './core/shops.js';
+import { buildSyncScript } from './core/dacsync.js';
 const SHOP_BY_NAME = Object.fromEntries(SHOPS.map((s) => [s.name, s]));
 /* Dazzle Diary — the whole client. Vanilla; no build step. */
 
@@ -1066,6 +1067,8 @@ route(/^#\/p\/(\d+)$/, async (id) => {
       }
     } catch { /* offline: the hero simply stays empty */ }
   }
+  // borrowed from a DAC account (see core/dacsync.js); empty for most kits
+  const legend = await api('/projects/' + id + '/legend').catch(() => ({ colours: [] }));
   const spec = [
     ['Canvas size', sizeText(p) + (p.width_in ? ` · ${p.width_in}" × ${p.height_in}"` : '')],
     ['Drill shape', p.shape], ['Coverage', p.coverage],
@@ -1321,6 +1324,18 @@ route(/^#\/p\/(\d+)$/, async (id) => {
           <button class="btn ghost wide" style="margin-top:10px" data-act="resetcover" data-id="${p.id}">
             Use the shop\u2019s image as the cover</button>` : ''}
         </div>
+
+        ${legend.colours && legend.colours.length ? `
+        <div>
+          <h3 class="label">Drill colours · ${legend.colours.length}</h3>
+          <div class="swatches">${legend.colours.map((c) => `
+            <button class="swatch" data-act="findcolour" data-k="${h(c.code)}"
+                    aria-label="Find other kits with ${h(c.code)}${c.name ? ' ' + h(c.name) : ''}">
+              <i style="background:${c.hex ? h(c.hex) : 'transparent'}"></i>
+              <span class="tnum">${h(c.code)}</span></button>`).join('')}</div>
+          <p style="margin:8px 2px 0;font-size:11px;line-height:1.45;color:var(--ink-mute)">
+            Tap a colour to find it in your other kits.</p>
+        </div>` : ''}
 
         <div>
           <h3 class="label">Notes</h3>
@@ -1870,6 +1885,66 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
     link();
     cmHint(); recalc();
     toast('Filled from the catalogue');
+  };
+});
+
+/* ========================================================== #/colours
+   Which of your kits holds this drill? Works offline, from colour lists
+   borrowed from a DAC account. By code (310, B5200) or by name (black). */
+route(/^#\/colours$/, async () => {
+  const q0 = S.colourQ || '';
+  const first = await api('/colours?q=' + encodeURIComponent(q0));
+  $out.innerHTML = `
+  <div class="screen reading">
+    <div class="topbar">
+      ${topbar('Find a drill', { back: '#/settings', sub: true })}
+      <div class="search">
+        ${svg('search', 18)}
+        <input id="cq" value="${h(q0)}" placeholder="A code like 310, or a colour like black"
+               autocomplete="off" inputmode="text">
+      </div>
+    </div>
+    <div class="scroll pad" id="colourbody" style="padding-bottom:24px"></div>
+  </div>`;
+  const paint = (r, q) => {
+    const body = document.getElementById('colourbody');
+    if (!body) return;
+    if (!r.legends) {
+      body.innerHTML = `<div class="empty">${svg('search', 36, 1.4)}<h2>No colour lists yet</h2>
+        <p>Get them from Diamond Art Club in Settings, under Drill colours.</p></div>`;
+      return;
+    }
+    if (!q) {
+      body.innerHTML = `<p style="margin:18px 2px;font-size:13px;color:var(--ink-mute)">Searching ${
+        num(r.legends)} kit${r.legends === 1 ? '' : 's'}’ colour lists.</p>`;
+      return;
+    }
+    if (!r.results.length) {
+      body.innerHTML = `<div class="empty">${svg('search', 36, 1.4)}<h2>Not in any of your kits</h2>
+        <p>None of the ${num(r.legends)} colour lists has ${h(q)}.</p></div>`;
+      return;
+    }
+    body.innerHTML = `<p style="margin:16px 2px 8px;font-size:12px;color:var(--ink-mute)" class="tnum">${
+      r.results.length} kit${r.results.length === 1 ? '' : 's'} with ${h(q)}</p>
+      <div class="stack">${r.results.map((k) => `
+        <button class="colourhit" data-go="#/p/${k.id}">
+          <i class="swatch-dot" style="background:${k.colour.hex ? h(k.colour.hex) : 'transparent'}"></i>
+          <span style="flex:1 1 auto;min-width:0;text-align:left">
+            <span style="display:block;font-family:var(--serif);font-weight:600;font-size:15px">${h(k.title)}</span>
+            <span style="display:block;margin-top:2px;font-size:12px;color:var(--ink-mute)" class="tnum">${
+              h(k.colour.code)}${k.colour.name ? ' · ' + h(k.colour.name) : ''} · ${
+              h((STATUS[k.status] || {}).short || k.status)}</span>
+          </span></button>`).join('')}</div>`;
+  };
+  paint(first, q0);
+  const input = document.getElementById('cq');
+  let t;
+  input.oninput = () => {
+    clearTimeout(t);
+    t = setTimeout(async () => {
+      S.colourQ = input.value.trim();
+      paint(await api('/colours?q=' + encodeURIComponent(S.colourQ)), S.colourQ);
+    }, 200);
   };
 });
 
@@ -2555,9 +2630,10 @@ route(/^#\/summary$/, async () => {
 
 /* ========================================================== #/settings */
 route(/^#\/settings$/, async () => {
-  const [state, stats, gaps, soft] = await Promise.all([
+  const [state, stats, gaps, soft, drills] = await Promise.all([
     api('/state'), api('/stats'), api('/projects/backfill-dates').catch(() => ({ candidates: 0 })),
-    api('/projects/upgrade-covers').catch(() => ({ candidates: 0 }))]);
+    api('/projects/upgrade-covers').catch(() => ({ candidates: 0 })),
+    api('/colours').catch(() => ({ legends: 0 }))]);
   const synced = state.catalogue.syncedAt ? dateText(state.catalogue.syncedAt.slice(0, 10)) : null;
   /* A fetch already under way when this screen is painted — because it started
      on launch, or because the screen was painted again — is picked back up
@@ -2709,6 +2785,31 @@ route(/^#\/settings$/, async () => {
       </div>
 
       <div>
+        <h3 class="label">Drill colours</h3>
+        <div class="panel pad-in" style="margin-bottom:10px">
+          <div class="row" style="align-items:flex-start">
+            <span class="k" style="flex:1 1 auto;color:var(--ink)">
+              <span style="display:block;font-weight:600">${drills.legends
+                ? `${num(drills.legends)} kit${drills.legends === 1 ? '' : 's'} with a colour list`
+                : 'Find spare drills in kits you own'}</span>
+              <span style="display:block;margin-top:3px;font-size:12px;line-height:1.5;color:var(--ink-mute)">
+                Diamond Art Club keeps every kit’s legend, and shares it for kits on your account.
+                This signs into a DAC account and adds your DAC kits to it as purchased, so their
+                legends come back here. Your logbook is never changed by it — only the colours
+                are kept.</span>
+            </span>
+          </div>
+          <div style="display:flex;gap:8px;padding:8px 0">
+            ${drills.legends ? `<button class="btn ghost" style="flex:1 1 auto;height:40px;font-size:13px"
+                    data-go="#/colours">Find a drill</button>` : ''}
+            <button class="btn ghost" style="flex:1 1 auto;height:40px;font-size:13px"
+                    data-act="dacsync">${drills.legends ? 'Fetch again' : 'Get colours from DAC'}</button>
+          </div>
+          <div id="dacbox"></div>
+          ${drills.legends ? `<button class="btn ghost wide" style="height:36px;font-size:12px"
+                  data-act="dacforget">Sign out of Diamond Art Club in this app</button>` : ''}
+        </div>
+
         <h3 class="label">Your data</h3>
         ${gaps.candidates ? `
         <div class="panel pad-in" style="margin-bottom:10px">
@@ -3034,6 +3135,32 @@ async function handleClick(e) {
       const { job } = await api('/projects/upgrade-covers?job=1', { method: 'POST' });
       if (job) watchCovers(job);
     } catch (e) { toast(e.message); el.disabled = false; render(); }
+  }
+  else if (act === 'dacsync') {
+    const n = window.LogbookNative;
+    if (!n || typeof n.dacSync !== 'function') { toast('This needs the Android app'); return; }
+    const { kits, missing } = await api('/dac/kits');
+    if (!kits.length) {
+      toast(missing.length ? 'Update all shops first, so DAC kits can be matched' : 'No DAC kits to send');
+      return;
+    }
+    if (!confirm(`This adds ${kits.length} DAC kit${kits.length === 1 ? '' : 's'} to the Diamond Art Club `
+               + 'account you sign into next, as purchased, and fetches their colour lists.\n\n'
+               + 'Kits already on that account are left alone, so it is safe to run again. '
+               + 'Your logbook is not changed.'
+               + (missing.length ? `\n\n${missing.length} could not be matched to a DAC listing `
+                                  + 'and will be skipped — Update all shops may fix that.' : ''))) return;
+    const box = document.getElementById('dacbox');
+    if (box) box.innerHTML = '<p style="margin:0 0 8px;font-size:12px;color:var(--ink-mute)">Waiting for Diamond Art Club…</p>';
+    n.dacSync(buildSyncScript(kits));
+  }
+  else if (act === 'dacforget') {
+    try { window.LogbookNative?.dacForget?.(); } catch { /* nothing to forget */ }
+    toast('Signed out of Diamond Art Club here. The colours you have are kept.');
+  }
+  else if (act === 'findcolour') {
+    S.colourQ = el.dataset.k || '';
+    go('#/colours');
   }
   else if (act === 'showsmallpics') {
     S.lb = { ...S.lb, gaps: 'pics', open: true };
@@ -3490,6 +3617,24 @@ window.addEventListener('hashchange', (e) => {
    is waste. So it happens once, by itself, on the first launch after updating.
    It needs a connection; anything it cannot reach keeps its mark and is simply
    tried again next time. */
+/* What the Diamond Art Club screen brought back. It was written by a script on
+   someone else's page, so it goes straight to the store, which keeps only the
+   colours and validates every one. Nothing on a project changes. */
+window.__dacSyncDone = async (text) => {
+  if (text == null) { toast('Diamond Art Club was closed before it finished'); render(); return; }
+  try {
+    const r = await api('/dac/legends', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: text });
+    if (r.error && !r.legends && !r.created && !r.existing) { toast(r.error); render(); return; }
+    const parts = [`${r.legends} colour list${r.legends === 1 ? '' : 's'}`];
+    if (r.created) parts.push(`${r.created} added to DAC`);
+    if (r.pending) parts.push(`${r.pending} still being checked by DAC`);
+    if (r.failed) parts.push(`${r.failed} failed`);
+    toast(parts.join(' · '));
+  } catch (e) { toast(e.message || 'Could not read what DAC sent back'); }
+  render();
+};
+
 /* A hundred kits is a long fetch, and it carries on whatever screen you are
    looking at — nothing cancels it. The only sign of it used to live on the
    Settings screen though, so walking away was indistinguishable from it having

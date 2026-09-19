@@ -49,6 +49,7 @@ public class MainActivity extends Activity {
     private static final String HOST = "appassets.androidplatform.net";
     private static final String ORIGIN = "https://" + HOST;
     private static final int FILE_CHOOSER = 1;
+    private static final int DAC_SYNC = 2;
     private static final int MAX_DOWNLOAD = 12 * 1024 * 1024;
 
     private WebView web;
@@ -263,6 +264,32 @@ public class MainActivity extends Activity {
             if (!pageTrusted) throw new SecurityException("not available to this page");
         }
 
+        /** Open the Diamond Art Club screen and run the given script there once
+         *  signed in. The result comes back to window.__dacSyncDone. */
+        @JavascriptInterface
+        public boolean dacSync(String script) {
+            mustBeOurPage();
+            if (script == null || script.isEmpty() || script.length() > 512 * 1024) return false;
+            runOnUiThread(() -> {
+                try {
+                    startActivityForResult(new Intent(MainActivity.this, DacActivity.class)
+                        .putExtra(DacActivity.EXTRA_SCRIPT, script), DAC_SYNC);
+                } catch (Exception e) { hand(null); }
+            });
+            return true;
+        }
+
+        /** Sign out of Diamond Art Club here: the only cookies this app keeps are
+         *  that sign-in's, so this is all of them. */
+        @JavascriptInterface
+        public boolean dacForget() {
+            mustBeOurPage();
+            android.webkit.CookieManager c = android.webkit.CookieManager.getInstance();
+            c.removeAllCookies(null);
+            c.flush();
+            return true;
+        }
+
         /** Write a cover or photo. Path is "covers/x.jpg" or "photos/y.jpg". */
         @JavascriptInterface
         public boolean save(String path, String base64) {
@@ -460,7 +487,30 @@ public class MainActivity extends Activity {
         return prefix + "/*";
     }
 
+    /* The DAC screen's result goes to the app as a JSON string; the app reads
+       it as untrusted data. A cancelled sign-in comes back as null. */
+    private void hand(String text) {
+        String arg = text == null ? "null" : org.json.JSONObject.quote(text);
+        web.evaluateJavascript("window.__dacSyncDone && window.__dacSyncDone(" + arg + ")", null);
+    }
+
     @Override protected void onActivityResult(int req, int result, Intent data) {
+        if (req == DAC_SYNC) {
+            File f = new File(store, DacActivity.RESULT_FILE);
+            String text = null;
+            if (result == RESULT_OK && f.exists() && f.length() < 4 * 1024 * 1024) {
+                try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
+                    byte[] b = new byte[(int) f.length()];
+                    int n = 0;
+                    while (n < b.length) { int r = in.read(b, n, b.length - n); if (r < 0) break; n += r; }
+                    text = new String(b, 0, n, java.nio.charset.StandardCharsets.UTF_8);
+                } catch (IOException ignored) { text = null; }
+            }
+            //noinspection ResultOfMethodCallIgnored
+            f.delete();
+            hand(text);
+            return;
+        }
         if (req == FILE_CHOOSER) {
             Uri[] out = urisFrom(result, data);
             /* The camera writes to the file we handed it and comes back with no

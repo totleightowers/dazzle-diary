@@ -13,6 +13,7 @@ import { norm } from '../core/match.js';
 import { buildPreview } from '../core/import.js';
 import { parseHolds, applyStatus } from '../core/status.js';
 import { estimateDrills } from '../core/estimate.js';
+import { DAC_STATUS, readSyncResult } from '../core/dacsync.js';
 
 export const PROXY = '/__net/?url=';
 const via = (url) => PROXY + encodeURIComponent(url);
@@ -180,6 +181,14 @@ export async function upgradeCovers(onProgress) {
     await idb.put('projects', row); done++; onProgress?.(done, row.title);
   }
   return done;
+}
+
+/** The DAC variant a project is linked to, through its catalogue listing. */
+async function variantOf(row) {
+  if (!row || (row.shop || 'dac') !== 'dac' || !row.dac_handle) return null;
+  await catalogue();
+  const c = (cache && cache.rows || []).find(x => x.shop === 'dac' && x.handle === row.dac_handle);
+  return c && c.variant_id ? c.variant_id : null;
 }
 
 const needsHifi = (r) => !!r && !!r.dac_handle && (Number(r.cover_hifi) || 0) < COVER_FIDELITY;
@@ -966,6 +975,20 @@ export async function localApi(path, opts = {}) {
     }
   }
 
+  /* ---------------------------------------------------- drill legends
+     Borrowed from a Diamond Art Club account: see core/dacsync.js. Nothing
+     here ever writes a status, date or anything else back onto a project —
+     the logbook is the source of truth, and statuses only ever travel OUT, to
+     describe a kit when it is first added to the DAC account. */
+  const lg = p.match(/^\/projects\/(\d+)\/legend$/);
+  if (lg && m === 'GET') {
+    const row = await idb.get('projects', Number(lg[1]));
+    if (!row) throw Object.assign(new Error('Not found'), { status: 404 });
+    const v = await variantOf(row);
+    const all = (await idb.get('meta', 'legends')) || {};
+    return { variant: v, colours: v && all[v] ? all[v].codes : [], at: v && all[v] ? all[v].at : null };
+  }
+
   const cv = p.match(/^\/projects\/(\d+)\/cover$/);
   if (cv) {
     const id = Number(cv[1]);
@@ -1513,6 +1536,66 @@ export async function localApi(path, opts = {}) {
     const hit = (handle && rows.find(r => r.dac_handle === handle && (r.shop || 'dac') === (shop || 'dac')))
              || (title && rows.find(r => norm(r.title) === title));
     return hit ? { id: hit.id, title: hit.title, status: hit.status } : { id: null };
+  }
+
+  /* Every DAC kit in the logbook, described the way DAC's logbook wants it.
+     A wish list kit is not bought, so it is not sent. A kit the catalogue
+     cannot link to a DAC variant cannot carry a legend, so it is listed as
+     missing rather than sent half-described. */
+  if (p === '/dac/kits' && m === 'GET') {
+    await catalogue();
+    const pref = ((await idb.get('meta', 'prefs')) || {}).currency || 'GBP';
+    const kits = [], missing = [], seen = new Set();
+    for (const r of await projects()) {
+      if ((r.shop || 'dac') !== 'dac' || !r.dac_handle) continue;
+      const status = DAC_STATUS[r.status];
+      if (!status) continue;
+      const c = cache.rows.find(x => x.shop === 'dac' && x.handle === r.dac_handle);
+      if (!c || !c.variant_id || !c.product_id) { missing.push(r.title); continue; }
+      if (seen.has(c.variant_id)) continue;      // two of a kit share one legend
+      seen.add(c.variant_id);
+      kits.push({
+        variant: c.variant_id, product: c.product_id, name: r.title, status,
+        shape: /round/i.test(r.shape || c.shape || '') ? 'round' : 'square',
+        drill: /partial/i.test(r.coverage || c.coverage || '') ? 'partial' : 'full',
+        currency: pref
+      });
+    }
+    return { kits, missing };
+  }
+
+  /* What a sync brought back. Only legends are kept: whatever else the result
+     says, nothing on a project changes. */
+  if (p === '/dac/legends' && m === 'POST') {
+    const r = readSyncResult(json());
+    const all = (await idb.get('meta', 'legends')) || {};
+    const at = nowIso();
+    for (const [v, codes] of Object.entries(r.legends)) all[v] = { codes, at };
+    await idb.put('meta', all, 'legends');
+    return { legends: Object.keys(r.legends).length, created: r.created, existing: r.existing,
+             pending: r.pending, failed: r.failed, error: r.error, problems: r.problems.slice(0, 5),
+             total: Object.keys(all).length };
+  }
+
+  /* Which of your kits holds this drill? By code exactly, or by colour name. */
+  if (p === '/colours' && m === 'GET') {
+    const want = String(q(url, 'q') || '').trim();
+    const all = (await idb.get('meta', 'legends')) || {};
+    const legends = Object.keys(all).length;
+    if (!want) return { legends, results: [] };
+    const code = want.toUpperCase();
+    const byName = want.length >= 3 ? want.toLowerCase() : null;
+    await catalogue();
+    const results = [];
+    for (const r of await projects()) {
+      const v = await variantOf(r);
+      const codes = v && all[v] ? all[v].codes : null;
+      if (!codes) continue;
+      const hit = codes.find(c => c.code.toUpperCase() === code)
+               || (byName && codes.find(c => (c.name || '').toLowerCase().includes(byName)));
+      if (hit) results.push({ id: r.id, title: r.title, status: r.status, cover: r.cover || null, colour: hit });
+    }
+    return { legends, results };
   }
 
   /* Pictures fetched before covers went full width. Offered as a count first so
