@@ -2,7 +2,7 @@ import { api, isStandalone } from './api.js';
 import { statusFromDates, applyStatus, parseHolds, openHold, heldDays,
          ALL_STATUSES } from './core/status.js';
 import { productUrl, shopById, displayCurrency, SHOPS, CURRENCIES } from './core/shops.js';
-import { buildMarkScript, buildLegendScript } from './core/dacsync.js';
+import { buildMarkScript, buildLegendScript, buildReadMark } from './core/dacsync.js';
 const SHOP_BY_NAME = Object.fromEntries(SHOPS.map((s) => [s.name, s]));
 /* Dazzle Diary — the whole client. Vanilla; no build step. */
 
@@ -3158,7 +3158,9 @@ async function handleClick(e) {
                            + 'and will be skipped \u2014 Update all shops may fix that.' : ''))) return;
     const box = document.getElementById('dacbox');
     if (box) box.innerHTML = '<p style="margin:0 0 8px;font-size:12px;color:var(--ink-mute)">Waiting for Diamond Art Club\u2026</p>';
-    n.dacSync(JSON.stringify(batch), buildMarkScript({ press: true }), buildMarkScript({ press: false }),
+    // each kit carries the expression that reads its result off ITS page only
+    n.dacSync(JSON.stringify(batch.map((k) => ({ ...k, read: buildReadMark(k.handle) }))),
+              buildMarkScript({ press: true }), buildMarkScript({ press: false }),
               buildLegendScript(batch.map((k) => k.variant)));
   }
   else if (act === 'dacforget') {
@@ -3639,9 +3641,10 @@ window.__dacSyncDone = async (text) => {
     parts.push(`${r.legends} colour list${r.legends === 1 ? '' : 's'}`);
     if (r.pending) parts.push(`${r.pending} still being checked by DAC`);
     if (r.missing.length) parts.push(`${r.missing.length} not done`);
-    /* A kit that could not be ticked comes back with a report of what was on
-       its page. Saved where it can be sent on, emails scrubbed once more. */
-    if (r.missing.length) {
+    /* Every run leaves a report of what happened on each kit's page, whether
+       it worked or not — "it said it worked but did not" is exactly the case
+       that most needs one. Emails scrubbed once more before it is saved. */
+    {
       try {
         const clean = String(text).replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '[email]');
         const where = await saveToPhone('dac-report.json', new Blob([clean], { type: 'application/json' }));

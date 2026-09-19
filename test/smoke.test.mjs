@@ -2098,6 +2098,10 @@ test('Settings sends your DAC kits to the DAC screen, and a result becomes swatc
   assert.equal(m.dacScripts.length, 1, 'nothing was handed to the DAC screen');
   const sent = m.dacScripts[0];
   assert.deepEqual(sent.kits.map((k) => k.handle), ['moon-eater'], 'the DAC screen was not told which page to open');
+  const readIt = new Function('location', 'window', 'return ' + sent.kits[0].read);
+  assert.equal(readIt({ pathname: '/en-gb/products/wild-bloom' }, { __ap: { state: 'marked' } }), null,
+    'a result showing on another kit\'s page would be taken for this one');
+  assert.ok(readIt({ pathname: '/en-gb/products/moon-eater' }, { __ap: { state: 'marked' } }));
   assert.match(sent.mark, /press: true/);
   assert.match(sent.watch, /press: false/, 'a reloaded page would be allowed to press again');
   assert.ok(sent.legends.includes('"101"'), 'the legend script does not know which kit to read');
@@ -2213,4 +2217,24 @@ test('a run where every kit looked already ticked does not end the trial', async
   await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ marks: [{ variant: '940', state: 'marked' }], dd: { done: true, results: [] } }) });
   assert.equal((await m.api('/dac/kits')).piloted, true, 'a press seen to work did not end the trial');
+});
+
+/* "It said it worked, but it did not" is exactly when a report is needed. */
+test('every run leaves a report, including one where everything said it worked', async () => {
+  const { m } = await legendMount();
+  const before = m.downloads.length;
+  await m.go('#/settings');
+  await m.window.__dacSyncDone(JSON.stringify({
+    marks: [{ variant: '101', state: 'marked', name: 'Moon Eater' }], dd: { done: true, results: [] } }));
+  await m.settle();
+  assert.ok(m.downloads.slice(before).some((d) => d.name === 'dac-report.json'),
+            'a run where every kit said "ticked" left no report');
+});
+
+/* Earlier builds ended the trial on results that were not true. */
+test('a trial ended by an earlier build does not count', async () => {
+  const { m, add } = await legendMount();
+  await add('Moon Eater', 'moon-eater', 'received');
+  await idbDirect.put('meta', { done: true, at: '2026-09-19' }, 'dacTrial');   // how 3.29 left it
+  assert.equal((await m.api('/dac/kits')).piloted, false, 'an old, untrustworthy trial was honoured');
 });

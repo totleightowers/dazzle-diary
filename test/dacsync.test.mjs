@@ -338,3 +338,27 @@ test('a hidden pill inside visible containers does not make every kit look marke
   assert.ok(shownNow(words), 'sanity: the pill now shows');
   assert.ok(!page.clicks.some((c) => c.className === 'ap-unmark'), 'it pressed the ⓧ');
 });
+
+/* ---------------------------------------------- reading the right page */
+import { readMarkFor, buildReadMark } from '../app/core/dacsync.js';
+
+test('a result is only read off the kit\'s own page, not the one still showing from before', () => {
+  const done = { state: 'marked' };
+  assert.equal(readMarkFor({ location: { pathname: '/en-gb/products/lofi-cali-girl' }, ap: done, handle: 'aries' }), null,
+    'the last kit\'s "ticked" was read as this kit\'s');
+  assert.equal(readMarkFor({ location: { pathname: '/en-gb/products/aries' }, ap: done, handle: 'aries' }),
+    JSON.stringify(done));
+  assert.equal(readMarkFor({ location: { pathname: '/products/aries/' }, ap: done, handle: 'aries' }), JSON.stringify(done));
+  assert.equal(readMarkFor({ location: { pathname: '/products/big-aries' }, ap: done, handle: 'aries' }), null,
+    'a handle that merely ends the same way was accepted');
+  assert.equal(readMarkFor({ location: { pathname: '/products/aries' }, ap: null, handle: 'aries' }), null);
+});
+
+test('the read expression is the tested function, and a handle cannot break out of it', () => {
+  const expr = buildReadMark('aries');
+  assert.ok(expr.includes(readMarkFor.toString()));
+  assert.doesNotThrow(() => new Function('return ' + expr));
+  assert.doesNotThrow(() => new Function('return ' + buildReadMark('x"}),alert(1),({"')));
+  const run = new Function('location', 'window', 'return ' + buildReadMark('x"}),alert(1),({"'));
+  assert.equal(run({ pathname: '/products/other' }, { __ap: { state: 'marked' } }), null);
+});

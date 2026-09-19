@@ -134,6 +134,25 @@ export function buildMarkScript({ press = true } = {}) {
     + '});';
 }
 
+/* A result only counts if it was read on THAT kit's page. The screen opens the
+   next kit and then reads the result off whatever page is showing — and until
+   the new page has loaded, that is still the last kit's, still holding the last
+   kit's "ticked". Every kit after the first was recorded that way, untouched. */
+export function readMarkFor(env) {
+  const { location, ap, handle } = env;
+  const path = String((location && location.pathname) || '').replace(/\/+$/, '');
+  const want = '/products/' + handle;
+  if (!ap || !handle || !path.endsWith(want)) return null;
+  return JSON.stringify(ap);
+}
+
+/** The expression the DAC screen evaluates to read one kit's result. */
+export function buildReadMark(handle) {
+  return '(' + readMarkFor.toString() + ')({'
+    + 'location: location, ap: window.__ap || null,'
+    + 'handle: ' + JSON.stringify(String(handle)) + '})';
+}
+
 /* ------------------------------------------------------------ legends */
 
 export async function runLegends(env) {
