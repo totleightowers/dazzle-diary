@@ -3639,6 +3639,15 @@ window.__dacSyncDone = async (text) => {
     parts.push(`${r.legends} colour list${r.legends === 1 ? '' : 's'}`);
     if (r.pending) parts.push(`${r.pending} still being checked by DAC`);
     if (r.missing.length) parts.push(`${r.missing.length} not done`);
+    /* A kit that could not be ticked comes back with a report of what was on
+       its page. Saved where it can be sent on, emails scrubbed once more. */
+    if (r.missing.length) {
+      try {
+        const clean = String(text).replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '[email]');
+        const where = await saveToPhone('dac-report.json', new Blob([clean], { type: 'application/json' }));
+        parts.push(`report saved to ${where}`);
+      } catch { /* the toast still says what happened */ }
+    }
     toast(parts.join(' \u00b7 '));
   } catch (e) { toast(e.message || 'Could not read what DAC sent back'); }
   render();

@@ -34,22 +34,70 @@ export async function markPurchased(env) {
       ? el.ownerDocument.defaultView.getComputedStyle(el) : null;
     return !cs || (cs.visibility !== 'hidden' && cs.display !== 'none' && cs.opacity !== '0');
   };
-  const MARKED = /you already purchased this product/i;
-  const OFFER = /already purchased this\s*\?/i;
+  // tolerant of the wording being split across pieces with no space between
+  const MARKED = /you\s*already\s*purchased\s*this\s*product/i;
+  const OFFER = /already\s*purchased\s*this\s*\?/i;
+
+  /* The elements that actually hold some wording — not the containers around
+     them. Every ancestor's text includes its children's, hidden or not, so an
+     ancestor would "say" whatever is hidden inside it. */
+  const holding = (re) => Array.from(document.querySelectorAll('body *'))
+    .filter((el) => re.test(text(el)) && !Array.from(el.children || []).some((c) => re.test(text(c))));
 
   /* The pink "You already purchased this product." pill. Its markup is on the
-     page either way; it only counts when it is actually showing. */
-  const marked = () => Array.from(document.querySelectorAll('body *'))
-    .some((el) => MARKED.test(text(el)) && shown(el));
+     page either way, hidden until the kit is marked — so only the element
+     holding those words counts, and only when IT is showing. Asking whether
+     any visible element's text included the words was true on every page:
+     the containers around the hidden pill are visible. */
+  const marked = () => holding(MARKED).some(shown);
 
-  /* "Already purchased this?" — the most specific shown element saying so, and
-     never anything that also says "You already purchased": that one holds the
-     ⓧ that UN-marks a kit. */
+  /* "Already purchased this?" — found in ANY element (it need not be a real
+     button), taking the most specific one saying it, then the nearest real
+     control around it; clicking inside a widget reaches its handler either
+     way. Never anything that also says "You already purchased": that one
+     holds the ⓧ that UN-marks a kit. */
+  const CONTROL = /^(BUTTON|A|LABEL)$/;
   const offer = () => {
-    const hits = Array.from(document.querySelectorAll('button, a, [role="button"], label'))
-      .filter((el) => OFFER.test(text(el)) && !MARKED.test(text(el)) && shown(el));
-    hits.sort((a, b) => text(a).length - text(b).length);
-    return hits[0] || null;
+    const hits = holding(OFFER).filter((el) => !MARKED.test(text(el)) && shown(el));
+    if (!hits.length) return null;
+    hits.sort((a, b) => text(a).length - text(b).length
+      || (a.querySelectorAll ? a.querySelectorAll('*').length : 0) - (b.querySelectorAll ? b.querySelectorAll('*').length : 0));
+    let el = hits[0];
+    for (let up = el, n = 0; up && n < 5; up = up.parentElement, n++) {
+      if (CONTROL.test(up.tagName || '') || (up.getAttribute && up.getAttribute('role') === 'button')) {
+        // the control must not also carry the pill's wording
+        if (!MARKED.test(text(up))) el = up;
+        break;
+      }
+    }
+    return el;
+  };
+
+  /* What was on the page, for when a kit could not be ticked: what said
+     "purchased", which scripts the signed-in page loaded, and anything that
+     hides content from a script (frames, shadow roots). Emails and sign-in
+     signatures are scrubbed before any of it leaves the page. */
+  const scrub = (v) => String(v || '')
+    .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '[email]')
+    .replace(/(data-auth-digest|digest|token)(["'=:\s]+)[^"'\s,}]+/gi, '$1$2[removed]');
+  const diagnose = () => {
+    const all = Array.from(document.querySelectorAll('body *'));
+    const cands = all.filter((el) => /purchas/i.test(text(el)) && text(el).length < 240)
+      .sort((a, b) => text(a).length - text(b).length).slice(0, 10)
+      .map((el) => ({
+        tag: el.tagName || '', id: scrub(el.id), cls: scrub(String(el.className || '')).slice(0, 160),
+        role: el.getAttribute ? (el.getAttribute('role') || '') : '',
+        parent: el.parentElement ? (el.parentElement.tagName || '') + '.' + scrub(String(el.parentElement.className || '')).slice(0, 80) : '',
+        text: scrub(text(el)).slice(0, 120), shown: !!shown(el),
+        html: scrub(String(el.outerHTML || '')).slice(0, 600)
+      }));
+    const scripts = Array.from(document.querySelectorAll('script[src]')).map((x) => scrub(x.src || ''))
+      .filter((u) => !/google|facebook|fbcdn|tiktok|pinterest|snapchat|bing|hotjar|clarity|doubleclick/i.test(u))
+      .slice(0, 80);
+    const frames = Array.from(document.querySelectorAll('iframe')).map((f) => scrub(f.src || '(inline)')).slice(0, 20);
+    const shadows = all.filter((el) => el.shadowRoot).map((el) => el.tagName).slice(0, 20);
+    const loc = env.location || (typeof location !== 'undefined' ? location : { pathname: '' });
+    return { page: String(loc.pathname || ''), cands, scripts, frames, shadows };
   };
 
   /* Pressing is only ever safe once the page has SETTLED. If DAC draws the
@@ -72,6 +120,7 @@ export async function markPurchased(env) {
     await sleep(300);
   }
   out.state = pressed ? 'unconfirmed' : (press ? 'missing' : 'unconfirmed');
+  try { out.found = diagnose(); } catch (e) { out.found = { error: String(e && e.message || e) }; }
 }
 
 /* `press: false` is for a page that loaded again during the same kit — the

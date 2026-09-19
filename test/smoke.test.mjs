@@ -2123,7 +2123,7 @@ test('the first run ticks only three kits, and the next does the rest', async ()
   await m.sync();
   await emptyLogbook(m);
   // earlier tests have already had their trial; this one needs a fresh start
-  await idbDirect.del('meta', 'dac');
+  await idbDirect.del('meta', 'dacTrial');
   for (const k of kitsIn)
     await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: k.title, shop: 'dac', dac_handle: k.handle, status: 'received' }) });
@@ -2176,4 +2176,41 @@ test('the Android source has no lambdas or method references', () => {
     assert.doesNotMatch(code, /\)\s*->|\w\s*->\s*[{\w(]/, `${f} has a lambda`);
     assert.doesNotMatch(code, /\w::\w/, `${f} has a method reference`);
   }
+});
+
+/* A kit that could not be ticked is only fixable if its page can be seen. */
+test('a kit that could not be ticked leaves a report on the phone, without the email in it', async () => {
+  const { m } = await legendMount();
+  await m.go('#/settings');
+  await m.window.__dacSyncDone(JSON.stringify({
+    marks: [{ variant: '101', state: 'missing', name: 'Moon Eater',
+              found: { page: '/products/moon-eater', cands: [{ tag: 'DIV', text: 'someone@example.com purchased' }],
+                       scripts: ['https://cdn.example/ap.js'] } }],
+    dd: { done: true, results: [] } }));
+  await m.settle();
+  const report = m.downloads.find((d) => d.name === 'dac-report.json');
+  assert.ok(report, 'no report was saved');
+  assert.match(report.text, /cdn\.example\/ap\.js/, 'the report does not say what the page loaded');
+  assert.doesNotMatch(report.text, /someone@example\.com/, 'an email address was saved in the report');
+  assert.match(m.find('.toast').textContent, /1 not done/);
+});
+
+/* "Already ticked" proves nothing about whether pressing works — a bug once made
+   every kit look already ticked. Only a press seen to work ends the trial. */
+test('a run where every kit looked already ticked does not end the trial', async () => {
+  const kitsIn = ['p', 'q', 'r', 's'].map((x, i) => DAC_KIT(40 + i, 940 + i, 'Trial ' + x));
+  const m = await mount({ products: kitsIn });
+  await m.sync();
+  await emptyLogbook(m);
+  await idbDirect.del('meta', 'dacTrial');
+  for (const k of kitsIn)
+    await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: k.title, shop: 'dac', dac_handle: k.handle, status: 'received' }) });
+  await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ marks: kitsIn.slice(0, 3).map((k) => ({ variant: String(k.variants[0].id), state: 'already' })),
+                           dd: { done: true, results: [] } }) });
+  assert.equal((await m.api('/dac/kits')).piloted, false, 'a run that pressed nothing was taken as a successful trial');
+  await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ marks: [{ variant: '940', state: 'marked' }], dd: { done: true, results: [] } }) });
+  assert.equal((await m.api('/dac/kits')).piloted, true, 'a press seen to work did not end the trial');
 });

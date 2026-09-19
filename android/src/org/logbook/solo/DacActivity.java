@@ -169,7 +169,7 @@ public class DacActivity extends Activity {
         JSONObject k = kits.optJSONObject(index);
         String handle = k == null ? "" : k.optString("handle", "");
         String variant = k == null ? "" : k.optString("variant", "");
-        if (handle.isEmpty() || !variant.matches("\\d{1,20}")) { record("failed"); return; }
+        if (handle.isEmpty() || !variant.matches("\\d{1,20}")) { record("failed", null); return; }
         loads = 0;
         kitStarted = SystemClock.uptimeMillis();
         say("Kit " + (index + 1) + " of " + kits.length() + " · " + k.optString("name", ""));
@@ -183,27 +183,31 @@ public class DacActivity extends Activity {
             web.evaluateJavascript(READ_MARK, new ValueCallback<String>() {
                 @Override public void onReceiveValue(String value) {
                     if (finished || phase != MARK || forKit != index) return;
-                    String state = null;
+                    JSONObject ap = null;
                     try {
                         String text = unquote(value);
-                        if (text != null && !"null".equals(text)) state = new JSONObject(text).optString("state", null);
-                    } catch (Exception ignored) { state = null; }
+                        if (text != null && !"null".equals(text)) ap = new JSONObject(text);
+                    } catch (Exception ignored) { ap = null; }
+                    String state = ap == null ? null : ap.optString("state", null);
                     boolean done = state != null && !"working".equals(state);
-                    if (done) { record(state); return; }
-                    if (SystemClock.uptimeMillis() - kitStarted > KIT_LIMIT_MS) { record("timeout"); return; }
+                    if (done) { record(state, ap.optJSONObject("found")); return; }
+                    if (SystemClock.uptimeMillis() - kitStarted > KIT_LIMIT_MS) { record("timeout", null); return; }
                     pollMark(forKit);
                 }
             });
         } }, 700);
     }
 
-    private void record(String state) {
+    /** What happened on one kit's page; `found` is the page report, if any. */
+    private void record(String state, JSONObject found) {
         JSONObject k = kits.optJSONObject(index);
         try {
-            marks.put(new JSONObject()
+            JSONObject m = new JSONObject()
                 .put("variant", k == null ? "" : k.optString("variant", ""))
                 .put("name", k == null ? "" : k.optString("name", ""))
-                .put("state", state));
+                .put("state", state);
+            if (found != null) m.put("found", found);
+            marks.put(m);
         } catch (Exception ignored) { /* nothing to add */ }
         index++;
         openKit();
