@@ -1588,20 +1588,33 @@ export async function localApi(path, opts = {}) {
     const want = String(q(url, 'q') || '').trim();
     const all = (await idb.get('meta', 'legends')) || {};
     const legends = Object.keys(all).length;
-    if (!want) return { legends, results: [] };
+    if (!want) {
+      /* Nothing typed yet: the drills most of your kits share, to tap. Counted
+         over your kits, not the colour lists, so a kit bought twice counts twice. */
+      const count = new Map();
+      for (const r of await projects()) {
+        const v = await variantOf(r);
+        for (const c of (v && all[v] ? all[v].codes : [])) count.set(c.code, (count.get(c.code) || 0) + 1);
+      }
+      const top = [...count].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0]), 'en', { numeric: true }))
+        .slice(0, 18).map(([code, kits]) => ({ code, kits }));
+      return { legends, results: [], top };
+    }
     const code = want.toUpperCase();
     const byName = want.length >= 3 ? want.toLowerCase() : null;
     await catalogue();
     const results = [];
+    let searched = 0;
     for (const r of await projects()) {
       const v = await variantOf(r);
       const codes = v && all[v] ? all[v].codes : null;
       if (!codes) continue;
+      searched++;
       const hit = codes.find(c => c.code.toUpperCase() === code)
                || (byName && codes.find(c => (c.name || '').toLowerCase().includes(byName)));
       if (hit) results.push({ id: r.id, title: r.title, status: r.status, cover: r.cover || null, colour: hit });
     }
-    return { legends, results };
+    return { legends, searched, results };
   }
 
   /* Pictures fetched before covers went full width. Offered as a count first so
