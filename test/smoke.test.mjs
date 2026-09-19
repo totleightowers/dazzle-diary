@@ -2196,7 +2196,7 @@ test('the Android source has no lambdas or method references', () => {
 });
 
 /* A kit that could not be ticked is only fixable if its page can be seen. */
-test('a kit that could not be ticked leaves a report on the phone, without the email in it', async () => {
+test('a kit that could not be ticked leaves a report on the phone, kept whole', async () => {
   const { m } = await legendMount();
   await m.go('#/settings');
   await m.window.__dacSyncDone(JSON.stringify({
@@ -2208,7 +2208,7 @@ test('a kit that could not be ticked leaves a report on the phone, without the e
   const report = m.downloads.find((d) => d.name === 'dac-report.json');
   assert.ok(report, 'no report was saved');
   assert.match(report.text, /cdn\.example\/ap\.js/, 'the report does not say what the page loaded');
-  assert.doesNotMatch(report.text, /someone@example\.com/, 'an email address was saved in the report');
+  assert.match(report.text, /someone@example\.com/, 'the report was altered on the way to the phone');
   assert.match(m.find('.toast').textContent, /1 not done/);
 });
 

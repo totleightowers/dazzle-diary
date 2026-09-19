@@ -128,20 +128,36 @@ test('the owned list is read even when DAC escapes it for HTML', async () => {
   assert.equal((await tick(page)).state, 'already');
 });
 
-test('the request a press makes is recorded, with names but no values and no emails', async () => {
+test('the request a press makes is recorded in full, so it can be made directly', async () => {
   const page = dacPage();
   const win = { fetch: async () => ({ ok: true }), XMLHttpRequest: null };
   page.offer.click = function () {
     page.clicks.push(this.className);
-    win.fetch('https://api.dac.test/customers/someone@example.com/mark?x=1',
-              { method: 'POST', body: JSON.stringify({ sku: 'DAC-1S', email: 'someone@example.com' }) });
+    win.fetch('https://api.dac.test/projects/create?x=1',
+              { method: 'POST', body: JSON.stringify({ sku: 'DAC-1S', from_app: 'already-purchased' }) });
     page.server.list.push('MA:DAC-1S');
   };
   const out = await tick(page, { window: win });
   assert.equal(out.state, 'marked');
   assert.deepEqual(out.request, [{ via: 'fetch', method: 'POST',
-    url: 'https://api.dac.test/customers/[email]/mark', sent: ['sku', 'email'] }]);
-  assert.doesNotMatch(JSON.stringify(out), /someone@example\.com/);
+    url: 'https://api.dac.test/projects/create?x=1', sent: { sku: 'DAC-1S', from_app: 'already-purchased' } }]);
+});
+
+/* The script that sends the tick is only served to a signed-in page, and stays
+   in the page after running — so the report takes it whole. */
+test('a kit that could not be ticked reports the page\'s own tick script, whole', async () => {
+  const page = dacPage({ offerShown: false });
+  const code = 'document.querySelectorAll("[data-update-state]").forEach(el => el.onclick = () => fetch("/x", {body: JSON.stringify({from_app: "already-purchased"})}))';
+  const qsa = page.document.querySelectorAll.bind(page.document);
+  page.document.querySelectorAll = (sel) => sel === 'script'
+    ? [{ src: '', textContent: code }, { src: '', textContent: 'console.log(1)' }, { src: 'https://cdn.test/dac-owned.js', textContent: '' }]
+    : qsa(sel);
+  const out = await tick(page);
+  assert.equal(out.state, 'missing');
+  assert.equal(out.found.scripts.length, 2, 'it kept an unrelated script, or dropped the tick script');
+  assert.equal(out.found.scripts[0].body, code, 'the tick script was not taken whole');
+  assert.equal(out.found.scripts[1].src, 'https://cdn.test/dac-owned.js');
+  assert.match(out.found.ownedRaw, /data-already-purchased-skus/, 'the raw owned list was not kept');
 });
 
 /* ------------------------------------------------------------ legends */

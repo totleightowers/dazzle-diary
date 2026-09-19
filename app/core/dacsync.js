@@ -44,9 +44,8 @@ export async function markPurchased(env) {
       ? el.ownerDocument.defaultView.getComputedStyle(el) : null;
     return !cs || (cs.visibility !== 'hidden' && cs.display !== 'none');
   };
-  const scrub = (v) => String(v || '')
-    .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '[email]')
-    .replace(/(data-auth-digest|digest|token|password)(["'=:\s]+)[^"'\s,}&]+/gi, '$1$2[removed]');
+  // only passwords are masked now: the report is meant to show the real request
+  const scrub = (v) => String(v || '').replace(/(password)(["'=:\s]+)[^"'\s,}&]+/gi, '$1$2[removed]');
   const text = (el) => String(el.textContent || '').replace(/\s+/g, ' ').trim();
 
   /* What was on the page, when a kit could not be ticked. */
@@ -58,16 +57,27 @@ export async function markPurchased(env) {
         updates: !!(el.hasAttribute && el.hasAttribute('data-update-state')),
         cls: scrub(String(el.className || '')).slice(0, 120), shown: !!shown(el),
         text: scrub(text(el)).slice(0, 80) }));
-    return { page: String(loc.pathname || ''), sku, widgets };
+    /* The signed-in page's own scripts that handle ticking. Inline scripts stay
+       in the page after they have run, and the one that sends the tick is only
+       ever served to a signed-in customer — so this is the one place it can be
+       read. Taken whole: finding the request it makes is the point. */
+    const scripts = Array.from(document.querySelectorAll('script')).map((x) => ({
+      src: String(x.src || ''), body: x.src ? '' : String(x.textContent || '') }))
+      .filter((x) => x.src ? /purchas|alp|owned|collect|logbook|journal/i.test(x.src)
+                           : /update-state|already[-_ ]?purchas|from_app|projects\/|already_purchased/i.test(x.body))
+      .map((x) => ({ src: x.src, body: x.body.slice(0, 60000) })).slice(0, 12);
+    return { page: String(loc.pathname || ''), sku, widgets, scripts, ownedRaw: lastOwnedRaw.slice(0, 4000) };
   };
 
   // DAC's own list of what this account owns
   const decode = (t) => t.replace(/&quot;|&#34;/g, '"').replace(/&#39;|&#x27;/g, "'")
     .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  let lastOwnedRaw = '';
   const owned = async () => {
     const r = await fetch(String(loc.origin || '') + '/?section_id=already-purchased-data&_=' + Date.now(),
                           { credentials: 'same-origin' });
     const html = await r.text();
+    lastOwnedRaw = html;
     const m = html.match(/<pre[^>]*data-already-purchased-skus[^>]*>([\s\S]*?)<\/pre>/i);
     if (!m) throw new Error('DAC did not send the list of kits this account owns');
     const list = JSON.parse(decode(m[1]).trim() || '[]');
@@ -83,14 +93,15 @@ export async function markPurchased(env) {
     const w = env.window || (typeof window !== 'undefined' ? window : null);
     if (!w) return () => {};
     const f0 = w.fetch, x0 = w.XMLHttpRequest && w.XMLHttpRequest.prototype.open;
-    const keys = (b) => { try { return Object.keys(JSON.parse(b)); } catch (e) {
-      return b && typeof b.keys === 'function' ? Array.from(b.keys()) : []; } };
+    const keys = (b) => { try { return JSON.parse(b); } catch (e) {
+      return b && typeof b.entries === 'function' ? Object.fromEntries(Array.from(b.entries()).map(([k, v]) => [k, String(v)]))
+           : (b == null ? null : String(b).slice(0, 4000)); } };
     if (f0) w.fetch = function (u, o) {
-      seen.push({ via: 'fetch', method: (o && o.method) || 'GET', url: scrub(String(u)).split('?')[0], sent: keys(o && o.body) });
+      seen.push({ via: 'fetch', method: (o && o.method) || 'GET', url: String(u), sent: keys(o && o.body) });
       return f0.apply(this, arguments);
     };
     if (x0) w.XMLHttpRequest.prototype.open = function (m, u) {
-      seen.push({ via: 'xhr', method: m, url: scrub(String(u)).split('?')[0] });
+      seen.push({ via: 'xhr', method: m, url: String(u) });
       return x0.apply(this, arguments);
     };
     return () => { if (f0) w.fetch = f0; if (x0) w.XMLHttpRequest.prototype.open = x0; };
