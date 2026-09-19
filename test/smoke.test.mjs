@@ -2048,7 +2048,7 @@ test('bringing legends back changes nothing on any project', async () => {
   const before = await m.api('/projects/' + p.id);
 
   const r = await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ marks: [{ variant: '101', state: 'marked', status: 'completed' }],
+    body: JSON.stringify({ tk: { results: [{ variant: '101', state: 'marked', status: 'completed' }] },
       dd: { done: true, results: [
       { variant: '101', owned: true,
         colors: { status: 'available', codes: [{ code: '310', name: 'Black', hex: '000000' },
@@ -2107,20 +2107,12 @@ test('Settings sends your DAC kits to the DAC screen, and a result becomes swatc
   await m.tap('[data-act="dacsync"]');
   assert.equal(m.dacScripts.length, 1, 'nothing was handed to the DAC screen');
   const sent = m.dacScripts[0];
-  assert.deepEqual(sent.kits.map((k) => k.handle), ['moon-eater'], 'the DAC screen was not told which page to open');
-  const box = {};
-  new Function('window', sent.kits[0].prep)(box);
-  assert.equal(box.__apSku, 'DAC-101S', 'the DAC screen is not told which SKU the page is for');
-  const readIt = new Function('location', 'window', 'return ' + sent.kits[0].read);
-  assert.equal(readIt({ pathname: '/en-gb/products/wild-bloom' }, { __ap: { state: 'marked' } }), null,
-    'a result showing on another kit\'s page would be taken for this one');
-  assert.ok(readIt({ pathname: '/en-gb/products/moon-eater' }, { __ap: { state: 'marked' } }));
-  assert.match(sent.mark, /press: true/);
-  assert.match(sent.watch, /press: false/, 'a reloaded page would be allowed to press again');
+  assert.match(sent.tick, /"sku":"DAC-101S"/, 'the tick script does not carry the kit');
+  assert.match(sent.tick, /probe: "\/products\/moon-eater"/, 'no signed-in page to fetch the sign-in details from');
   assert.ok(sent.legends.includes('"101"'), 'the legend script does not know which kit to read');
 
   // what the DAC screen would hand back
-  await m.window.__dacSyncDone(JSON.stringify({ marks: [{ variant: '101', state: 'marked' }],
+  await m.window.__dacSyncDone(JSON.stringify({ tk: { done: true, results: [{ variant: '101', state: 'marked' }] },
     dd: { done: true, results: [{ variant: '101', owned: true,
       colors: { status: 'available', codes: [{ code: '310', name: 'Black', hex: '000000' }] } }] } }));
   await m.settle();
@@ -2149,15 +2141,16 @@ test('the first run ticks only three kits, and the next does the rest', async ()
   assert.equal((await m.api('/dac/kits')).piloted, false, 'sanity: this should be a first run');
   await m.go('#/settings');
   await m.tap('[data-act="dacsync"]');
-  assert.equal(m.dacScripts[0].kits.length, 3, 'the first run was not a short trial');
+  assert.match(m.dacScripts[0].tick, /limit: 3/, 'the first run was not a short trial');
 
-  // the trial comes back having ticked them
-  await m.window.__dacSyncDone(JSON.stringify({
-    marks: m.dacScripts[0].kits.map((k) => ({ variant: k.variant, state: 'marked' })), dd: { done: true, results: [] } }));
+  // the trial comes back having ticked some
+  await m.window.__dacSyncDone(JSON.stringify({ tk: { done: true,
+    results: m.dacScripts[0].kits.slice(0, 3).map((k) => ({ variant: k.variant, state: 'marked' })) },
+    dd: { done: true, results: [] } }));
   await m.settle();
   await m.go('#/settings');
   await m.tap('[data-act="dacsync"]');
-  assert.equal(m.dacScripts[1].kits.length, 5, 'after the trial, the next run did not do them all');
+  assert.match(m.dacScripts[1].tick, /limit: null/, 'after the trial, the next run did not do them all');
 });
 
 test('declining the warning sends nothing to DAC', async () => {
@@ -2200,9 +2193,8 @@ test('a kit that could not be ticked leaves a report on the phone, kept whole', 
   const { m } = await legendMount();
   await m.go('#/settings');
   await m.window.__dacSyncDone(JSON.stringify({
-    marks: [{ variant: '101', state: 'missing', name: 'Moon Eater',
-              found: { page: '/products/moon-eater', cands: [{ tag: 'DIV', text: 'someone@example.com purchased' }],
-                       scripts: ['https://cdn.example/ap.js'] } }],
+    tk: { done: true, results: [{ variant: '101', state: 'failed', name: 'Moon Eater',
+              error: 'someone@example.com refused', reply: 'https://cdn.example/ap.js' }] },
     dd: { done: true, results: [] } }));
   await m.settle();
   const report = m.downloads.find((d) => d.name === 'dac-report.json');
@@ -2224,11 +2216,11 @@ test('a run where every kit looked already ticked does not end the trial', async
     await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: k.title, shop: 'dac', dac_handle: k.handle, status: 'received' }) });
   await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ marks: kitsIn.slice(0, 3).map((k) => ({ variant: String(k.variants[0].id), state: 'already' })),
+    body: JSON.stringify({ tk: { results: kitsIn.slice(0, 3).map((k) => ({ variant: String(k.variants[0].id), state: 'skipped' })) },
                            dd: { done: true, results: [] } }) });
   assert.equal((await m.api('/dac/kits')).piloted, false, 'a run that pressed nothing was taken as a successful trial');
   await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ marks: [{ variant: '940', state: 'marked' }], dd: { done: true, results: [] } }) });
+    body: JSON.stringify({ tk: { results: [{ variant: '940', state: 'marked' }] }, dd: { done: true, results: [] } }) });
   assert.equal((await m.api('/dac/kits')).piloted, true, 'a press seen to work did not end the trial');
 });
 
@@ -2238,7 +2230,7 @@ test('every run leaves a report, including one where everything said it worked',
   const before = m.downloads.length;
   await m.go('#/settings');
   await m.window.__dacSyncDone(JSON.stringify({
-    marks: [{ variant: '101', state: 'marked', name: 'Moon Eater' }], dd: { done: true, results: [] } }));
+    tk: { done: true, results: [{ variant: '101', state: 'marked', name: 'Moon Eater' }] }, dd: { done: true, results: [] } }));
   await m.settle();
   assert.ok(m.downloads.slice(before).some((d) => d.name === 'dac-report.json'),
             'a run where every kit said "ticked" left no report');

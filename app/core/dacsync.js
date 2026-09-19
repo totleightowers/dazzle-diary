@@ -21,162 +21,119 @@
  * Nothing here ever sees a password.
  */
 
-/* ------------------------------------------------------------ marking */
+/* ------------------------------------------------------------ ticking */
 
 /* Self-contained: no imports, no closures — it is sent as source text.
 
-   Whether a kit is ticked is NOT read off the page. DAC keeps the answer as a
-   list of SKUs — `?section_id=already-purchased-data`, the same list its own
-   page reads — with ticked-by-hand entries as "MA:<sku>" and un-ticked ones as
-   "MR:<sku>". So the script asks that list before pressing and asks it again
-   afterwards to confirm. The button is a toggle; this presses it only when
-   DAC's own list says the kit is not there. */
-export async function markPurchased(env) {
-  const { document, fetch, sleep, out } = env;
-  out.state = 'working';
-  const press = env.press !== false;
-  const sku = String(env.sku || '');
-  const loc = env.location || (typeof location !== 'undefined' ? location : { origin: '', pathname: '' });
-  const shown = env.isShown || function (el) {
-    if (!el || !el.getClientRects || !el.getClientRects().length) return false;
-    if (el.classList && el.classList.contains('hidden')) return false;
-    const cs = el.ownerDocument && el.ownerDocument.defaultView
-      ? el.ownerDocument.defaultView.getComputedStyle(el) : null;
-    return !cs || (cs.visibility !== 'hidden' && cs.display !== 'none');
-  };
-  // only passwords are masked now: the report is meant to show the real request
-  const scrub = (v) => String(v || '').replace(/(password)(["'=:\s]+)[^"'\s,}&]+/gi, '$1$2[removed]');
-  const text = (el) => String(el.textContent || '').replace(/\s+/g, ' ').trim();
+   "Already purchased this?" is DAC's ALPManager.updatePurchased(sku): one call
+   to its own service, already signed in on every signed-in DAC page. So this
+   runs once, on one page, and ticks every kit by calling it — no opening of
+   each product page.
 
-  /* What was on the page, when a kit could not be ticked. */
-  const diagnose = () => {
-    const widgets = Array.from(document.querySelectorAll('[data-update-state], [data-already-purchased-indicator]'))
-      .slice(0, 12).map((el) => ({
-        sku: scrub(el.getAttribute && el.getAttribute('data-product-variant-sku')),
-        indicator: !!(el.hasAttribute && el.hasAttribute('data-already-purchased-indicator')),
-        updates: !!(el.hasAttribute && el.hasAttribute('data-update-state')),
-        cls: scrub(String(el.className || '')).slice(0, 120), shown: !!shown(el),
-        text: scrub(text(el)).slice(0, 80) }));
-    /* The signed-in page's own scripts that handle ticking. Inline scripts stay
-       in the page after they have run, and the one that sends the tick is only
-       ever served to a signed-in customer — so this is the one place it can be
-       read. Taken whole: finding the request it makes is the point. */
-    const scripts = Array.from(document.querySelectorAll('script')).map((x) => ({
-      src: String(x.src || ''), body: x.src ? '' : String(x.textContent || '') }))
-      .filter((x) => x.src ? /purchas|alp|owned|collect|logbook|journal/i.test(x.src)
-                           : /update-state|already[-_ ]?purchas|from_app|projects\/|already_purchased/i.test(x.body))
-      .map((x) => ({ src: x.src, body: x.body.slice(0, 60000) })).slice(0, 12);
-    return { page: String(loc.pathname || ''), sku, widgets, scripts, ownedRaw: lastOwnedRaw.slice(0, 4000) };
-  };
-
-  // DAC's own list of what this account owns
-  const decode = (t) => t.replace(/&quot;|&#34;/g, '"').replace(/&#39;|&#x27;/g, "'")
+   updatePurchased is a TOGGLE, but its reply is the resulting state: "MA:<sku>"
+   ticked, "MR:<sku>" un-ticked. If a call un-ticks a kit, a second call ticks
+   it again, so a kit is never left un-ticked. Kits whose colour list is already
+   available are ticked already and are never touched at all. */
+export async function tickAll(env) {
+  const { sleep, kits, out } = env;
+  const w = env.window || {};
+  const doc = env.document;
+  const have = new Set((env.have || []).map(String));    // variants that already have colours
+  const limit = env.limit == null ? Infinity : env.limit;
+  const API = 'https://already-purchased.vercel.app';
+  out.done = false; out.error = null; out.results = []; out.via = null;
+  out.progress = { done: 0, total: kits.length, now: '' };
+  const has = (nv, x) => Array.isArray(nv) ? nv.map(String).includes(x)
+                        : String(nv == null ? '' : nv).split(/[\s,;|]+/).includes(x);
+  const ticked = (nv, sku) => !has(nv, 'MR:' + sku) && (has(nv, 'MA:' + sku) || has(nv, sku));
+  const decode = (t) => String(t || '').replace(/&quot;|&#34;/g, '"').replace(/&#39;|&#x27;/g, "'")
     .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-  let lastOwnedRaw = '';
-  const owned = async () => {
-    const r = await fetch(String(loc.origin || '') + '/?section_id=already-purchased-data&_=' + Date.now(),
-                          { credentials: 'same-origin' });
-    const html = await r.text();
-    lastOwnedRaw = html;
-    const m = html.match(/<pre[^>]*data-already-purchased-skus[^>]*>([\s\S]*?)<\/pre>/i);
-    if (!m) throw new Error('DAC did not send the list of kits this account owns');
-    const list = JSON.parse(decode(m[1]).trim() || '[]');
-    if (!Array.isArray(list)) throw new Error('the owned list was not a list');
-    return list.map(String);
-  };
-  const has = (list) => !list.includes('MR:' + sku) && (list.includes(sku) || list.includes('MA:' + sku));
 
-  /* The requests the press makes, recorded so a faster version could make them
-     directly. Only the address, the method and the NAMES of what was sent. */
-  const seen = [];
-  const watch = () => {
-    const w = env.window || (typeof window !== 'undefined' ? window : null);
-    if (!w) return () => {};
-    const f0 = w.fetch, x0 = w.XMLHttpRequest && w.XMLHttpRequest.prototype.open;
-    const keys = (b) => { try { return JSON.parse(b); } catch (e) {
-      return b && typeof b.entries === 'function' ? Object.fromEntries(Array.from(b.entries()).map(([k, v]) => [k, String(v)]))
-           : (b == null ? null : String(b).slice(0, 4000)); } };
-    if (f0) w.fetch = function (u, o) {
-      seen.push({ via: 'fetch', method: (o && o.method) || 'GET', url: String(u), sent: keys(o && o.body) });
-      return f0.apply(this, arguments);
-    };
-    if (x0) w.XMLHttpRequest.prototype.open = function (m, u) {
-      seen.push({ via: 'xhr', method: m, url: String(u) });
-      return x0.apply(this, arguments);
-    };
-    return () => { if (f0) w.fetch = f0; if (x0) w.XMLHttpRequest.prototype.open = x0; };
-  };
-
-  if (!sku) { out.state = 'failed'; out.error = 'no SKU for this kit'; out.found = diagnose(); return; }
-  let list;
-  try { list = await owned(); }
-  catch (e) { out.state = 'failed'; out.error = String(e && e.message || e); out.found = diagnose(); return; }
-  if (has(list)) { out.state = 'already'; return; }
-  if (!press) {
-    // a page that loaded again for this kit: never press, only see if it worked
-    for (let i = 0; i < 10; i++) {
-      await sleep(1000);
-      try { if (has(await owned())) { out.state = 'already'; return; } } catch (e) { /* keep looking */ }
+  /* The customer details and signature DAC's ticking service signs in with.
+     They are written into signed-in DAC pages as #already-purchased-init; if
+     this page has none, a signed-in page is FETCHED (not opened) to read it. */
+  const initData = async () => {
+    const el = doc && doc.getElementById && doc.getElementById('already-purchased-init');
+    if (el && el.getAttribute('data-digest')) {
+      const g = (k) => el.getAttribute('data-' + k) || '';
+      return { id: g('customer-id'), email: g('customer-email'), real_email: g('customer-real-email'),
+               first_name: g('customer-first-name'), digest: g('digest'), html: '' };
     }
-    out.state = 'unconfirmed'; out.found = diagnose(); return;
-  }
+    if (!env.probe) return null;
+    const html = await (await env.fetch(env.probe, { credentials: 'same-origin' })).text();
+    const tag = (html.match(/<[^>]*\bid=["']already-purchased-init["'][^>]*>/i) || [])[0];
+    if (!tag) return null;
+    const attr = (k) => decode((tag.match(new RegExp('\\bdata-' + k + '=["\']([^"\']*)["\']', 'i')) || [])[1]);
+    return { id: attr('customer-id'), email: attr('customer-email'), real_email: attr('customer-real-email'),
+             first_name: attr('customer-first-name'), digest: attr('digest'), html };
+  };
 
-  // the kit's own "Already purchased this?" — marked as the indicator that updates
-  // state, for exactly this SKU. The ⓧ also updates state, but is not an indicator.
-  const offer = () => Array.from(document.querySelectorAll('[data-update-state]')).find((el) =>
-    el.getAttribute('data-product-variant-sku') === sku
-    && el.hasAttribute('data-already-purchased-indicator') && shown(el)) || null;
-  let el = null;
-  for (let i = 0; i < 40 && !el; i++) { el = offer(); if (!el) await sleep(300); }
-  if (!el) { out.state = 'missing'; out.found = diagnose(); return; }
+  try {
+    let update = null;
+    // the page's own service, if it is here and signed in already
+    for (let i = 0; i < 12 && !(w.ALPManager && w.ALPManager.auth_token); i++) await sleep(250);
+    if (w.ALPManager && w.ALPManager.auth_token && typeof w.ALPManager.updatePurchased === 'function') {
+      update = (sku) => w.ALPManager.updatePurchased(sku);
+      out.via = 'page';
+    } else {
+      // otherwise sign in to it directly, exactly as DAC's alp-app.js does
+      const d = await initData();
+      if (!d || !d.digest) throw new Error('No signed-in DAC page offered the details its ticking service needs.');
+      const shop = (w.ALPManager && w.ALPManager.shop)
+        || ((d.html.match(/initialize\(\s*\{\s*shop\s*:\s*["'`]([^"'`]+)/) || [])[1])
+        || (env.location && env.location.host) || 'www.diamondartclub.com';
+      const q = '?shop=' + encodeURIComponent(shop);
+      const who = await env.fetch(API + '/api/customer/identify' + q, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customer: { id: d.id, email: d.email, real_email: d.real_email,
+                                           first_name: d.first_name }, digest: d.digest }) });
+      const token = who.ok ? ((await who.json()) || {}).auth_token : null;
+      if (!token) throw new Error('DAC\'s ticking service did not accept the sign-in (' + who.status + ').');
+      update = async (sku) => {
+        const r = await env.fetch(API + '/api/update_purchased' + q, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+          body: JSON.stringify({ sku }) });
+        if (!r.ok) throw new Error('DAC refused the tick (' + r.status + ')');
+        return ((await r.json()) || {}).new_value;
+      };
+      out.via = 'api';
+    }
 
-  const restore = watch();
-  el.click();
-  let ok = false;
-  for (let i = 0; i < 15 && !ok; i++) {
-    await sleep(1000);
-    try { ok = has(await owned()); } catch (e) { /* keep looking */ }
-  }
-  restore();
-  out.request = seen.filter((r) => !/section_id=already-purchased-data/.test(r.url)).slice(0, 6);
-  out.state = ok ? 'marked' : 'unconfirmed';
-  if (!ok) out.found = diagnose();
+    let tried = 0;
+    for (const k of kits) {
+      out.progress.now = k.name || k.sku;
+      const r = { variant: String(k.variant), sku: String(k.sku), name: k.name || '', state: 'failed', calls: 0 };
+      if (have.has(r.variant)) r.state = 'skipped';
+      else if (tried >= limit) r.state = 'deferred';
+      else {
+        tried++;
+        try {
+          let nv = await update(r.sku); r.calls++;
+          if (!ticked(nv, r.sku)) { nv = await update(r.sku); r.calls++; }
+          r.state = ticked(nv, r.sku) ? 'marked' : 'unconfirmed';
+          r.reply = Array.isArray(nv) ? nv.filter((x) => String(x).includes(r.sku)) : String(nv).slice(0, 300);
+        } catch (e) { r.error = String(e && (e.message || e.error) || e); }
+        await sleep(200);
+      }
+      out.results.push(r);
+      out.progress.done++;
+    }
+  } catch (e) { out.error = String(e && e.message || e); }
+  out.done = true;
 }
 
-/* `press: false` is for a page that loaded again during the same kit: the first
-   may already have pressed, and a second press un-marks. Each page runs it at
-   most once. The kit's SKU is set just before, by `buildMarkPrep`. */
-export function buildMarkScript({ press = true } = {}) {
-  return 'window.__ap || (' + markPurchased.toString() + ')({'
-    + 'document: document, fetch: fetch.bind(window), window: window, location: location,'
-    + 'press: ' + (press ? 'true' : 'false') + ', sku: window.__apSku || "",'
+/** The script for DAC's account page. `window.__have` is set just before it by
+ *  the DAC screen, from the first read of colour lists. `probe` is a kit page
+ *  to FETCH, if the account page lacks the ticking service's sign-in details. */
+export function buildTickScript(kits, { limit = null, probe = null } = {}) {
+  return 'window.__tk || (' + tickAll.toString() + ')({'
+    + 'window: window, document: document, fetch: fetch.bind(window), location: location,'
+    + 'have: window.__have || [], probe: ' + JSON.stringify(probe) + ','
+    + 'limit: ' + (limit == null ? 'null' : Number(limit)) + ','
     + 'sleep: function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); },'
-    + 'out: (window.__ap = {})'
+    + 'kits: ' + JSON.stringify(kits.map((k) => ({ variant: String(k.variant), sku: String(k.sku), name: k.name || '' }))) + ','
+    + 'out: (window.__tk = {})'
     + '});';
-}
-
-/** Run before the mark script on a kit's page: which SKU this page is for. */
-export function buildMarkPrep(sku) {
-  return 'window.__apSku = ' + JSON.stringify(String(sku || '')) + ';';
-}
-
-/* A result only counts if it was read on THAT kit's page. The screen opens the
-   next kit and then reads the result off whatever page is showing — and until
-   the new page has loaded, that is still the last kit's, still holding the last
-   kit's "ticked". Every kit after the first was recorded that way, untouched. */
-export function readMarkFor(env) {
-  const { location, ap, handle } = env;
-  const path = String((location && location.pathname) || '').replace(/\/+$/, '');
-  const want = '/products/' + handle;
-  if (!ap || !handle || !path.endsWith(want)) return null;
-  return JSON.stringify(ap);
-}
-
-/** The expression the DAC screen evaluates to read one kit's result. */
-export function buildReadMark(handle) {
-  return '(' + readMarkFor.toString() + ')({'
-    + 'location: location, ap: window.__ap || null,'
-    + 'handle: ' + JSON.stringify(String(handle)) + '})';
 }
 
 /* ------------------------------------------------------------ legends */
@@ -249,7 +206,6 @@ export function buildLegendScript(variants) {
    it is treated as untrusted: only the shape we expect, only sane values. */
 const CODE = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,15}$/;
 const HEX = /^#?[0-9a-fA-F]{6}$/;
-const MARKS = ['marked', 'already', 'missing', 'unconfirmed', 'timeout', 'failed'];
 
 export function cleanColour(c) {
   const raw = typeof c === 'string' ? { code: c } : (c && typeof c === 'object' ? c : null);
@@ -261,20 +217,22 @@ export function cleanColour(c) {
   return { code, name: name || null, hex: HEX.test(hex) ? (hex.startsWith('#') ? hex : '#' + hex).toLowerCase() : null };
 }
 
-/** Legends by variant, and what happened on each product page. */
+/** Legends by variant, and what happened to each kit. */
 export function readSyncResult(raw) {
   const r = raw && typeof raw === 'object' ? raw : {};
   const dd = r.dd && typeof r.dd === 'object' ? r.dd : {};
-  const out = { legends: {}, marked: 0, already: 0, missing: [], pending: 0,
-                error: typeof dd.error === 'string' ? dd.error.slice(0, 200)
-                     : (typeof r.error === 'string' ? r.error.slice(0, 200) : null) };
+  const tk = r.tk && typeof r.tk === 'object' ? r.tk : {};
+  const out = { legends: {}, marked: 0, already: 0, deferred: 0, missing: [], pending: 0,
+                error: [tk.error, dd.error, r.error].find((x) => typeof x === 'string' && x) || null };
+  if (out.error) out.error = out.error.slice(0, 200);
 
-  for (const m of Array.isArray(r.marks) ? r.marks : []) {
+  for (const m of Array.isArray(tk.results) ? tk.results : []) {
     const variant = String(m && m.variant || '');
-    if (!/^\d{1,20}$/.test(variant) || !MARKS.includes(m.state)) continue;
+    if (!/^\d{1,20}$/.test(variant)) continue;
     if (m.state === 'marked') out.marked++;
-    else if (m.state === 'already') out.already++;
-    else out.missing.push({ variant, state: m.state, name: String(m.name || '').slice(0, 80) });
+    else if (m.state === 'skipped') out.already++;
+    else if (m.state === 'deferred') out.deferred++;
+    else out.missing.push({ variant, state: String(m.state || 'failed'), name: String(m.name || '').slice(0, 80) });
   }
   for (const x of Array.isArray(dd.results) ? dd.results : []) {
     const variant = String(x && x.variant || '');
@@ -283,7 +241,7 @@ export function readSyncResult(raw) {
     const codes = colors && colors.status === 'available' && Array.isArray(colors.codes)
       ? colors.codes.map(cleanColour).filter(Boolean) : [];
     if (codes.length) out.legends[variant] = codes;
-    else if (x.owned) out.pending++;          // owned, legend not out yet
+    else if (x.owned) out.pending++;
   }
   return out;
 }

@@ -1578,7 +1578,7 @@ export async function localApi(path, opts = {}) {
     await idb.put('meta', all, 'legends');
     // a trial counts only once a press has been seen to work
     if (r.marked) await idb.put('meta', { done: true, at, v: DAC_TRIAL }, 'dacTrial');
-    return { legends: Object.keys(r.legends).length, marked: r.marked, already: r.already,
+    return { legends: Object.keys(r.legends).length, marked: r.marked, already: r.already, deferred: r.deferred,
              pending: r.pending, missing: r.missing.slice(0, 20), error: r.error,
              total: Object.keys(all).length };
   }

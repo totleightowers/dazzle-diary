@@ -24,17 +24,19 @@ import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Signs into a Diamond Art Club account, ticks "Already purchased this?" on the
- * product page of each kit you own, then reads their drill legends.
+ * Signs into a Diamond Art Club account, ticks "Already purchased this?" for
+ * each kit you own, then reads their drill legends.
  *
  * A kit only unlocks its legend when it came from an order or that box was
  * ticked; adding it to DAC's logbook by hand does not count. So this presses
  * DAC's own button, on DAC's own page, as you would.
  *
- * Three steps, one page at a time:
- *   sign in  — you do this, on DAC's pages; nothing here sees the password
- *   mark     — each kit's product page gets the mark script (core/dacsync.js)
- *   legends  — DAC's account page gets the read-only legend script
+ * One page in all — the account page you land on after signing in — and the
+ * rest is API calls made from it:
+ *   read which kits already have colours; those are never touched
+ *   tick the rest with DAC's own ticking service (update_purchased)
+ *   read the colours again
+ * The scripts are core/dacsync.js; you sign in yourself, on DAC's pages.
  *
  * This screen is cut off from the app. Its WebView has NO JavascriptInterface:
  * nothing DAC loads can reach Dazzle Diary. Java only READS what the scripts
@@ -46,8 +48,7 @@ import java.nio.charset.StandardCharsets;
 public class DacActivity extends Activity {
 
     static final String EXTRA_KITS = "kits";
-    static final String EXTRA_MARK = "mark";
-    static final String EXTRA_WATCH = "watch";
+    static final String EXTRA_TICK = "tick";
     static final String EXTRA_LEGENDS = "legends";
     static final String RESULT_FILE = "dac-sync.json";
 
@@ -56,31 +57,29 @@ public class DacActivity extends Activity {
     private static final String CHECK =
         "(function(){var e=document.getElementById('logbook-customer-data');"
         + "return e?e.getAttribute('data-logged-in'):'none';})()";
+    private static final String READ_TICK = "JSON.stringify(window.__tk||null)";
     private static final String READ_LEGENDS = "JSON.stringify(window.__dd||null)";
-    private static final long KIT_LIMIT_MS = 45000;
+    private static final long TICK_LIMIT_MS = 20 * 60 * 1000;
 
-    private static final int SIGNIN = 0, MARK = 1, LEGENDS = 2;
+    private static final int SIGNIN = 0, PRE = 1, TICK = 2, POST = 3;
 
     private WebView web;
     private TextView status;
     private JSONArray kits;
-    private String markJs, watchJs, legendJs;
-    private final JSONArray marks = new JSONArray();
+    private String tickJs, legendJs;
+    private JSONObject pre, tk;
     private int phase = SIGNIN;
-    private int index;               // the kit being marked
-    private int loads;               // product pages loaded for this kit
-    private long kitStarted;
-    private boolean legendsStarted;
+    private boolean legendsRunning;
+    private long tickStarted;
     private boolean finished;
     private final Handler main = new Handler(Looper.getMainLooper());
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         try { kits = new JSONArray(getIntent().getStringExtra(EXTRA_KITS)); } catch (Exception e) { kits = null; }
-        markJs = getIntent().getStringExtra(EXTRA_MARK);
-        watchJs = getIntent().getStringExtra(EXTRA_WATCH);
+        tickJs = getIntent().getStringExtra(EXTRA_TICK);
         legendJs = getIntent().getStringExtra(EXTRA_LEGENDS);
-        if (kits == null || kits.length() == 0 || markJs == null || watchJs == null || legendJs == null) {
+        if (kits == null || kits.length() == 0 || tickJs == null || legendJs == null) {
             finish(); return;
         }
 
@@ -130,17 +129,9 @@ public class DacActivity extends Activity {
         if (!isDac(u)) return;
         final String path = u.getPath() == null ? "" : u.getPath();
 
-        if (phase == MARK) {
-            if (!path.contains("/products/")) return;
-            /* The first page for a kit may press. Any later page for the SAME kit
-               — a redirect, or a reload the press caused — only watches: a
-               second press would un-mark it. */
-            loads++;
-            // which SKU this page is for, then the script (core/dacsync.js)
-            JSONObject k = kits.optJSONObject(index);
-            String prep = k == null ? "" : k.optString("prep", "");
-            if (prep.isEmpty()) return;          // the poll will time the kit out
-            web.evaluateJavascript(prep + "\n" + (loads == 1 ? markJs : watchJs), null);
+        if (phase == TICK) {
+            // the page reloaded mid-tick: run it again (it only toggles back on)
+            startTick();
             return;
         }
 
@@ -148,8 +139,8 @@ public class DacActivity extends Activity {
             @Override public void onReceiveValue(String value) {
                 String signedIn = unquote(value);
                 if ("true".equals(signedIn)) {
-                    if (phase == SIGNIN) { phase = MARK; index = 0; openKit(); }
-                    else if (phase == LEGENDS && !legendsStarted) startLegends();
+                    if (phase == SIGNIN) phase = PRE;
+                    if ((phase == PRE || phase == POST) && !legendsRunning) startLegends();
                     return;
                 }
                 boolean account = path.startsWith("/account") && !path.startsWith("/account/login")
@@ -159,73 +150,23 @@ public class DacActivity extends Activity {
         });
     }
 
-    /* ------------------------------------------------------------ marking */
-
-    private void openKit() {
-        if (finished) return;
-        if (index >= kits.length()) {
-            phase = LEGENDS;
-            say("Fetching the colour lists…");
-            web.loadUrl(ACCOUNT);
-            return;
+    /** Variants whose colour list is already available: ticked, so left alone. */
+    private static JSONArray haveFrom(JSONObject dd) {
+        JSONArray out = new JSONArray();
+        JSONArray rs = dd == null ? null : dd.optJSONArray("results");
+        for (int i = 0; rs != null && i < rs.length(); i++) {
+            JSONObject r = rs.optJSONObject(i);
+            JSONObject c = r == null ? null : r.optJSONObject("colors");
+            if (c != null && "available".equals(c.optString("status"))) out.put(r.optString("variant"));
         }
-        JSONObject k = kits.optJSONObject(index);
-        String handle = k == null ? "" : k.optString("handle", "");
-        String variant = k == null ? "" : k.optString("variant", "");
-        if (handle.isEmpty() || !variant.matches("\\d{1,20}")) { record("failed", null); return; }
-        loads = 0;
-        kitStarted = SystemClock.uptimeMillis();
-        say("Kit " + (index + 1) + " of " + kits.length() + " · " + k.optString("name", ""));
-        web.loadUrl(BASE + "/products/" + Uri.encode(handle) + "?variant=" + variant);
-        pollMark(index);
-    }
-
-    private void pollMark(final int forKit) {
-        main.postDelayed(new Runnable() { @Override public void run() {
-            if (finished || phase != MARK || forKit != index) return;
-            /* Each kit's own read (core/dacsync.js buildReadMark): it answers only
-               on THAT kit's page, so the last kit's result, still showing while
-               the next page loads, is never taken for this one. */
-            JSONObject k = kits.optJSONObject(forKit);
-            String read = k == null ? "" : k.optString("read", "");
-            if (read.isEmpty()) { record("failed", null); return; }
-            web.evaluateJavascript(read, new ValueCallback<String>() {
-                @Override public void onReceiveValue(String value) {
-                    if (finished || phase != MARK || forKit != index) return;
-                    JSONObject ap = null;
-                    try {
-                        String text = unquote(value);
-                        if (text != null && !"null".equals(text)) ap = new JSONObject(text);
-                    } catch (Exception ignored) { ap = null; }
-                    String state = ap == null ? null : ap.optString("state", null);
-                    boolean done = state != null && !"working".equals(state);
-                    if (done) { record(state, ap.optJSONObject("found")); return; }
-                    if (SystemClock.uptimeMillis() - kitStarted > KIT_LIMIT_MS) { record("timeout", null); return; }
-                    pollMark(forKit);
-                }
-            });
-        } }, 700);
-    }
-
-    /** What happened on one kit's page; `found` is the page report, if any. */
-    private void record(String state, JSONObject found) {
-        JSONObject k = kits.optJSONObject(index);
-        try {
-            JSONObject m = new JSONObject()
-                .put("variant", k == null ? "" : k.optString("variant", ""))
-                .put("name", k == null ? "" : k.optString("name", ""))
-                .put("state", state);
-            if (found != null) m.put("found", found);
-            marks.put(m);
-        } catch (Exception ignored) { /* nothing to add */ }
-        index++;
-        openKit();
+        return out;
     }
 
     /* ------------------------------------------------------------ legends */
 
     private void startLegends() {
-        legendsStarted = true;
+        legendsRunning = true;
+        say(phase == PRE ? "Checking which kits already have colours…" : "Fetching the colour lists…");
         web.evaluateJavascript(legendJs, null);
         pollLegends();
     }
@@ -239,10 +180,10 @@ public class DacActivity extends Activity {
                         String text = unquote(value);
                         if (text != null && !"null".equals(text)) {
                             JSONObject dd = new JSONObject(text);
-                            if (dd.optBoolean("done")) { deliver(dd); return; }
+                            if (dd.optBoolean("done")) { legendsDone(dd); return; }
                             JSONObject p = dd.optJSONObject("progress");
-                            if (p != null) say("Colour list " + Math.min(p.optInt("done") + 1, p.optInt("total"))
-                                + " of " + p.optInt("total"));
+                            if (p != null) say((phase == PRE ? "Checking " : "Colour list ")
+                                + Math.min(p.optInt("done") + 1, p.optInt("total")) + " of " + p.optInt("total"));
                         }
                     } catch (Exception ignored) { /* not ready yet */ }
                     pollLegends();
@@ -251,11 +192,65 @@ public class DacActivity extends Activity {
         } }, 1000);
     }
 
+    private void legendsDone(JSONObject dd) {
+        legendsRunning = false;
+        if (phase == PRE) {
+            pre = dd;
+            phase = TICK;
+            tickStarted = SystemClock.uptimeMillis();
+            startTick();                  // same page: no navigation
+        } else {
+            deliver(dd);
+        }
+    }
+
+    /* ------------------------------------------------------------ ticking */
+
+    private void startTick() {
+        say("Ticking your kits…");
+        web.evaluateJavascript("window.__have = " + haveFrom(pre).toString() + ";\n" + tickJs, null);
+        pollTick();
+    }
+
+    private void pollTick() {
+        main.postDelayed(new Runnable() { @Override public void run() {
+            if (finished || phase != TICK) return;
+            web.evaluateJavascript(READ_TICK, new ValueCallback<String>() {
+                @Override public void onReceiveValue(String value) {
+                    if (finished || phase != TICK) return;
+                    try {
+                        String text = unquote(value);
+                        if (text != null && !"null".equals(text)) {
+                            JSONObject t = new JSONObject(text);
+                            if (t.optBoolean("done")) { tickDone(t); return; }
+                            JSONObject p = t.optJSONObject("progress");
+                            if (p != null) say("Ticking " + Math.min(p.optInt("done") + 1, p.optInt("total"))
+                                + " of " + p.optInt("total") + " · " + p.optString("now", ""));
+                        }
+                    } catch (Exception ignored) { /* not ready yet */ }
+                    if (SystemClock.uptimeMillis() - tickStarted > TICK_LIMIT_MS) {
+                        try { tickDone(new JSONObject().put("done", true).put("error", "Ticking took too long.")); }
+                        catch (Exception e) { tickDone(null); }
+                        return;
+                    }
+                    pollTick();
+                }
+            });
+        } }, 1000);
+    }
+
+    private void tickDone(JSONObject t) {
+        tk = t;
+        phase = POST;
+        startLegends();                   // same page again
+    }
+
     /** Hand the result to the app through a file, and go back. */
     private void deliver(JSONObject dd) {
         finished = true;
         try {
-            JSONObject out = new JSONObject().put("marks", marks).put("dd", dd);
+            JSONObject out = new JSONObject().put("tk", tk == null ? JSONObject.NULL : tk)
+                .put("pre", pre == null ? JSONObject.NULL : pre).put("dd", dd);
             File dir = new File(getFilesDir(), "media");
             //noinspection ResultOfMethodCallIgnored
             dir.mkdirs();
