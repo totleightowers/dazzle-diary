@@ -3646,8 +3646,8 @@ window.__dacSyncDone = async (text) => {
        that most needs one. Emails scrubbed once more before it is saved. */
     {
       try {
-        const clean = String(text).replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '[email]');
-        const where = await saveToPhone('dac-report.json', new Blob([clean], { type: 'application/json' }));
+        // kept whole: the point of the report is to show the real request
+        const where = await saveToPhone('dac-report.json', new Blob([String(text)], { type: 'application/json' }));
         parts.push(`report saved to ${where}`);
       } catch { /* the toast still says what happened */ }
     }
