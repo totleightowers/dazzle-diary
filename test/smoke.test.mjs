@@ -81,6 +81,7 @@ test('a project picked from the catalogue arrives with its picture', async () =>
   await emptyLogbook(m);            // this is the ADD path: nothing here yet
   await m.go('#/browse');
   await m.tap('[data-act="pickcat"]');
+  await m.until(() => globalThis.location.hash !== '#/browse');
   assert.equal(globalThis.location.hash, '#/new');
 
   const box = m.find('#formshot');
@@ -311,6 +312,7 @@ test('a kit picked from the catalogue shows its pictures and a way to the shop',
   await emptyLogbook(m);
   await m.go('#/browse');
   await m.tap('[data-act="pickcat"]');
+  await m.until(() => globalThis.location.hash !== '#/browse');
 
   assert.ok(m.all('#formshots img').length > 1, 'the form shows only one of the shop pictures');
   assert.equal(m.find('#formshots img').getAttribute('data-act'), 'opengallery',
@@ -356,6 +358,7 @@ test('the dots follow the strip, and tapping one moves it', async () => {
   await emptyLogbook(m);
   await m.go('#/browse');
   await m.tap('[data-act="pickcat"]');
+  await m.until(() => globalThis.location.hash !== '#/browse');
 
   const strip = m.find('#formshots'), dots = m.all('#formdots button');
   assert.ok(dots.length > 1, 'a strip of several pictures has no dots to say so');
@@ -466,6 +469,7 @@ test('the catalogue keeps your place, and loses it when the filters change', asy
   body().scrollTop = 500;
 
   await m.tap('[data-act="pickcat"]');          // into New project
+  await m.until(() => globalThis.location.hash !== '#/browse');
   await m.go('#/browse');
   assert.equal(body().scrollTop, 500, 'the catalogue came back at the top');
 
@@ -1163,6 +1167,7 @@ test('a new project shows the dates its status implies before you save', async (
   await m.sync();
   await m.go('#/browse');
   await m.tap('[data-act="pickcat"]');
+  await m.until(() => globalThis.location.hash !== '#/browse');
 
   const ordered = m.find('#date_ordered');
   assert.ok(ordered, 'the form has no order date field');
@@ -1329,6 +1334,7 @@ test('a kit picked from the catalogue arrives with its details filled in', async
   await m.sync();
   await m.go('#/browse');
   await m.tap('[data-act="pickcat"]');
+  await m.until(() => globalThis.location.hash !== '#/browse');
   await m.tap('[data-act="save"]');
 
   const [saved] = await m.api('/projects');
@@ -1637,6 +1643,7 @@ test('picking a kit already in the logbook opens it instead of adding it twice',
   m.answerConfirms(true);
   await m.go('#/browse');
   await m.tap('[data-act="pickcat"]');
+  await m.until(() => globalThis.location.hash !== '#/browse');
 
   assert.equal(globalThis.location.hash, '#/p/' + made.id, 'it did not open the kit already logged');
   assert.equal((await m.api('/projects')).length, before, 'a second copy was created anyway');
@@ -1655,6 +1662,7 @@ test('declining opens the New project form so a second copy can still be added',
   m.answerConfirms(false);
   await m.go('#/browse');
   await m.tap('[data-act="pickcat"]');
+  await m.until(() => globalThis.location.hash !== '#/browse');
   assert.equal(globalThis.location.hash, '#/new', 'saying no did not let a second copy be added');
 });
 
@@ -1670,6 +1678,7 @@ test('a kit added by hand is recognised by name, with no listing link', async ()
   m.answerConfirms(true);
   await m.go('#/browse');
   await m.tap('[data-act="pickcat"]');
+  await m.until(() => globalThis.location.hash !== '#/browse');
   assert.equal(globalThis.location.hash, '#/p/' + typed.id, 'the one typed in by hand went unrecognised');
 });
 
@@ -1987,19 +1996,20 @@ test('a catalogue row keeps the shop\'s own product and variant IDs', async () =
   const m = await mount({ products: [{
     id: 7001, title: 'Moon Eater', vendor: 'Yuumei Art', handle: 'moon-eater',
     product_type: 'Diamond Art Kit', images: [{ src: 'https://cdn.shopify.com/kit.jpg' }],
-    variants: [{ id: 99001, title: '23.6" x 30.7" (59.9cm x 78cm) / Square with 42 Colors / 75433',
+    variants: [{ id: 99001, sku: 'DAC-7001S', title: '23.6" x 30.7" (59.9cm x 78cm) / Square with 42 Colors / 75433',
                  price: '169.00', available: true }] }] });
   await m.sync();
   const [row] = await m.api('/catalogue/search?q=moon');
   assert.equal(row.product_id, '7001', 'the product ID was not kept');
   assert.equal(row.variant_id, '99001', 'the variant ID was not kept');
+  assert.equal(row.sku, 'DAC-7001S', 'the SKU DAC keys "Already purchased" by was not kept');
 });
 
 /* ------------------------------------------------ drill legends from DAC */
 const DAC_KIT = (id, variant, title) => ({
   id, title, vendor: 'Artist', handle: title.toLowerCase().replace(/\W+/g, '-'),
   product_type: 'Diamond Art Kit', images: [{ src: 'https://cdn.shopify.com/kit.jpg' }],
-  variants: [{ id: variant, title: '22" x 28" (56cm x 71cm) / Square with 40 Colors / 60000',
+  variants: [{ id: variant, sku: 'DAC-' + variant + 'S', title: '22" x 28" (56cm x 71cm) / Square with 40 Colors / 60000',
                price: '60.00', available: true }] });
 
 async function legendMount() {
@@ -2019,7 +2029,7 @@ test('the kits sent to DAC are the DAC kits you own, with their product page', a
   await add('Typed In', null, 'started');
   const { kits, missing } = await m.api('/dac/kits');
   assert.equal(kits.length, 1, 'a wish list or unlinked kit was sent as if owned');
-  assert.deepEqual(kits[0], { variant: '101', handle: 'moon-eater', name: 'Moon Eater' });
+  assert.deepEqual(kits[0], { variant: '101', handle: 'moon-eater', sku: 'DAC-101S', name: 'Moon Eater' });
   assert.deepEqual(missing, []);
 });
 
@@ -2098,6 +2108,13 @@ test('Settings sends your DAC kits to the DAC screen, and a result becomes swatc
   assert.equal(m.dacScripts.length, 1, 'nothing was handed to the DAC screen');
   const sent = m.dacScripts[0];
   assert.deepEqual(sent.kits.map((k) => k.handle), ['moon-eater'], 'the DAC screen was not told which page to open');
+  const box = {};
+  new Function('window', sent.kits[0].prep)(box);
+  assert.equal(box.__apSku, 'DAC-101S', 'the DAC screen is not told which SKU the page is for');
+  const readIt = new Function('location', 'window', 'return ' + sent.kits[0].read);
+  assert.equal(readIt({ pathname: '/en-gb/products/wild-bloom' }, { __ap: { state: 'marked' } }), null,
+    'a result showing on another kit\'s page would be taken for this one');
+  assert.ok(readIt({ pathname: '/en-gb/products/moon-eater' }, { __ap: { state: 'marked' } }));
   assert.match(sent.mark, /press: true/);
   assert.match(sent.watch, /press: false/, 'a reloaded page would be allowed to press again');
   assert.ok(sent.legends.includes('"101"'), 'the legend script does not know which kit to read');
@@ -2213,4 +2230,24 @@ test('a run where every kit looked already ticked does not end the trial', async
   await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ marks: [{ variant: '940', state: 'marked' }], dd: { done: true, results: [] } }) });
   assert.equal((await m.api('/dac/kits')).piloted, true, 'a press seen to work did not end the trial');
+});
+
+/* "It said it worked, but it did not" is exactly when a report is needed. */
+test('every run leaves a report, including one where everything said it worked', async () => {
+  const { m } = await legendMount();
+  const before = m.downloads.length;
+  await m.go('#/settings');
+  await m.window.__dacSyncDone(JSON.stringify({
+    marks: [{ variant: '101', state: 'marked', name: 'Moon Eater' }], dd: { done: true, results: [] } }));
+  await m.settle();
+  assert.ok(m.downloads.slice(before).some((d) => d.name === 'dac-report.json'),
+            'a run where every kit said "ticked" left no report');
+});
+
+/* Earlier builds ended the trial on results that were not true. */
+test('a trial ended by an earlier build does not count', async () => {
+  const { m, add } = await legendMount();
+  await add('Moon Eater', 'moon-eater', 'received');
+  await idbDirect.put('meta', { done: true, at: '2026-09-19' }, 'dacTrial');   // how 3.29 left it
+  assert.equal((await m.api('/dac/kits')).piloted, false, 'an old, untrustworthy trial was honoured');
 });

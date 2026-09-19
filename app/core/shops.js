@@ -392,6 +392,8 @@ export function toRow(shop, p, ctx, currency) {
        kit's drill legend with it. */
     product_id: p.id != null ? String(p.id) : null,
     variant_id: v.id != null ? String(v.id) : null,
+    // what DAC keys "Already purchased" by — its list of owned kits is SKUs
+    sku: v.sku ? String(v.sku) : null,
     title: f.title,
     artist: f.artist,
     type: f.type !== undefined ? f.type : (p.product_type || null),

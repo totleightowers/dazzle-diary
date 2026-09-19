@@ -56,7 +56,6 @@ public class DacActivity extends Activity {
     private static final String CHECK =
         "(function(){var e=document.getElementById('logbook-customer-data');"
         + "return e?e.getAttribute('data-logged-in'):'none';})()";
-    private static final String READ_MARK = "JSON.stringify(window.__ap||null)";
     private static final String READ_LEGENDS = "JSON.stringify(window.__dd||null)";
     private static final long KIT_LIMIT_MS = 45000;
 
@@ -137,7 +136,11 @@ public class DacActivity extends Activity {
                — a redirect, or a reload the press caused — only watches: a
                second press would un-mark it. */
             loads++;
-            web.evaluateJavascript(loads == 1 ? markJs : watchJs, null);
+            // which SKU this page is for, then the script (core/dacsync.js)
+            JSONObject k = kits.optJSONObject(index);
+            String prep = k == null ? "" : k.optString("prep", "");
+            if (prep.isEmpty()) return;          // the poll will time the kit out
+            web.evaluateJavascript(prep + "\n" + (loads == 1 ? markJs : watchJs), null);
             return;
         }
 
@@ -180,7 +183,13 @@ public class DacActivity extends Activity {
     private void pollMark(final int forKit) {
         main.postDelayed(new Runnable() { @Override public void run() {
             if (finished || phase != MARK || forKit != index) return;
-            web.evaluateJavascript(READ_MARK, new ValueCallback<String>() {
+            /* Each kit's own read (core/dacsync.js buildReadMark): it answers only
+               on THAT kit's page, so the last kit's result, still showing while
+               the next page loads, is never taken for this one. */
+            JSONObject k = kits.optJSONObject(forKit);
+            String read = k == null ? "" : k.optString("read", "");
+            if (read.isEmpty()) { record("failed", null); return; }
+            web.evaluateJavascript(read, new ValueCallback<String>() {
                 @Override public void onReceiveValue(String value) {
                     if (finished || phase != MARK || forKit != index) return;
                     JSONObject ap = null;
