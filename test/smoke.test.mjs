@@ -8,7 +8,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync as readdirSyncFs } from 'node:fs';
 import { mount } from './mount.mjs';
 
 /* The IndexedDB shim outlives a single mount, so a test that means "I do not
@@ -1978,4 +1978,168 @@ test('the price correction is offered on the duplicates tab, as its own button',
   await m.tap('[data-act="importprices"]');
   const all = await m.api('/projects');
   assert.equal(all[0].price, 12.34, 'tapping it did not correct the price');
+});
+
+/* DAC's logbook links an entry to its kit by product and variant ID, and that
+   link is what carries the kit's drill legend. The catalogue threw both away. */
+test('a catalogue row keeps the shop\'s own product and variant IDs', async () => {
+  const m = await mount({ products: [{
+    id: 7001, title: 'Moon Eater', vendor: 'Yuumei Art', handle: 'moon-eater',
+    product_type: 'Diamond Art Kit', images: [{ src: 'https://cdn.shopify.com/kit.jpg' }],
+    variants: [{ id: 99001, title: '23.6" x 30.7" (59.9cm x 78cm) / Square with 42 Colors / 75433',
+                 price: '169.00', available: true }] }] });
+  await m.sync();
+  const [row] = await m.api('/catalogue/search?q=moon');
+  assert.equal(row.product_id, '7001', 'the product ID was not kept');
+  assert.equal(row.variant_id, '99001', 'the variant ID was not kept');
+});
+
+/* ------------------------------------------------ drill legends from DAC */
+const DAC_KIT = (id, variant, title) => ({
+  id, title, vendor: 'Artist', handle: title.toLowerCase().replace(/\W+/g, '-'),
+  product_type: 'Diamond Art Kit', images: [{ src: 'https://cdn.shopify.com/kit.jpg' }],
+  variants: [{ id: variant, title: '22" x 28" (56cm x 71cm) / Square with 40 Colors / 60000',
+               price: '60.00', available: true }] });
+
+async function legendMount() {
+  const m = await mount({ products: [DAC_KIT(1, 101, 'Moon Eater'), DAC_KIT(2, 202, 'Wild Bloom')] });
+  await m.sync();
+  await emptyLogbook(m);
+  const add = async (title, handle, status, extra = {}) =>
+    m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, shop: 'dac', dac_handle: handle, status, ...extra }) });
+  return { m, add };
+}
+
+test('the kits sent to DAC are the DAC kits you own, described in DAC\'s words', async () => {
+  const { m, add } = await legendMount();
+  await add('Moon Eater', 'moon-eater', 'received');
+  await add('Wild Bloom', 'wild-bloom', 'wishlist');
+  await add('Typed In', null, 'started');
+  const { kits, missing } = await m.api('/dac/kits');
+  assert.equal(kits.length, 1, 'a wish list or unlinked kit was sent as if owned');
+  assert.deepEqual(kits[0], { variant: '101', product: '1', name: 'Moon Eater',
+    status: 'received_not_started', shape: 'square', drill: 'full', currency: 'GBP' });
+  assert.deepEqual(missing, []);
+});
+
+test('two copies of one kit are sent once, since they share one legend', async () => {
+  const { m, add } = await legendMount();
+  await add('Moon Eater', 'moon-eater', 'received');
+  await add('Moon Eater', 'moon-eater', 'notReceived');
+  assert.equal((await m.api('/dac/kits')).kits.length, 1);
+});
+
+/* The logbook is the source of truth. A sync adds legends and nothing else. */
+test('bringing legends back changes nothing on any project', async () => {
+  const { m, add } = await legendMount();
+  const p = await add('Moon Eater', 'moon-eater', 'started',
+    { date_ordered: '2026-03-01', date_received: '2026-03-10', date_started: '2026-04-01', price: 60 });
+  const before = await m.api('/projects/' + p.id);
+
+  const r = await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ done: true, results: [
+      { variant: '101', outcome: 'created',
+        colors: { status: 'available', codes: [{ code: '310', name: 'Black', hex: '000000' },
+                                               { code: 'B5200', name: 'Snow White', hex: 'ffffff' }] } },
+      // even if a result claimed a different status, nothing reads it
+      { variant: '101', outcome: 'existing', status: 'completed' } ] }) });
+  assert.equal(r.legends, 1);
+
+  const after = await m.api('/projects/' + p.id);
+  for (const f of ['status', 'date_ordered', 'date_received', 'date_started', 'date_completed',
+                   'price', 'progress', 'hours'])
+    assert.deepEqual(after[f], before[f], `bringing legends back changed ${f}`);
+});
+
+test('a project shows its legend, and the stash can be searched by drill', async () => {
+  const { m, add } = await legendMount();
+  const moon = await add('Moon Eater', 'moon-eater', 'received');
+  await add('Wild Bloom', 'wild-bloom', 'received');
+  await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ results: [
+      { variant: '101', outcome: 'created', colors: { status: 'available',
+        codes: [{ code: '310', name: 'Black', hex: '000000' }, { code: '3865', name: 'Winter White', hex: 'f9f7f1' }] } },
+      { variant: '202', outcome: 'created', colors: { status: 'available',
+        codes: [{ code: '3865', name: 'Winter White', hex: 'f9f7f1' }] } } ] }) });
+
+  const legend = await m.api('/projects/' + moon.id + '/legend');
+  assert.equal(legend.colours.length, 2);
+  assert.equal(legend.colours[0].hex, '#000000');
+
+  const both = await m.api('/colours?q=3865');
+  assert.deepEqual(both.results.map((x) => x.title).sort(), ['Moon Eater', 'Wild Bloom']);
+  assert.equal((await m.api('/colours?q=310')).results.length, 1);
+  assert.equal((await m.api('/colours?q=black')).results[0].title, 'Moon Eater',
+               'searching by colour name finds nothing');
+  assert.equal((await m.api('/colours?q=999')).results.length, 0);
+});
+
+test('a legend brought back later adds to the ones already kept', async () => {
+  const { m, add } = await legendMount();
+  await add('Moon Eater', 'moon-eater', 'received');
+  await add('Wild Bloom', 'wild-bloom', 'received');
+  const send = (results) => m.api('/dac/legends', { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ results }) });
+  await send([{ variant: '101', outcome: 'created', colors: { status: 'available', codes: ['310'] } },
+              { variant: '202', outcome: 'created', colors: { status: 'checking' } }]);
+  const second = await send([{ variant: '202', outcome: 'existing',
+                               colors: { status: 'available', codes: ['3865'] } }]);
+  assert.equal(second.total, 2, 'the second sync threw away the first one\'s legends');
+});
+
+test('Settings sends your DAC kits to the DAC screen, and a result becomes swatches', async () => {
+  const { m, add } = await legendMount();
+  const moon = await add('Moon Eater', 'moon-eater', 'received');
+  m.answerConfirms(true);
+  await m.go('#/settings');
+  await m.tap('[data-act="dacsync"]');
+  assert.equal(m.dacScripts.length, 1, 'nothing was handed to the DAC screen');
+  assert.ok(m.dacScripts[0].includes('"variant":"101"'), 'the script does not carry the kit');
+
+  // what the DAC screen would hand back
+  await m.window.__dacSyncDone(JSON.stringify({ done: true, results: [{ variant: '101', outcome: 'created',
+    colors: { status: 'available', codes: [{ code: '310', name: 'Black', hex: '000000' }] } }] }));
+  await m.settle();
+
+  await m.go('#/p/' + moon.id);
+  assert.ok(m.find('.swatch[data-k="310"]'), 'the kit does not show its drill colours');
+  await m.tap('.swatch[data-k="310"]');
+  assert.equal(globalThis.location.hash, '#/colours');
+  assert.ok(m.text().includes('Moon Eater'), 'tapping a colour did not find the kit holding it');
+});
+
+test('declining the warning sends nothing to DAC', async () => {
+  const { m, add } = await legendMount();
+  await add('Moon Eater', 'moon-eater', 'received');
+  m.answerConfirms(false);
+  await m.go('#/settings');
+  await m.tap('[data-act="dacsync"]');
+  assert.equal(m.dacScripts.length, 0, 'it went ahead after being told no');
+});
+
+test('a sign-in closed early is said so, and changes nothing', async () => {
+  const { m } = await legendMount();
+  const before = (await m.api('/colours')).legends;   // the shim keeps earlier tests' lists
+  await m.go('#/settings');
+  await m.window.__dacSyncDone(null);
+  await m.settle();
+  const said = m.find('.toast');
+  assert.ok(said && /closed before it finished/.test(said.textContent),
+            'closing the DAC screen early went unremarked');
+  assert.equal((await m.api('/colours')).legends, before, 'a cancelled sign-in changed the colour lists');
+});
+
+/* The app is compiled against Android's own stubs, which lack the method javac
+   needs to build a lambda — so a lambda compiles fine on an ordinary JDK and
+   then fails the real build with no useful message. None allowed. */
+test('the Android source has no lambdas or method references', () => {
+  const dir = new URL('../android/src/org/logbook/solo/', import.meta.url);
+  for (const f of readdirSyncFs(dir).filter((n) => n.endsWith('.java'))) {
+    const code = readFileSync(new URL(f, dir), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')      // comments
+      .replace(/"(?:\\.|[^"\\])*"/g, '""');                          // strings
+    assert.doesNotMatch(code, /\)\s*->|\w\s*->\s*[{\w(]/, `${f} has a lambda`);
+    assert.doesNotMatch(code, /\w::\w/, `${f} has a method reference`);
+  }
 });
