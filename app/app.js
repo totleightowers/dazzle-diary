@@ -1906,6 +1906,15 @@ route(/^#\/colours$/, async () => {
     </div>
     <div class="scroll pad" id="colourbody" style="padding-bottom:24px"></div>
   </div>`;
+  const input = document.getElementById('cq');
+  /* A drill as a little faceted gem: its own colour when the list has one,
+     otherwise a neutral one so the code still reads as a drill. */
+  const gem = (c, big = false) => `<span class="gem${big ? ' big' : ''}${c.hex ? '' : ' plain'}"${
+    c.hex ? ` style="--gem:${h(c.hex)}"` : ''}><i></i></span>`;
+  const search = (code) => {
+    input.value = code;
+    input.oninput();
+  };
   const paint = (r, q) => {
     const body = document.getElementById('colourbody');
     if (!body) return;
@@ -1915,8 +1924,14 @@ route(/^#\/colours$/, async () => {
       return;
     }
     if (!q) {
-      body.innerHTML = `<p style="margin:18px 2px;font-size:13px;color:var(--ink-mute)">Searching ${
-        num(r.legends)} kit${r.legends === 1 ? '' : 's'}’ colour lists.</p>`;
+      body.innerHTML = `
+        <p class="finder-note tnum">Searching ${num(r.legends)} kit${r.legends === 1 ? '' : 's'}’ colour lists.</p>
+        ${r.top && r.top.length ? `
+          <h3 class="label" style="margin:22px 2px 10px">In most of your kits</h3>
+          <div class="topdrills">${r.top.map((t) => `
+            <button class="topdrill tnum" data-code="${h(t.code)}">${gem(t)}<b>${h(t.code)}</b><span>${num(t.kits)}</span></button>`).join('')}
+          </div>` : ''}`;
+      body.querySelectorAll('[data-code]').forEach((b) => { b.onclick = () => search(b.dataset.code); });
       return;
     }
     if (!r.results.length) {
@@ -1924,20 +1939,43 @@ route(/^#\/colours$/, async () => {
         <p>None of the ${num(r.legends)} colour lists has ${h(q)}.</p></div>`;
       return;
     }
-    body.innerHTML = `<p style="margin:16px 2px 8px;font-size:12px;color:var(--ink-mute)" class="tnum">${
-      r.results.length} kit${r.results.length === 1 ? '' : 's'} with ${h(q)}</p>
-      <div class="stack">${r.results.map((k) => `
+    const c = r.results[0].colour;
+    const byCode = r.results.every((k) => k.colour.code === c.code);
+    const counts = {};
+    for (const k of r.results) counts[k.status] = (counts[k.status] || 0) + 1;
+    const statuses = ORDER.filter((s) => counts[s]);
+    if (S.colourSt && !counts[S.colourSt]) S.colourSt = null;
+    const shown = r.results.filter((k) => !S.colourSt || k.status === S.colourSt)
+      .sort((x, y) => ORDER.indexOf(x.status) - ORDER.indexOf(y.status) || x.title.localeCompare(y.title));
+    const of = r.searched || r.legends;
+    body.innerHTML = `
+      <div class="drillhero">
+        ${byCode ? gem(c, true) : `<span class="gem big plain"><i></i></span>`}
+        <div style="min-width:0;flex:1 1 auto">
+          <div class="drillcode tnum">${byCode ? h(c.code) : h(q)}</div>
+          ${byCode && c.name ? `<div class="drillname">${h(c.name)}</div>` : ''}
+          <div class="drillshare tnum">In <b>${num(r.results.length)}</b> of your ${num(of)} kit${of === 1 ? '' : 's'}</div>
+          <div class="drillbar"><i style="width:${Math.round(100 * r.results.length / Math.max(1, of))}%"></i></div>
+        </div>
+      </div>
+      ${statuses.length > 1 ? `
+      <div class="stfilter">
+        <button class="stchip" aria-pressed="${!S.colourSt}" data-st="">All <span class="tnum">${num(r.results.length)}</span></button>
+        ${statuses.map((s) => `<button class="stchip" aria-pressed="${S.colourSt === s}" data-st="${s}">
+          <i style="background:${stDot(s)}"></i>${h(statusOf(s).short)} <span class="tnum">${num(counts[s])}</span></button>`).join('')}
+      </div>` : ''}
+      <div class="drillgrid">${shown.map((k) => `
         <button class="colourhit" data-go="#/p/${k.id}">
-          <i class="swatch-dot" style="background:${k.colour.hex ? h(k.colour.hex) : 'transparent'}"></i>
-          <span style="flex:1 1 auto;min-width:0;text-align:left">
-            <span style="display:block;font-family:var(--serif);font-weight:600;font-size:15px">${h(k.title)}</span>
-            <span style="display:block;margin-top:2px;font-size:12px;color:var(--ink-mute)" class="tnum">${
-              h(k.colour.code)}${k.colour.name ? ' · ' + h(k.colour.name) : ''} · ${
-              h((STATUS[k.status] || {}).short || k.status)}</span>
-          </span></button>`).join('')}</div>`;
+          ${thumb(k)}
+          <span class="hitname">${h(k.title)}</span>
+          <span class="hitmeta"><i style="background:${stDot(k.status)}"></i>${h(statusOf(k.status).short)}${
+            byCode ? '' : ` · <span class="tnum">${h(k.colour.code)}</span>`}</span>
+        </button>`).join('')}</div>`;
+    body.querySelectorAll('[data-st]').forEach((b) => {
+      b.onclick = () => { S.colourSt = b.dataset.st || null; paint(r, q); };
+    });
   };
   paint(first, q0);
-  const input = document.getElementById('cq');
   let t;
   input.oninput = () => {
     clearTimeout(t);

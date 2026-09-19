@@ -2086,6 +2086,34 @@ test('a project shows its legend, and the stash can be searched by drill', async
   assert.equal((await m.api('/colours?q=999')).results.length, 0);
 });
 
+test('Find a drill offers your commonest drills, shows the kits as covers, and filters by status', async () => {
+  const { m, add } = await legendMount();
+  await add('Moon Eater', 'moon-eater', 'started');
+  await add('Wild Bloom', 'wild-bloom', 'received');
+  await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dd: { results: [
+      { variant: '101', owned: true, colors: { status: 'available', codes: ['310', '3865'] } },
+      { variant: '202', owned: true, colors: { status: 'available', codes: ['3865'] } }] } }) });
+  const top = (await m.api('/colours')).top;
+  assert.equal(top[0].code, '3865', 'the drill both kits share is not first');
+  assert.equal(top[0].kits, 2);
+
+  await m.go('#/colours');
+  await m.tap('.topdrill[data-code="3865"]');
+  await m.until(() => m.find('.drillhero'));
+  assert.match(m.find('.drillshare').textContent, /In 2 of your \d+ kits/);
+  assert.equal(m.all('.drillgrid .colourhit').length, 2);
+  assert.ok(m.find('.drillgrid .colourhit .thumb'), 'the kits are not shown as covers');
+  // what you are working on comes first
+  assert.match(m.all('.drillgrid .hitname')[0].textContent, /Moon Eater/);
+
+  await m.tap('.stchip[data-st="received"]');
+  assert.equal(m.all('.drillgrid .colourhit').length, 1, 'the status filter did not narrow the kits');
+  assert.match(m.find('.drillgrid .hitname').textContent, /Wild Bloom/);
+  await m.tap('.stchip[data-st=""]');
+  assert.equal(m.all('.drillgrid .colourhit').length, 2, 'All did not bring every kit back');
+});
+
 test('a legend brought back later adds to the ones already kept', async () => {
   const { m, add } = await legendMount();
   await add('Moon Eater', 'moon-eater', 'received');
