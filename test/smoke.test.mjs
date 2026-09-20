@@ -2216,6 +2216,16 @@ test('the Android source has no lambdas or method references', () => {
   }
 });
 
+/* Ticking is a toggle. A kit the account owns but DAC has no colour list for
+   yet would otherwise be pressed again on every run: off, then back on. */
+test('the DAC screen skips every kit the account already owns, not only the ones with colours', () => {
+  const src = readFileSync(new URL('../android/src/org/logbook/solo/DacActivity.java', import.meta.url), 'utf8');
+  const have = src.slice(src.indexOf('private static JSONArray haveFrom'));
+  const body = have.slice(0, have.indexOf('\n    }'));
+  assert.match(body, /optBoolean\("owned"\)/, 'kits already owned are not skipped');
+  assert.doesNotMatch(body, /"available"/, 'a kit without a colour list is still ticked every run');
+});
+
 /* A kit that could not be ticked is only fixable if its page can be seen. */
 test('a kit that could not be ticked leaves a report on the phone, kept whole', async () => {
   const { m } = await legendMount();

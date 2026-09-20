@@ -150,14 +150,15 @@ public class DacActivity extends Activity {
         });
     }
 
-    /** Variants whose colour list is already available: ticked, so left alone. */
+    /** Variants the account already owns: ticked, so left alone. Ticking is a
+        toggle, and a kit DAC has no colour list for yet is owned all the same —
+        pressing it again would only turn it off and back on, every run. */
     private static JSONArray haveFrom(JSONObject dd) {
         JSONArray out = new JSONArray();
         JSONArray rs = dd == null ? null : dd.optJSONArray("results");
         for (int i = 0; rs != null && i < rs.length(); i++) {
             JSONObject r = rs.optJSONObject(i);
-            JSONObject c = r == null ? null : r.optJSONObject("colors");
-            if (c != null && "available".equals(c.optString("status"))) out.put(r.optString("variant"));
+            if (r != null && r.optBoolean("owned")) out.put(r.optString("variant"));
         }
         return out;
     }
