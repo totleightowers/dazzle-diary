@@ -13,7 +13,8 @@ import { norm } from '../core/match.js';
 import { buildPreview } from '../core/import.js';
 import { parseHolds, applyStatus } from '../core/status.js';
 import { estimateDrills } from '../core/estimate.js';
-import { DAC_STATUS, readSyncResult } from '../core/dacsync.js';
+import { drillKind, byDrill } from '../core/drills.js';
+import { DAC_STATUS, readSyncResult, cleanColour } from '../core/dacsync.js';
 
 export const PROXY = '/__net/?url=';
 const via = (url) => PROXY + encodeURIComponent(url);
@@ -986,13 +987,39 @@ export async function localApi(path, opts = {}) {
      here ever writes a status, date or anything else back onto a project —
      the logbook is the source of truth, and statuses only ever travel OUT, to
      describe a kit when it is first added to the DAC account. */
+  /* Every colour list, for the backup. They came from DAC one kit at a time
+     over an evening, so they are worth carrying rather than fetching again. */
+  if (p === '/legends' && m === 'GET') return (await idb.get('meta', 'legends')) || {};
+
+  /* DAC's own drill list: the colours and names behind the codes. */
+  if (p === '/drills' && m === 'GET') return (await idb.get('meta', 'drills')) || {};
+
   const lg = p.match(/^\/projects\/(\d+)\/legend$/);
   if (lg && m === 'GET') {
     const row = await idb.get('projects', Number(lg[1]));
     if (!row) throw Object.assign(new Error('Not found'), { status: 404 });
     const v = await variantOf(row);
     const all = (await idb.get('meta', 'legends')) || {};
-    return { variant: v, colours: v && all[v] ? all[v].codes : [], at: v && all[v] ? all[v].at : null };
+    const mine = v && all[v] ? all[v] : null;
+    if (!mine) return { variant: v, colours: [], at: null, shape: null, named: 0 };
+
+    /* Each drill filled out with what is known about it: DAC's own name and
+       colour where a sync fetched its drill list, which kind of drill the code
+       says it is, and how many of your other kits hold it. */
+    const known = (await idb.get('meta', 'drills')) || {};
+    const shared = new Map();
+    for (const other of await projects()) {
+      const ov = await variantOf(other);
+      if (!ov || ov === v || !all[ov]) continue;
+      for (const c of all[ov].codes) shared.set(c.code, (shared.get(c.code) || 0) + 1);
+    }
+    const colours = mine.codes.slice().sort(byDrill).map((c) => {
+      const k = known[c.code] || {};
+      return { code: c.code, name: c.name || k.name || null, hex: c.hex || k.hex || null,
+               kind: drillKind(c.code), others: shared.get(c.code) || 0 };
+    });
+    return { variant: v, colours, at: mine.at, shape: mine.shape || null,
+             named: colours.filter((c) => c.hex).length };
   }
 
   const cv = p.match(/^\/projects\/(\d+)\/cover$/);
@@ -1264,6 +1291,61 @@ export async function localApi(path, opts = {}) {
       } catch { photosFailed++; }
     }
 
+    /* A cover you chose yourself is not in any catalogue: it comes back from
+       the backup, under its own name, and the project keeps pointing at it. */
+    let ownCovers = 0;
+    const ownHere = new Set();
+    for (const c of (data.covers || [])) {
+      if (!c || !isOwnCover(c.file) || !c.data) continue;
+      try {
+        const bytes = Uint8Array.from(atob(c.data), (ch) => ch.charCodeAt(0));
+        if (await saveFile('covers/' + c.file, bytes.buffer)) { ownHere.add(c.file); ownCovers++; }
+      } catch { /* a cover that will not decode is not worth failing a restore for */ }
+    }
+    if (ownHere.size) {
+      for (const row of data.projects) {
+        const pid = idMap.get(row.id);
+        if (!pid || !ownHere.has(row.cover)) continue;
+        const mine = await idb.get('projects', pid);
+        if (!mine || isOwnCover(mine.cover)) continue;      // a choice made here wins
+        mine.cover = row.cover;
+        mine.updated_at = nowIso();
+        await idb.put('projects', mine);
+      }
+    }
+
+    /* Settings, the colour lists borrowed from DAC and DAC's own drill list.
+       All merged: a colour list already here is kept unless the backup's is newer. */
+    if (data.prefs && typeof data.prefs === 'object') {
+      const prefs = (await idb.get('meta', 'prefs')) || {};
+      if (data.prefs.currency) prefs.currency = String(data.prefs.currency).slice(0, 3).toUpperCase();
+      if (Array.isArray(data.prefs.excluded)) prefs.excluded = data.prefs.excluded;
+      if (data.prefs.hints && typeof data.prefs.hints === 'object')
+        prefs.hints = { ...(prefs.hints || {}), ...data.prefs.hints };
+      await idb.put('meta', prefs, 'prefs');
+    }
+    if (data.drills && typeof data.drills === 'object') {
+      const known = (await idb.get('meta', 'drills')) || {};
+      let any = false;
+      for (const c of Object.values(data.drills)) {
+        const clean = cleanColour(c);
+        if (clean) { known[clean.code] = clean; any = true; }
+      }
+      if (any) await idb.put('meta', known, 'drills');
+    }
+    let legends = 0;
+    if (data.legends && typeof data.legends === 'object') {
+      const all = (await idb.get('meta', 'legends')) || {};
+      for (const [v, got] of Object.entries(data.legends)) {
+        const codes = Array.isArray(got && got.codes) ? got.codes.map(cleanColour).filter(Boolean) : null;
+        if (!codes || !codes.length) continue;
+        if (all[v] && String(all[v].at || '') >= String(got.at || '')) continue;
+        all[v] = { codes, at: got.at || nowIso(), shape: got.shape || null };
+        legends++;
+      }
+      if (legends) await idb.put('meta', all, 'legends');
+    }
+
     /* Covers are not carried in the backup — they would treble its size — so
        they come from the catalogue, which is why it has to be synced first.
        This is backfillCovers rather than a fetch of its own: restore used to
@@ -1278,6 +1360,7 @@ export async function localApi(path, opts = {}) {
 
     return {
       added, updated, fieldsChanged, sessions: sessionsAdded, progress: progressAdded,
+      ownCovers, legends,
       skipped: data.projects.length - added - updated,
       photos, photosFailed,
       covers, coversMissing,
@@ -1574,11 +1657,19 @@ export async function localApi(path, opts = {}) {
     const r = readSyncResult(json());
     const all = (await idb.get('meta', 'legends')) || {};
     const at = nowIso();
-    for (const [v, codes] of Object.entries(r.legends)) all[v] = { codes, at };
+    for (const [v, codes] of Object.entries(r.legends)) all[v] = { codes, at, shape: r.shapes[v] || null };
     await idb.put('meta', all, 'legends');
+    /* DAC's own drill list: what a bare code looks like. Merged rather than
+       replaced, so a shape missing from one sync keeps what an earlier one knew. */
+    let drills = 0;
+    if (Object.keys(r.drills).length) {
+      const known = (await idb.get('meta', 'drills')) || {};
+      for (const [code, c] of Object.entries(r.drills)) { known[code] = c; drills++; }
+      await idb.put('meta', known, 'drills');
+    }
     // a trial counts only once a press has been seen to work
     if (r.marked) await idb.put('meta', { done: true, at, v: DAC_TRIAL }, 'dacTrial');
-    return { legends: Object.keys(r.legends).length, marked: r.marked, already: r.already, deferred: r.deferred,
+    return { legends: Object.keys(r.legends).length, drills, marked: r.marked, already: r.already, deferred: r.deferred,
              pending: r.pending, missing: r.missing.slice(0, 20), error: r.error,
              total: Object.keys(all).length };
   }
@@ -1596,13 +1687,15 @@ export async function localApi(path, opts = {}) {
         const v = await variantOf(r);
         for (const c of (v && all[v] ? all[v].codes : [])) count.set(c.code, (count.get(c.code) || 0) + 1);
       }
+      const known = (await idb.get('meta', 'drills')) || {};
       const top = [...count].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0]), 'en', { numeric: true }))
-        .slice(0, 18).map(([code, kits]) => ({ code, kits }));
+        .slice(0, 18).map(([code, kits]) => ({ code, kits, hex: (known[code] || {}).hex || null }));
       return { legends, results: [], top };
     }
     const code = want.toUpperCase();
     const byName = want.length >= 3 ? want.toLowerCase() : null;
     await catalogue();
+    const drills = (await idb.get('meta', 'drills')) || {};      // DAC's own drill list, once
     const results = [];
     let searched = 0;
     for (const r of await projects()) {
@@ -1610,9 +1703,16 @@ export async function localApi(path, opts = {}) {
       const codes = v && all[v] ? all[v].codes : null;
       if (!codes) continue;
       searched++;
+      /* A name search looks in DAC's drill list as well as the legend, because
+         a legend is bare codes: "black" only finds 310 once that list is here. */
+      const named = (c) => (c.name || (drills[c.code] || {}).name || '').toLowerCase();
       const hit = codes.find(c => c.code.toUpperCase() === code)
-               || (byName && codes.find(c => (c.name || '').toLowerCase().includes(byName)));
-      if (hit) results.push({ id: r.id, title: r.title, status: r.status, cover: r.cover || null, colour: hit });
+               || (byName && codes.find(c => named(c).includes(byName)));
+      if (hit) {
+        const k = drills[hit.code] || {};
+        results.push({ id: r.id, title: r.title, status: r.status, cover: r.cover || null,
+                       colour: { ...hit, name: hit.name || k.name || null, hex: hit.hex || k.hex || null } });
+      }
     }
     return { legends, searched, results };
   }

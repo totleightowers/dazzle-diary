@@ -145,6 +145,7 @@ export async function runLegends(env) {
   out.error = null;
   out.results = [];
   out.progress = { done: 0, total: variants.length, now: '' };
+  out.options = {};                    // DAC's own drill list, by shape
   const msg = (e) => String((e && e.message) || e);
   try {
     const el = document.getElementById('logbook-customer-data');
@@ -187,6 +188,21 @@ export async function runLegends(env) {
       out.progress.done++;
       await sleep(250);
     }
+
+    /* A legend is bare codes. DAC's own drill list is what turns 3865 into a
+       colour on screen, so it is fetched once for each shape seen. */
+    const shapes = [];
+    for (const r of out.results) {
+      const shape = r.colors && r.colors.shape;
+      if (shape && shapes.indexOf(shape) < 0) shapes.push(shape);
+    }
+    for (const shape of shapes) {
+      try {
+        const r = await fetch(API + '/drills?mode=options&shape=' + encodeURIComponent(shape), { headers });
+        if (r.ok) out.options[shape] = await r.json();
+      } catch (e) { /* the legends still stand without it */ }
+      await sleep(250);
+    }
   } catch (e) { out.error = msg(e); }
   out.done = true;
 }
@@ -217,12 +233,37 @@ export function cleanColour(c) {
   return { code, name: name || null, hex: HEX.test(hex) ? (hex.startsWith('#') ? hex : '#' + hex).toLowerCase() : null };
 }
 
+/* DAC's drill list comes back as its own shape, and has changed before. Any
+   of these is understood; anything else is simply ignored, and the codes stay
+   bare rather than a sync failing over a list it did not need. */
+export function readDrillOptions(raw) {
+  const out = {};
+  const take = (x) => {
+    const c = cleanColour(x && typeof x === 'object' && !Array.isArray(x)
+      ? { code: x.code ?? x.value ?? x.id ?? x.dmc ?? x.name, name: x.name ?? x.label ?? x.title,
+          hex: x.hex ?? x.color ?? x.colour ?? x.rgb ?? x.hex_code }
+      : x);
+    if (c && !out[c.code]) out[c.code] = c;
+  };
+  const walk = (node, depth) => {
+    if (!node || depth > 4) return;
+    if (Array.isArray(node)) { for (const x of node) take(x); return; }
+    if (typeof node !== 'object') return;
+    for (const key of ['data', 'drills', 'colors', 'colours', 'options', 'items', 'results']) {
+      if (node[key]) walk(node[key], depth + 1);
+    }
+  };
+  for (const byShape of Object.values(raw && typeof raw === 'object' ? raw : {})) walk(byShape, 0);
+  return out;
+}
+
 /** Legends by variant, and what happened to each kit. */
 export function readSyncResult(raw) {
   const r = raw && typeof raw === 'object' ? raw : {};
   const dd = r.dd && typeof r.dd === 'object' ? r.dd : {};
   const tk = r.tk && typeof r.tk === 'object' ? r.tk : {};
-  const out = { legends: {}, marked: 0, already: 0, deferred: 0, missing: [], pending: 0,
+  const out = { legends: {}, shapes: {}, drills: readDrillOptions(dd.options), marked: 0, already: 0,
+                deferred: 0, missing: [], pending: 0,
                 error: [tk.error, dd.error, r.error].find((x) => typeof x === 'string' && x) || null };
   if (out.error) out.error = out.error.slice(0, 200);
 
@@ -240,7 +281,11 @@ export function readSyncResult(raw) {
     const colors = x.colors;
     const codes = colors && colors.status === 'available' && Array.isArray(colors.codes)
       ? colors.codes.map(cleanColour).filter(Boolean) : [];
-    if (codes.length) out.legends[variant] = codes;
+    if (codes.length) {
+      out.legends[variant] = codes;
+      const shape = colors.shape === 'round' || colors.shape === 'square' ? colors.shape : null;
+      if (shape) out.shapes[variant] = shape;
+    }
     else if (x.owned) out.pending++;
   }
   return out;

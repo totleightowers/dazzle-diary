@@ -126,7 +126,9 @@ export async function mount({ width = 390, products = null, catalogue = true, sh
     const raw = String(u);
     net.push(decodeURIComponent(raw.replace('/__net/?url=', '')));
     const real = decodeURIComponent(raw.replace('/__net/?url=', ''));
-    if (/\.(jpg|jpeg|png|webp)/i.test(real)) {
+    /* A picture from the web is a stand-in, but a file this phone already
+       holds is served as itself — otherwise every photo looks the same size. */
+    if (!/^\/(photos|covers)\//.test(raw) && /\.(jpg|jpeg|png|webp)/i.test(real)) {
       if (slowImages) await new Promise((r) => setTimeout(r, slowImages));
       return { ok: true, status: 200, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
                blob: async () => new globalThis.Blob(['x'], { type: 'image/jpeg' }) };
@@ -134,9 +136,11 @@ export async function mount({ width = 390, products = null, catalogue = true, sh
     const local = raw.match(/^\/(photos|covers)\/(.+)$/);
     if (local) {
       const key = local[1] + '/' + decodeURIComponent(local[2]);
+      /* The real bytes, not a stand-in: a backup that quietly shrank a photo
+         would otherwise look the same as one that carried it whole. */
       return files.has(key)
         ? { ok: true, status: 200, arrayBuffer: async () => files.get(key).buffer,
-            blob: async () => new globalThis.Blob(['x'], { type: 'image/jpeg' }) }
+            blob: async () => new globalThis.Blob([files.get(key).toString('binary')], { type: 'image/jpeg' }) }
         : { ok: false, status: 404 };
     }
     if (/version\.json$/.test(raw)) {
