@@ -6,7 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { tickAll, buildTickScript, runLegends, buildLegendScript,
-         readSyncResult, cleanColour } from '../app/core/dacsync.js';
+         readSyncResult, cleanColour, readDrillOptions } from '../app/core/dacsync.js';
 
 /* ------------------------------------------------------------ ticking */
 
@@ -186,7 +186,8 @@ test('the tick script is the tested function, parses, and carries the kits', () 
 
 const API = 'https://logbook-app-theta.vercel.app/api';
 
-function fakeDac({ signedIn = true, owned = {}, legends = {}, pending = [], refuse = false } = {}) {
+function fakeDac({ signedIn = true, owned = {}, legends = {}, pending = [], refuse = false,
+                   shape = 'square', options = null } = {}) {
   const attrs = signedIn
     ? { 'data-logged-in': 'true', 'data-customer-id': '42', 'data-customer-email': 'x@example.com',
         'data-customer-first-name': 'J', 'data-auth-digest': 'sig', 'data-customer-country': 'GB' }
@@ -200,11 +201,14 @@ function fakeDac({ signedIn = true, owned = {}, legends = {}, pending = [], refu
     if (url === API + '/identify') return refuse ? json(401, {}) : json(200, { data: { token: 'tok' } });
     if (opts.headers?.Authorization !== 'Bearer tok') return json(401, {});
     const u = new URL(url);
+    if (u.pathname === '/api/drills' && u.searchParams.get('mode') === 'options')
+      return options ? json(200, options) : json(404, {});
     if (u.pathname === '/api/drills') {
       const v = u.searchParams.get('variant');
       if (!owned[v]) return json(200, { project: null });
       return json(200, { project: owned[v],
-        colors: pending.includes(v) ? { status: 'checking' } : { status: 'available', codes: legends[v] || [] } });
+        colors: pending.includes(v) ? { status: 'checking' }
+                                    : { status: 'available', shape, codes: legends[v] || [] } });
     }
     return json(404, {});
   };
@@ -287,3 +291,45 @@ test('only sane colours survive the trip back', () => {
     colors: { status: 'available', codes: ['310'] } }] } }).legends, {});
 });
 
+/* A legend is bare codes. DAC's own drill list is what turns 3865 into a
+   colour on screen, and it is only worth fetching once per shape. */
+test('the drill list is fetched once for each shape, and only after the legends', async () => {
+  const dac = fakeDac({ owned: { 111: {}, 222: {} }, legends: { 111: ['310'], 222: ['3865'] },
+    options: { data: [{ code: '310', name: 'Black', hex: '000000' },
+                      { code: '3865', name: 'Winter White', hex: 'fbfbf9' }] } });
+  const out = await legendsFor(dac, ['111', '222']);
+  const asked = dac.calls.filter((c) => /mode=options/.test(c.url));
+  assert.equal(asked.length, 1, 'the drill list was not fetched once per shape');
+  assert.match(asked[0].url, /shape=square/);
+  assert.ok(dac.calls.indexOf(asked[0]) > dac.calls.findIndex((c) => /variant=222/.test(c.url)),
+            'the drill list was fetched before the legends it describes');
+  assert.equal(out.options.square.data.length, 2);
+  assert.equal(out.error, null, 'fetching the drill list broke the sync');
+});
+
+test('a sync still stands when DAC will not give up its drill list', async () => {
+  const dac = fakeDac({ owned: { 111: {} }, legends: { 111: ['310'] } });   // no options
+  const out = await legendsFor(dac, ['111']);
+  assert.equal(out.error, null, 'a missing drill list failed the whole sync');
+  assert.deepEqual(out.results[0].colors.codes, ['310'], 'the legend was lost with it');
+  assert.deepEqual(out.options, {}, 'a refusal was stored as a drill list');
+});
+
+test('DAC\'s drill list is read whatever shape it arrives in, and rubbish is ignored', async () => {
+  assert.deepEqual(readDrillOptions({ square: { data: [{ code: '310', name: 'Black', hex: '#000000' }] } }),
+                   { 310: { code: '310', name: 'Black', hex: '#000000' } });
+  assert.deepEqual(readDrillOptions({ square: { drills: [{ value: '3865', label: 'Winter White', color: 'fbfbf9' }] } }),
+                   { 3865: { code: '3865', name: 'Winter White', hex: '#fbfbf9' } });
+  assert.deepEqual(readDrillOptions({ round: ['310'] }), { 310: { code: '310', name: null, hex: null } });
+  assert.deepEqual(readDrillOptions({ square: { data: [{ code: '<script>', hex: 'nope' }] } }), {},
+                   'a code that is not a code was taken');
+  assert.deepEqual(readDrillOptions(null), {});
+});
+
+test('a sync carries the drill list and each kit\'s shape back to the app', async () => {
+  const r = readSyncResult({ dd: { results: [{ variant: '111', owned: true,
+      colors: { status: 'available', shape: 'round', codes: ['310'] } }],
+    options: { round: { data: [{ code: '310', name: 'Black', hex: '000000' }] } } } });
+  assert.deepEqual(r.shapes, { 111: 'round' });
+  assert.deepEqual(r.drills['310'], { code: '310', name: 'Black', hex: '#000000' });
+});

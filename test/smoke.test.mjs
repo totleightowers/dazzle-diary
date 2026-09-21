@@ -1046,6 +1046,115 @@ test('progress history goes with the project when it is deleted', async () => {
                'diamonds placed on a canvas you deleted are not diamonds you placed');
 });
 
+/* A backup is only a backup if it holds everything that cannot be fetched
+   again. Anything new the app starts keeping has to be added to it, or listed
+   here as something a sync rebuilds — this test is what makes that a decision
+   rather than an oversight. */
+test('everything the app keeps is either in the backup or rebuilt by a sync', () => {
+  const store = readFileSync(new URL('../app/local/store.js', import.meta.url), 'utf8');
+  const app = readFileSync(new URL('../app/app.js', import.meta.url), 'utf8');
+  const backup = app.slice(app.indexOf("act === 'backup'"), app.indexOf("act === 'export'"));
+
+  // the stores a logbook is kept in
+  const idbSrc = readFileSync(new URL('../app/local/idb.js', import.meta.url), 'utf8');
+  const stores = [...idbSrc.matchAll(/createObjectStore\('(\w+)'/g)].map((x) => x[1]);
+  const REBUILT = {
+    catalogue: 'a catalogue sync downloads it again',
+    blobs: 'nothing is kept here; covers and photos are files'
+  };
+  const IN_BACKUP = { projects: /projects/, photos: /photos/, sessions: /sessions/,
+                      progress: /progress/, meta: /prefs|legends|drills/ };
+  for (const s of stores)
+    assert.ok(REBUILT[s] || IN_BACKUP[s].test(backup), `the ${s} store is not in the backup`);
+
+  // and the named things inside meta, which is a store of odds and ends
+  const keys = [...store.matchAll(/idb\.get\('meta',\s*'(\w+)'\)/g),
+                ...store.matchAll(/idb\.put\('meta',[^;]*?,\s*'(\w+)'\)/g)].map((x) => x[1]);
+  const REBUILT_META = {
+    synced: 'when each shop was last synced; the next sync says so again',
+    timer: 'a session running right now, on this phone',
+    dacTrial: 'whether the first DAC run has happened, for this phone',
+    sessionsMigrated: 'a one-off migration flag'
+  };
+  const CARRIED = { prefs: /prefs/, legends: /legends/, drills: /drills/ };
+  for (const k of new Set(keys))
+    assert.ok(REBUILT_META[k] || CARRIED[k].test(backup),
+              `meta.${k} is neither backed up nor listed as something a sync rebuilds`);
+});
+
+/* A photo is the one thing in a logbook that cannot be downloaded again, so
+   the backup carries it exactly as it was taken — not a shrunken copy. */
+test('a backup carries photos whole, with your own covers, settings and colour lists', async () => {
+  const m = await mount();
+  await emptyLogbook(m);
+  const p = await m.seed({ title: 'Photographed', status: 'started' });
+  // a photo far bigger than the 1600px copies the old backup wrote
+  const big = Buffer.alloc(300 * 1024, 7);
+  await m.api(`/projects/${p.id}/photos`, { method: 'POST',
+    headers: { 'Content-Type': 'image/jpeg' }, body: big.buffer });
+  // and that photo made the cover, which no catalogue can hand back
+  const mine = (await m.api('/projects/' + p.id)).photos[0];
+  await m.api(`/projects/${p.id}/cover`, { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ photo: mine.file }) });
+  await m.api('/prefs', { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ currency: 'USD' }) });
+  await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dd: { results: [{ variant: '77', owned: true,
+      colors: { status: 'available', codes: ['310', '3865'] } }] } }) });
+
+  await m.go('#/settings');
+  await m.tap('[data-act="backup"]');
+  await m.until(() => m.downloads.some((d) => d.name === 'dazzle-diary-backup.json'));
+  const file = JSON.parse(m.downloads.find((d) => d.name === 'dazzle-diary-backup.json').text);
+
+  assert.equal(file.photos.length, 1, 'the backup has no photos');
+  assert.equal(Buffer.from(file.photos[0].data, 'base64').length, big.length,
+               'the backup shrank the photo');
+  assert.equal(file.covers.length, 1, 'a cover you set yourself was left out of the backup');
+  assert.match(file.covers[0].file, /^own-/);
+  assert.equal(Buffer.from(file.covers[0].data, 'base64').length, big.length,
+               'the cover you set yourself was shrunk');
+  assert.equal(file.prefs.currency, 'USD', 'your settings were left out of the backup');
+  assert.deepEqual(file.legends['77'].codes.map((c) => c.code), ['310', '3865'],
+                   'the drill colours were left out of the backup');
+  assert.ok(file.drills, 'DAC\'s drill list was left out of the backup');
+  await idbDirect.del('meta', 'legends');     // the colour lists are shared between tests
+});
+
+test('restoring brings back your own cover, your settings and your colour lists', async () => {
+  const m = await mount();
+  await emptyLogbook(m);
+  await idbDirect.del('meta', 'legends');
+  const file = {
+    version: 4,
+    projects: [{ id: 9, title: 'From the backup', status: 'started', cover: 'own-9-1-1.jpg', covers: ['own-9-1-1.jpg'] }],
+    photos: [], sessions: [], progress: [],
+    covers: [{ file: 'own-9-1-1.jpg', data: Buffer.from('the picture').toString('base64') }],
+    prefs: { currency: 'EUR', excluded: ['mdd'] },
+    legends: { 77: { codes: ['310'], at: '2026-09-01T00:00:00.000Z' } },
+    drills: { 310: { code: '310', name: 'Black', hex: '#000000' } }
+  };
+  const r = await m.api('/restore', { method: 'POST', body: JSON.stringify(file) });
+  assert.equal(r.ownCovers, 1, 'the cover in the backup was not written');
+  assert.equal(r.legends, 1, 'the colour lists in the backup were not restored');
+  assert.equal(m.files.get('covers/own-9-1-1.jpg').toString(), 'the picture');
+  const back = (await m.api('/projects')).find((x) => x.title === 'From the backup');
+  assert.equal(back.cover, 'own-9-1-1.jpg', 'the restored project lost the cover you chose');
+  assert.equal((await m.api('/prefs')).currency, 'EUR', 'your settings did not come back');
+  assert.deepEqual((await m.api('/legends'))['77'].codes.map((c) => c.code), ['310']);
+  assert.deepEqual((await m.api('/drills'))['310'], { code: '310', name: 'Black', hex: '#000000' },
+                   'DAC\'s drill list did not come back');
+
+  // a colour list already here is not replaced by an older one from a backup
+  await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dd: { results: [{ variant: '77', owned: true,
+      colors: { status: 'available', codes: ['310', '939'] } }] } }) });
+  await m.api('/restore', { method: 'POST', body: JSON.stringify(file) });
+  assert.equal((await m.api('/legends'))['77'].codes.length, 2,
+               'an older colour list from a backup overwrote a newer one');
+  await idbDirect.del('meta', 'legends');
+});
+
 test('a backup carries progress history, and restoring twice does not double it', async () => {
   const m = await mount();
   for (const q of await m.api('/projects')) await m.api('/projects/' + q.id, { method: 'DELETE' });
@@ -2084,6 +2193,48 @@ test('a project shows its legend, and the stash can be searched by drill', async
   assert.equal((await m.api('/colours?q=black')).results[0].title, 'Moon Eater',
                'searching by colour name finds nothing');
   assert.equal((await m.api('/colours?q=999')).results.length, 0);
+});
+
+test('a kit shows its whole drill list, with DAC\'s colours and what your other kits share', async () => {
+  const { m, add } = await legendMount();
+  await idbDirect.del('meta', 'legends');
+  const moon = await add('Moon Eater', 'moon-eater', 'started');
+  await add('Wild Bloom', 'wild-bloom', 'received');
+  await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dd: {
+      results: [{ variant: '101', owned: true, colors: { status: 'available', shape: 'square',
+                   codes: ['310', 'AB972', 'Z743'] } },
+                { variant: '202', owned: true, colors: { status: 'available', codes: ['310'] } }],
+      options: { square: { data: [{ code: '310', name: 'Black', hex: '000000' }] } } } }) });
+
+  const legend = await m.api('/projects/' + moon.id + '/legend');
+  assert.deepEqual(legend.colours.map((c) => c.code), ['310', 'AB972', 'Z743'], 'the list is not in DAC\'s order');
+  assert.deepEqual(legend.colours.map((c) => c.kind), ['plain', 'ab', 'special']);
+  assert.equal(legend.colours[0].name, 'Black', 'DAC\'s drill list did not reach the kit');
+  assert.equal(legend.colours[0].hex, '#000000');
+  assert.equal(legend.colours[0].others, 1, 'it does not know another kit holds 310');
+  assert.equal(legend.colours[1].others, 0);
+  assert.equal(legend.shape, 'square');
+
+  await m.go('#/p/' + moon.id);
+  await m.tap('[data-go="#/p/' + moon.id + '/colours"]');
+  await m.until(() => m.find('.drillrow'));
+  assert.equal(m.all('.drillrow').length, 3, 'the whole drill list is not shown');
+  const text = m.text();
+  assert.ok(text.includes('Aurora borealis') && text.includes('Special finish'),
+            'the kinds of drill are not named');
+  assert.ok(text.includes('in 1 more'), 'it does not say which drills your other kits share');
+  assert.equal(m.all('.drillshared').length, 1, 'a drill no other kit holds is labelled anyway');
+  assert.ok(/does not say how many drills of each colour/.test(text),
+            'the screen does not say that per-colour amounts are not published');
+
+  await m.tap('.drillrow[data-k="310"]');
+  assert.equal(globalThis.location.hash, '#/colours');
+  await m.until(() => m.find('.drillhero'));
+  assert.ok(m.text().includes('Black'), 'the finder does not show the colour\'s name');
+  assert.match(m.find('.gem.big').getAttribute('style') || '', /#000000/, 'the finder gem is not the drill\'s colour');
+  await idbDirect.del('meta', 'legends');
+  await idbDirect.del('meta', 'drills');
 });
 
 test('Find a drill offers your commonest drills, shows the kits as covers, and filters by status', async () => {

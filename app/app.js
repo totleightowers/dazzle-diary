@@ -316,24 +316,9 @@ function lightbox(items, startIndex = 0) {
 }
 
 
-/* Phone cameras produce 7–12 MB frames. A progress photo is looked at on a
- * phone screen, so 1600px at q0.82 is indistinguishable and ~40x smaller —
- * which is the difference between a 12 MB backup and a 500 MB one. */
-async function downscale(file, maxEdge = 1600, quality = 0.82) {
-  if (!file || !/^image\//.test(file.type || '')) return file;
-  try {
-    const bitmap = await createImageBitmap(file);
-    const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
-    if (scale === 1 && file.size < 900 * 1024) { bitmap.close?.(); return file; }
-    const w = Math.round(bitmap.width * scale), h = Math.round(bitmap.height * scale);
-    const canvas = document.createElement('canvas');
-    canvas.width = w; canvas.height = h;
-    canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
-    bitmap.close?.();
-    const blob = await new Promise((ok) => canvas.toBlob(ok, 'image/jpeg', quality));
-    return blob && blob.size < file.size ? blob : file;
-  } catch { return file; }        // unreadable image: send it as-is
-}
+/* Photos used to be shrunk to 1600px on the way in, which made a backup
+ * small but threw away the picture you actually took. They are kept as they
+ * came off the camera now, and backed up whole. */
 
 /* Android's WebView ignores downloads entirely unless the app installs a
  * DownloadListener — and it cannot handle blob: URLs even then. So hand the
@@ -419,6 +404,14 @@ const S = {
 };
 
 /* --------------------------------------------------------------- fragments */
+/* A drill: its own colour when DAC's drill list has been fetched, otherwise a
+   plain gem, so a bare code still looks like a drill rather than a blank. */
+const swatch = (c) => `
+  <button class="swatch" data-act="findcolour" data-k="${h(c.code)}"
+          aria-label="Find other kits with ${h(c.code)}${c.name ? ' ' + h(c.name) : ''}">
+    ${c.hex ? `<i style="background:${h(c.hex)}"></i>` : `<span class="gem sm plain"><i></i></span>`}
+    <span class="tnum">${h(c.code)}</span></button>`;
+
 const thumb = (p, cls = '') => {
   const src = p.cover ? `/covers/${encodeURIComponent(p.cover)}` : null;
   return `<div class="thumb ${cls}" style="background:${stVar(p.status)}">${
@@ -1328,13 +1321,9 @@ route(/^#\/p\/(\d+)$/, async (id) => {
         ${legend.colours && legend.colours.length ? `
         <div>
           <h3 class="label">Drill colours · ${legend.colours.length}</h3>
-          <div class="swatches">${legend.colours.map((c) => `
-            <button class="swatch" data-act="findcolour" data-k="${h(c.code)}"
-                    aria-label="Find other kits with ${h(c.code)}${c.name ? ' ' + h(c.name) : ''}">
-              <i style="background:${c.hex ? h(c.hex) : 'transparent'}"></i>
-              <span class="tnum">${h(c.code)}</span></button>`).join('')}</div>
-          <p style="margin:8px 2px 0;font-size:11px;line-height:1.45;color:var(--ink-mute)">
-            Tap a colour to find it in your other kits.</p>
+          <div class="swatches">${legend.colours.slice(0, 24).map(swatch).join('')}</div>
+          <button class="btn ghost wide" style="margin-top:10px" data-go="#/p/${p.id}/colours">
+            ${legend.colours.length > 24 ? `All ${legend.colours.length} drill colours` : 'The whole drill list'}</button>
         </div>` : ''}
 
         <div>
@@ -1389,11 +1378,10 @@ route(/^#\/p\/(\d+)$/, async (id) => {
       say();
       for (const f of files) {
         try {
-          const small = await downscale(f);
           await api(`/projects/${p.id}/photos`, {
             method: 'POST',
-            headers: { 'Content-Type': small.type || 'image/jpeg' },
-            body: isStandalone() ? await small.arrayBuffer() : small
+            headers: { 'Content-Type': f.type || 'image/jpeg' },
+            body: isStandalone() ? await f.arrayBuffer() : f
           });
         } catch { failed++; }
         done++;
@@ -1886,6 +1874,47 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
     cmHint(); recalc();
     toast('Filled from the catalogue');
   };
+});
+
+/* =================================================== #/p/:id/colours
+   One kit's whole drill list. DAC gives the codes, and its own drill list
+   gives the colours and names when a sync has fetched it; the rest is what
+   the codes themselves say and what your other kits hold. */
+route(/^#\/p\/(\d+)\/colours$/, async (id) => {
+  const [p, legend] = await Promise.all([api('/projects/' + id), api('/projects/' + id + '/legend')]);
+  const groups = [['plain', 'Standard'], ['ab', 'Aurora borealis'], ['special', 'Special finish']]
+    .map(([kind, label]) => [label, legend.colours.filter((c) => c.kind === kind)])
+    .filter(([, list]) => list.length);
+  const shared = legend.colours.filter((c) => c.others).length;
+  $out.innerHTML = `
+  <div class="screen reading">
+    <div class="topbar">${topbar('Drill colours', { back: '#/p/' + id, sub: true })}</div>
+    <div class="scroll pad" style="padding-bottom:26px">
+      <p style="margin:16px 2px 0;font-size:13px;color:var(--ink-mute)">
+        ${h(p.title)} — <span class="tnum">${num(legend.colours.length)}</span> drill colours${
+        legend.shape ? `, ${h(legend.shape)}` : ''}${p.drills ? `, ${p.drills_estimated ? '≈' : ''}${num(p.drills)} diamonds` : ''}.
+        ${legend.named ? '' : 'Diamond Art Club has not given this app its drill list yet, so the codes have no colours — the next sync fetches it.'}</p>
+      ${p.colors && p.colors !== legend.colours.length ? `
+      <p style="margin:8px 2px 0;font-size:12px;color:var(--ink-mute)">The listing says ${
+        num(p.colors)} colours; Diamond Art Club’s list has ${num(legend.colours.length)}.</p>` : ''}
+      ${groups.map(([label, list]) => `
+        <h3 class="label" style="margin:22px 2px 10px">${h(label)} · ${num(list.length)}</h3>
+        <div class="stack">${list.map((c) => `
+          <button class="drillrow" data-act="findcolour" data-k="${h(c.code)}">
+            ${c.hex ? `<i class="swatch-dot" style="background:${h(c.hex)}"></i>`
+                    : `<span class="gem plain"><i></i></span>`}
+            <span style="flex:1 1 auto;min-width:0;text-align:left">
+              <span class="drillcodeline tnum">${h(c.code)}</span>
+              ${c.name ? `<span class="drillsub">${h(c.name)}</span>` : ''}
+            </span>
+            ${c.others ? `<span class="drillshared tnum">in ${num(c.others)} more</span>` : ''}
+          </button>`).join('')}</div>`).join('')}
+      <p style="margin:18px 2px 0;font-size:11px;line-height:1.5;color:var(--ink-mute)">
+        Tap a colour to find your other kits that use it.${legend.at ? ` From Diamond Art Club, ${
+          dateText(legend.at.slice(0, 10))}.` : ''}
+        Diamond Art Club does not say how many drills of each colour a kit holds, so neither does this.</p>
+    </div>
+  </div>`;
 });
 
 /* ========================================================== #/colours
@@ -2692,6 +2721,8 @@ route(/^#\/settings$/, async () => {
         if (res.skipped) bits.push(`${res.skipped} unchanged`);
         bits.push(`${res.photos} photos`);
         if (res.photosFailed) bits.push(`${res.photosFailed} photos could not be read`);
+        if (res.ownCovers) bits.push(`${res.ownCovers} of your own covers`);
+        if (res.legends) bits.push(`${res.legends} colour lists`);
         bits.push(`${res.covers} covers fetched`);
         if (res.catalogueEmpty) bits.push('covers need the catalogue synced first');
         else if (res.coversMissing) bits.push(`${res.coversMissing} without a cover`);
@@ -2896,7 +2927,9 @@ route(/^#\/settings$/, async () => {
         <div id="backupbox"></div>
         <p style="margin:8px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
           Projects and progress photos, in one file. Lands in your <strong>Downloads</strong> folder as
-          <code>dazzle-diary-backup.json</code>. It is the only copy of your logbook that exists
+          <code>dazzle-diary-backup.json</code>. It holds the projects, your photos at full size, the
+          covers you set yourself, the sessions and progress, your settings and the drill colours.
+          Shop covers are fetched again on restore. It is the only copy of your logbook that exists
           anywhere else, so take one now and then.</p>
         ${isStandalone() ? `
         <label class="btn ghost wide" style="margin-top:10px">Restore from a backup file
@@ -3245,11 +3278,24 @@ async function handleClick(e) {
     const say = (t) => { if (box) box.innerHTML = `<p style="margin:10px 2px 0;font-size:12px;color:var(--ink-mute)">${h(t)}</p>`; };
     el.disabled = true;
     try {
+      /* Everything that cannot be downloaded again: the projects, the work
+         (sessions and progress), the photos as taken, the covers you chose
+         yourself, your settings and the drill colours borrowed from DAC.
+         Shop covers are left out and re-fetched on restore — they are the one
+         part a catalogue sync can rebuild exactly. */
       say('Collecting projects…');
       const projects = await api('/projects');
+      const b64 = async (blob) => {
+        const buf = new Uint8Array(await blob.arrayBuffer());
+        let bin = '';
+        for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+        return btoa(bin);
+      };
       const photos = [];
       const sessions = [];
       const progress = [];
+      const covers = [];
+      const seenCover = new Set();
       let n = 0;
       for (const p of projects) {
         const full = await api('/projects/' + p.id);
@@ -3257,24 +3303,32 @@ async function handleClick(e) {
         // when the work happened, which the current percentage cannot say
         for (const h of (full.progress_history || [])) progress.push({ ...h, project_id: p.id });
         for (const ph of (full.photos || [])) {
-          say(`Shrinking photo ${++n}…`);
+          say(`Copying photo ${++n}…`);
           const res = await fetch('/photos/' + encodeURIComponent(ph.file));
           if (!res.ok) continue;
-          const small = await downscale(new File([await res.blob()], ph.file, { type: 'image/jpeg' }));
-          const buf = new Uint8Array(await small.arrayBuffer());
-          let bin = '';
-          for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
-          photos.push({ ...ph, project_id: p.id, data: btoa(bin) });
+          photos.push({ ...ph, project_id: p.id, data: await b64(await res.blob()) });
+        }
+        // a cover you set from your own picture: nothing else has a copy
+        for (const file of [p.cover, ...(full.covers || [])]) {
+          if (!file || !/^own-/.test(file) || seenCover.has(file)) continue;
+          seenCover.add(file);
+          say(`Copying cover ${h(p.title)}…`);
+          const res = await fetch('/covers/' + encodeURIComponent(file));
+          if (res.ok) covers.push({ file, data: await b64(await res.blob()) });
         }
       }
-      const json = JSON.stringify({ version: 3, exportedAt: new Date().toISOString(),
-                                    projects, photos, sessions, progress });
+      say('Collecting settings and colours…');
+      const prefs = await api('/prefs').catch(() => null);
+      const legends = await api('/legends').catch(() => ({}));
+      const drills = await api('/drills').catch(() => ({}));
+      const json = JSON.stringify({ version: 4, exportedAt: new Date().toISOString(),
+                                    projects, photos, sessions, progress, covers, prefs, legends, drills });
       const blob = new Blob([json], { type: 'application/json' });
       say('Writing the file…');
       const where = await saveToPhone('dazzle-diary-backup.json', blob);
       say(`Saved to ${where} — ${projects.length} projects, ${photos.length} photos, ${
-        sessions.length} sessions, ${progress.length} progress entries, ${
-        (blob.size / 1048576).toFixed(1)} MB`);
+        covers.length} of your own covers, ${sessions.length} sessions, ${progress.length} progress entries, ${
+        Object.keys(legends || {}).length} colour lists, ${(blob.size / 1048576).toFixed(1)} MB`);
       toast('Backup saved');
     } catch (e) { say(e.message); }
     el.disabled = false;
