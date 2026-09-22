@@ -18,8 +18,10 @@ const ITEM = /<li\b[^>]*\btitle="([^"]*)"[^>]*>([\s\S]*?)<\/li>/gi;
 const SHADE = /--shade:\s*(#?[0-9a-fA-F]{3,6})/;
 const CODE = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,15}$/;
 
-const tidy = (s) => s.replace(/&amp;/g, '&').replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"')
-  .replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\s+/g, ' ').trim();
+/* The ampersand is unescaped LAST: "&amp;lt;" is the text "&lt;", and
+   unescaping the ampersand first would turn it into a "<". */
+const tidy = (s) => s.replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"').replace(/&nbsp;/g, ' ')
+  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
 
 const hexOf = (s) => {
   const m = SHADE.exec(s || '');

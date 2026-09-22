@@ -638,3 +638,9 @@ test('a colour with no swatch still counts, and a short hex is understood', () =
   const r = readPalette(PALETTE('DAC-4S', 'square', [['310', 'Black', '#000'], ['777', 'Unknown', 'none']]));
   assert.deepEqual(r.colours.map((c) => [c.code, c.hex]), [['310', '#000000'], ['777', null]]);
 });
+
+test('an ampersand in a colour name is unescaped once, not twice', () => {
+  const r = readPalette(PALETTE('DAC-5S', 'square', [['310', 'Black &amp; Blue', '#000000'],
+                                                     ['3865', 'Not &amp;lt;b&amp;gt;bold', '#FFFFFF']]));
+  assert.deepEqual(r.colours.map((c) => c.name), ['Black & Blue', 'Not &lt;b&gt;bold']);
+});
