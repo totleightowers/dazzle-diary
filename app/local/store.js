@@ -14,6 +14,7 @@ import { buildPreview } from '../core/import.js';
 import { parseHolds, applyStatus } from '../core/status.js';
 import { estimateDrills } from '../core/estimate.js';
 import { drillKind, byDrill } from '../core/drills.js';
+import { readPalette } from '../core/palette.js';
 import { DAC_STATUS, readSyncResult, cleanColour } from '../core/dacsync.js';
 
 export const PROXY = '/__net/?url=';
@@ -254,6 +255,65 @@ export async function backfillCovers(onProgress) {
     }
   }
   return done;
+}
+
+/* Drill colours, from the kit's own page.
+ *
+ * Diamond Art Club prints the whole colour list on every product page, for
+ * anyone — no account, no "already purchased" tick, and kits you have only
+ * wished for as well as the ones you own. That page is the better source: it
+ * carries DMC's name and the colour itself, not just the code, and it has
+ * lists for kits DAC's own logbook says it is still reviewing.
+ *
+ * The list lives in one section of the page, and Shopify will render that
+ * section on its own — about a tenth of the bytes. The section's name comes
+ * from the theme, so it is learnt from the first full page fetched and then
+ * used for the rest; a section that comes back without a colour list falls
+ * back to the whole page before the kit is given up on.
+ */
+export async function fetchPalettes(rows, onProgress) {
+  const legends = (await idb.get('meta', 'legends')) || {};
+  const known = (await idb.get('meta', 'drills')) || {};
+  let section = await idb.get('meta', 'dacSection');
+  let done = 0, found = 0, none = 0;
+
+  const page = async (handle, useSection) => {
+    const url = `https://www.diamondartclub.com/products/${encodeURIComponent(handle)}`
+      + (useSection ? `?section_id=${encodeURIComponent(useSection)}` : '');
+    const res = await fetch(via(url), { headers: { Accept: 'text/html' } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.text();
+  };
+
+  for (const row of rows) {
+    onProgress?.(done, row.title);
+    try {
+      let html = await page(row.handle, section);
+      let read = readPalette(html);
+      if (!read && section) {                 // the section was no use for this kit
+        html = await page(row.handle, null);
+        read = readPalette(html);
+      }
+      if (!section) {
+        const m = /data-palette-dialog="dac-palette-dialog-([^"]{1,200}?)-\d+"/.exec(html);
+        if (m) { section = m[1]; await idb.put('meta', section, 'dacSection'); }
+      }
+      if (read) {
+        const codes = read.colours.map(cleanColour).filter(Boolean);
+        if (codes.length) {
+          legends[row.variant] = { codes, at: nowIso(), shape: read.shape || null, from: 'page' };
+          for (const c of codes) if (c.hex) known[c.code] = { code: c.code, name: c.name, hex: c.hex };
+          found++;
+        }
+      } else none++;
+    } catch (e) { /* one kit's page failing is not the run failing */ }
+    done++;
+    onProgress?.(done, row.title);
+    await sleep(350);
+  }
+  await idb.put('meta', legends, 'legends');
+  await idb.put('meta', known, 'drills');
+  return { found, none, done };
 }
 
 /* -------------------------------------------------------------------- jobs */
@@ -1016,7 +1076,8 @@ export async function localApi(path, opts = {}) {
     const colours = mine.codes.slice().sort(byDrill).map((c) => {
       const k = known[c.code] || {};
       return { code: c.code, name: c.name || k.name || null, hex: c.hex || k.hex || null,
-               kind: drillKind(c.code), others: shared.get(c.code) || 0 };
+               finish: c.finish || null, kind: drillKind(c.code, c.finish),
+               others: shared.get(c.code) || 0 };
     });
     return { variant: v, colours, at: mine.at, shape: mine.shape || null,
              named: colours.filter((c) => c.hex).length };
@@ -1630,6 +1691,43 @@ export async function localApi(path, opts = {}) {
   /* Every DAC kit you own, with what it takes to open its product page. A wish
      list kit is not bought, so it is never marked as purchased. A kit the
      catalogue cannot link to a DAC listing is listed as missing instead. */
+  /* Drill colours from the kits' own pages: no sign-in, and kits you have
+     only wished for count too, since the page does not care who is asking. */
+  if (p === '/dac/palettes') {
+    await catalogue();
+    const legends = (await idb.get('meta', 'legends')) || {};
+    const kits = [], missing = [], seen = new Set();
+    for (const r of await projects()) {
+      if ((r.shop || 'dac') !== 'dac' || !r.dac_handle) continue;
+      const c = cache.rows.find(x => x.shop === 'dac' && x.handle === r.dac_handle);
+      if (!c || !c.variant_id) { missing.push(r.title); continue; }
+      if (seen.has(c.variant_id)) continue;      // two of a kit share one list
+      seen.add(c.variant_id);
+      kits.push({ variant: c.variant_id, handle: c.handle, title: r.title,
+                  have: (legends[c.variant_id] || {}).from === 'page' });
+    }
+    const want = kits.filter(k => !k.have);
+    const live = [...jobs.values()].find(j => j.kind === 'palettes' && j.state === 'running');
+    if (m === 'GET') return { total: kits.length, have: kits.length - want.length,
+                              candidates: want.length, missing: missing.length,
+                              running: live ? live.id : null };
+    if (m !== 'POST') throw Object.assign(new Error('Not found'), { status: 404 });
+    if (live) return { job: live.id };
+    /* Everything again, if you ask for it after they are all here — DAC edits
+       a list now and then, and a kit whose page had none may have one now. */
+    const rows = want.length ? want : kits;
+    const job = newJob('palettes-' + Date.now());
+    job.kind = 'palettes';
+    job.total = rows.length;
+    (async () => {
+      try {
+        job.result = await fetchPalettes(rows, (n, title) => { job.done = n; job.message = title || ''; });
+        job.state = 'done';
+      } catch (e) { job.error = e.message; job.state = 'error'; }
+    })();
+    return { job: job.id };
+  }
+
   if (p === '/dac/kits' && m === 'GET') {
     await catalogue();
     const kits = [], missing = [], seen = new Set();

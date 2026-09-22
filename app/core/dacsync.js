@@ -230,7 +230,13 @@ export function cleanColour(c) {
   if (!CODE.test(code)) return null;
   const hex = String(raw.hex ?? '').trim();
   const name = String(raw.name ?? '').trim().slice(0, 60);
-  return { code, name: name || null, hex: HEX.test(hex) ? (hex.startsWith('#') ? hex : '#' + hex).toLowerCase() : null };
+  /* What DAC calls the drill when it is not a standard one: "Aurora Borealis",
+     "Fairy Dust", "Iridescent", "Glow in the Dark". Its own words, kept. */
+  const finish = String(raw.finish ?? '').replace(/<[^>]*>/g, ' ')
+    .replace(/[^A-Za-z0-9 '&()-]/g, '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  return { code, name: name || null,
+           hex: HEX.test(hex) ? (hex.startsWith('#') ? hex : '#' + hex).toLowerCase() : null,
+           finish: finish || null };
 }
 
 /* DAC's drill list comes back as its own shape, and has changed before. Any

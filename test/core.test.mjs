@@ -584,3 +584,57 @@ test('the shell is allowed to reach every shop the app knows about', () => {
                            .map(s => `${s.name} (${s.domain})`);
   assert.deepEqual(unreachable, [], 'these shops cannot be reached from the app at all');
 });
+
+/* ------------------------------------------------- a kit's colours */
+
+import { readPalette } from '../app/core/palette.js';
+
+const PALETTE = (sku, shape, items, extra = '') => `
+  <dac-pdp-palette class="dac-pdp-palette"><details class="palette" data-shape="${shape}" data-palette-sku="${sku}">
+    <summary data-palette-dialog="dac-palette-dialog-template--999__abc-123-47423217107137">
+      <span class="summary-meta">${items.length} colors · ${shape} diamonds</span></summary>
+    <div class="palette-body">
+      <div class="group-header"><h3>Specialty diamonds</h3></div>
+      <ul class="special-grid">${items.filter((i) => i[3]).map((i) => `
+        <li title="${i[0]} · ${i[1]} · ${i[3]}"><span class="swatch" style="--shade:${i[2]}"></span>
+          <span><b>${i[0]}</b><small>${i[3]}</small></span></li>`).join('')}</ul>
+      <ul class="color-grid">${items.filter((i) => !i[3]).map((i) => `
+        <li title="${i[0]} · ${i[1]}"><span class="swatch" style="--shade:${i[2]}"></span><span>${i[0]}</span></li>`).join('')}</ul>
+      <div class="palette-foot">DMC codes</div>
+    </div></details>${extra}</dac-pdp-palette>`;
+
+test('a kit’s colours are read off its own page, codes, names and all', () => {
+  const r = readPalette('<html>' + PALETTE('DAC-6750S-DTC', 'square', [
+    ['310', 'Black', '#000000'], ['3865', 'Winter White', '#FBFBF9'],
+    ['105', 'Tan', '#CB9051', 'Aurora Borealis']]) + '</html>');
+  assert.equal(r.sku, 'DAC-6750S-DTC');
+  assert.equal(r.shape, 'square');
+  assert.deepEqual(r.colours, [
+    { code: '105', name: 'Tan', hex: '#cb9051', finish: 'Aurora Borealis' },
+    { code: '310', name: 'Black', hex: '#000000', finish: null },
+    { code: '3865', name: 'Winter White', hex: '#fbfbf9', finish: null }]);
+});
+
+test('the same list printed twice on a page is not read twice', () => {
+  const items = [['310', 'Black', '#000000'], ['823', 'Navy Blue Dark', '#1B2853']];
+  const dialog = `<dialog class="dac-palette-dialog"><div class="palette-body"><ul class="color-grid">${
+    items.map((i) => `<li title="${i[0]} · ${i[1]}"><span class="swatch" style="--shade:${i[2]}"></span></li>`).join('')
+  }</ul><div class="palette-foot"></div></div></dialog>`;
+  const r = readPalette(PALETTE('DAC-1S', 'round', items, dialog));
+  assert.deepEqual(r.colours.map((c) => c.code), ['310', '823']);
+});
+
+test('a page with no colour list gives nothing, rather than half a legend', () => {
+  assert.equal(readPalette('<html><body>Coasters</body></html>'), null);
+  assert.equal(readPalette(''), null);
+  assert.equal(readPalette(null), null);
+  // a list of nothing is not a list
+  assert.equal(readPalette(PALETTE('DAC-2S', 'square', [])), null);
+  // and neither is one of rubbish
+  assert.equal(readPalette(PALETTE('DAC-3S', 'square', [['<script>alert(1)</script>', 'x', '#fff']])), null);
+});
+
+test('a colour with no swatch still counts, and a short hex is understood', () => {
+  const r = readPalette(PALETTE('DAC-4S', 'square', [['310', 'Black', '#000'], ['777', 'Unknown', 'none']]));
+  assert.deepEqual(r.colours.map((c) => [c.code, c.hex]), [['310', '#000000'], ['777', null]]);
+});
