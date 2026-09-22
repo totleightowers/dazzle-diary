@@ -1074,7 +1074,8 @@ test('everything the app keeps is either in the backup or rebuilt by a sync', ()
     synced: 'when each shop was last synced; the next sync says so again',
     timer: 'a session running right now, on this phone',
     dacTrial: 'whether the first DAC run has happened, for this phone',
-    sessionsMigrated: 'a one-off migration flag'
+    sessionsMigrated: 'a one-off migration flag',
+    dacSection: 'the name of the bit of a DAC page that holds the colours; learnt again on the next fetch'
   };
   const CARRIED = { prefs: /prefs/, legends: /legends/, drills: /drills/ };
   for (const k of new Set(keys))
@@ -1142,7 +1143,7 @@ test('restoring brings back your own cover, your settings and your colour lists'
   assert.equal(back.cover, 'own-9-1-1.jpg', 'the restored project lost the cover you chose');
   assert.equal((await m.api('/prefs')).currency, 'EUR', 'your settings did not come back');
   assert.deepEqual((await m.api('/legends'))['77'].codes.map((c) => c.code), ['310']);
-  assert.deepEqual((await m.api('/drills'))['310'], { code: '310', name: 'Black', hex: '#000000' },
+  assert.deepEqual((await m.api('/drills'))['310'], { code: '310', name: 'Black', hex: '#000000', finish: null },
                    'DAC\'s drill list did not come back');
 
   // a colour list already here is not replaced by an older one from a backup
@@ -2193,6 +2194,85 @@ test('a project shows its legend, and the stash can be searched by drill', async
   assert.equal((await m.api('/colours?q=black')).results[0].title, 'Moon Eater',
                'searching by colour name finds nothing');
   assert.equal((await m.api('/colours?q=999')).results.length, 0);
+});
+
+/* DAC prints every kit's colours on its own page, for anyone. That is a
+   better source than an account: it names each colour, and it answers for kits
+   you have only wished for. */
+const PAGE = (sku, shape, items) => `<html><body>
+  <dac-pdp-palette class="dac-pdp-palette"><details class="palette" data-shape="${shape}" data-palette-sku="${sku}">
+    <summary data-palette-dialog="dac-palette-dialog-template--777__theme-bits-47423217107137"></summary>
+    <div class="palette-body"><ul class="color-grid">${items.map(([code, name, hex]) => `
+      <li title="${code} · ${name}"><span class="swatch" style="--shade:${hex}"></span><span>${code}</span></li>`).join('')}
+    </ul><div class="palette-foot"></div></div></details></dac-pdp-palette></body></html>`;
+
+test('drill colours come from the kits’ own pages, with no account and no ticking', async () => {
+  const kits = [
+    { ...DAC_KIT(1, 101, 'Moon Eater'), specHtml: PAGE('DAC-101S', 'square',
+        [['310', 'Black', '#000000'], ['3865', 'Winter White', '#FBFBF9']]) },
+    { ...DAC_KIT(2, 202, 'Wild Bloom'), specHtml: PAGE('DAC-202S', 'round', [['823', 'Navy Blue Dark', '#1B2853']]) },
+    { ...DAC_KIT(3, 303, 'Coasters'), specHtml: '<html><body>no list here</body></html>' }];
+  const m = await mount({ products: kits });
+  await m.sync();
+  await emptyLogbook(m);
+  await idbDirect.del('meta', 'legends');
+  await idbDirect.del('meta', 'drills');
+  await idbDirect.del('meta', 'dacSection');
+  const add = (title, handle, status) => m.api('/projects', { method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title, shop: 'dac', dac_handle: handle, status }) });
+  const moon = await add('Moon Eater', 'moon-eater', 'started');
+  await add('Wild Bloom', 'wild-bloom', 'wishlist');      // never bought, still has colours
+  await add('Coasters', 'coasters', 'received');
+
+  const before = await m.api('/dac/palettes');
+  assert.equal(before.total, 3, 'a kit you only wished for was left out');
+  assert.equal(before.have, 0);
+
+  const { job } = await m.api('/dac/palettes', { method: 'POST' });
+  await m.until(async () => (await m.api('/jobs/' + job)).state !== 'running', 8000);
+  const done = await m.api('/jobs/' + job);
+  assert.equal(done.state, 'done', done.error || '');
+  assert.deepEqual(done.result, { found: 2, none: 1, done: 3 });
+
+  // nothing was signed into, and nothing was ticked
+  assert.equal(m.dacScripts.length, 0, 'it went through a DAC account after all');
+  assert.ok(m.net.some((u) => /section_id=template--777__theme-bits/.test(u)),
+            'the second page was fetched whole rather than just the colours');
+
+  const legend = await m.api('/projects/' + moon.id + '/legend');
+  assert.deepEqual(legend.colours.map((c) => [c.code, c.name, c.hex]),
+                   [['310', 'Black', '#000000'], ['3865', 'Winter White', '#fbfbf9']]);
+  assert.equal(legend.shape, 'square');
+
+  const wish = (await m.api('/projects')).find((x) => x.title === 'Wild Bloom');
+  assert.equal((await m.api('/projects/' + wish.id + '/legend')).colours.length, 1,
+               'a wish-list kit did not get its colours');
+
+  const after = await m.api('/dac/palettes');
+  assert.equal(after.have, 2, 'the kits with colours were not counted');
+  assert.equal(after.candidates, 1, 'a kit whose page has no list is asked about again next time');
+
+  await idbDirect.del('meta', 'legends');
+  await idbDirect.del('meta', 'drills');
+});
+
+test('Settings fetches the colours without a DAC account, and shows how far it got', async () => {
+  const kits = [{ ...DAC_KIT(4, 404, 'Sif'), specHtml: PAGE('DAC-404S', 'square', [['310', 'Black', '#000000']]) }];
+  const m = await mount({ products: kits });
+  await m.sync();
+  await emptyLogbook(m);
+  await idbDirect.del('meta', 'legends');
+  await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: 'Sif', shop: 'dac', dac_handle: 'sif', status: 'received' }) });
+
+  await m.go('#/settings');
+  await m.tap('[data-act="getpalettes"]');
+  await m.until(async () => (await m.api('/dac/palettes')).have === 1, 8000);
+  assert.equal((await m.api('/colours')).legends, 1, 'the colours never reached the logbook');
+  assert.equal(m.dacScripts.length, 0, 'Settings signed into DAC to do it');
+  await idbDirect.del('meta', 'legends');
+  await idbDirect.del('meta', 'drills');
 });
 
 test('a kit shows its whole drill list, with DAC\'s colours and what your other kits share', async () => {
