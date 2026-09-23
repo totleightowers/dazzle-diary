@@ -2199,12 +2199,14 @@ test('a project shows its legend, and the stash can be searched by drill', async
 /* DAC prints every kit's colours on its own page, for anyone. That is a
    better source than an account: it names each colour, and it answers for kits
    you have only wished for. */
-const PAGE = (sku, shape, items) => `<html><body>
+const PAGE = (sku, shape, items, section = 'template--777__theme-bits') => `<html><body>
+  <div id="shopify-section-template--777__header" class="shopify-section"></div>
+  <div id="shopify-section-${section}" class="shopify-section">
   <dac-pdp-palette class="dac-pdp-palette"><details class="palette" data-shape="${shape}" data-palette-sku="${sku}">
     <summary data-palette-dialog="dac-palette-dialog-template--777__theme-bits-47423217107137"></summary>
     <div class="palette-body"><ul class="color-grid">${items.map(([code, name, hex]) => `
       <li title="${code} · ${name}"><span class="swatch" style="--shade:${hex}"></span><span>${code}</span></li>`).join('')}
-    </ul><div class="palette-foot"></div></div></details></dac-pdp-palette></body></html>`;
+    </ul><div class="palette-foot"></div></div></details></dac-pdp-palette></div></body></html>`;
 
 test('drill colours come from the kits’ own pages, with no account and no ticking', async () => {
   const kits = [
@@ -2233,7 +2235,7 @@ test('drill colours come from the kits’ own pages, with no account and no tick
   await m.until(async () => (await m.api('/jobs/' + job)).state !== 'running', 8000);
   const done = await m.api('/jobs/' + job);
   assert.equal(done.state, 'done', done.error || '');
-  assert.deepEqual(done.result, { found: 2, none: 1, done: 3 });
+  assert.deepEqual(done.result, { found: 2, none: 1, failed: 0, done: 3 });
 
   // nothing was signed into, and nothing was ticked
   assert.equal(m.dacScripts.length, 0, 'it went through a DAC account after all');
@@ -2255,6 +2257,54 @@ test('drill colours come from the kits’ own pages, with no account and no tick
 
   await idbDirect.del('meta', 'legends');
   await idbDirect.del('meta', 'drills');
+});
+
+/* DAC renames the section that holds the colours whenever it publishes a new
+   theme. A saved name then 404s for every kit; it has to be noticed and learnt
+   again, not quietly turn a whole run into nothing. */
+test('a section name gone stale after a new DAC theme is learnt again, not fatal', async () => {
+  const NEW = 'template--999__new-theme';
+  const kits = [1, 2, 3].map((i) => ({ ...DAC_KIT(10 + i, 510 + i, 'Kit ' + i), section: NEW,
+    specHtml: PAGE('DAC-' + (510 + i) + 'S', 'square', [['310', 'Black', '#000000']], NEW) }));
+  const m = await mount({ products: kits });
+  await m.sync();
+  await emptyLogbook(m);
+  await idbDirect.del('meta', 'legends');
+  await idbDirect.put('meta', 'template--111__old-theme', 'dacSection');   // learnt before the change
+  for (const k of kits)
+    await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: k.title, shop: 'dac', dac_handle: k.handle, status: 'received' }) });
+
+  const { job } = await m.api('/dac/palettes', { method: 'POST' });
+  await m.until(async () => (await m.api('/jobs/' + job)).state !== 'running', 8000);
+  const r = (await m.api('/jobs/' + job)).result;
+  assert.deepEqual(r, { found: 3, none: 0, failed: 0, done: 3 }, 'a stale section name lost the run');
+  assert.equal(await idbDirect.get('meta', 'dacSection'), NEW, 'the new section name was not learnt');
+  const asked = m.net.filter((u) => /section_id=/.test(u));
+  assert.equal(asked.filter((u) => u.includes('old-theme')).length, 1,
+               'the stale section was asked for again after it 404ed');
+  assert.ok(asked.some((u) => u.includes(NEW)), 'the kits after the first did not use the new section');
+  assert.ok(m.net.some((u) => /variant=511/.test(u)), 'the kit’s own variant was not asked for');
+  await idbDirect.del('meta', 'legends');
+  await idbDirect.del('meta', 'drills');
+  await idbDirect.del('meta', 'dacSection');
+});
+
+test('a colour list for a different variant than yours is not kept', async () => {
+  const kits = [{ ...DAC_KIT(20, 620, 'Two Sizes'),
+                  specHtml: PAGE('DAC-SOMETHING-ELSE', 'square', [['310', 'Black', '#000000']]) }];
+  const m = await mount({ products: kits });
+  await m.sync();
+  await emptyLogbook(m);
+  await idbDirect.del('meta', 'legends');
+  await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: 'Two Sizes', shop: 'dac', dac_handle: 'two-sizes', status: 'received' }) });
+  const { job } = await m.api('/dac/palettes', { method: 'POST' });
+  await m.until(async () => (await m.api('/jobs/' + job)).state !== 'running', 8000);
+  assert.equal((await m.api('/jobs/' + job)).result.found, 0, 'another variant’s colours were kept');
+  assert.equal((await m.api('/dac/palettes')).have, 0);
+  await idbDirect.del('meta', 'legends');
+  await idbDirect.del('meta', 'dacSection');
 });
 
 test('Settings fetches the colours without a DAC account, and shows how far it got', async () => {

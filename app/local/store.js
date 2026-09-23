@@ -14,7 +14,7 @@ import { buildPreview } from '../core/import.js';
 import { parseHolds, applyStatus } from '../core/status.js';
 import { estimateDrills } from '../core/estimate.js';
 import { drillKind, byDrill } from '../core/drills.js';
-import { readPalette } from '../core/palette.js';
+import { readPalette, paletteSection } from '../core/palette.js';
 import { colourStats, distinctDrills } from '../core/colourstats.js';
 import { DAC_STATUS, readSyncResult, cleanColour } from '../core/dacsync.js';
 
@@ -276,45 +276,63 @@ export async function fetchPalettes(rows, onProgress) {
   const legends = (await idb.get('meta', 'legends')) || {};
   const known = (await idb.get('meta', 'drills')) || {};
   let section = await idb.get('meta', 'dacSection');
-  let done = 0, found = 0, none = 0;
+  let done = 0, found = 0, none = 0, failed = 0;
 
-  const page = async (handle, useSection) => {
-    const url = `https://www.diamondartclub.com/products/${encodeURIComponent(handle)}`
-      + (useSection ? `?section_id=${encodeURIComponent(useSection)}` : '');
+  /* Always asked for the kit's own variant, so a listing sold in several
+     sizes shows the colours of the one you have rather than whichever the
+     page happens to open on. */
+  const page = async (row, useSection) => {
+    const qs = new URLSearchParams();
+    if (row.variant) qs.set('variant', String(row.variant));
+    if (useSection) qs.set('section_id', useSection);
+    const url = `https://www.diamondartclub.com/products/${encodeURIComponent(row.handle)}`
+      + (qs.toString() ? '?' + qs : '');
     const res = await fetch(via(url), { headers: { Accept: 'text/html' } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
     return res.text();
   };
+  /* The page names the SKU its list belongs to. One that is not this kit's is
+     another variant's colours, and is worse than none. */
+  const mine = (row, read) => !read.sku || !row.sku
+    || String(read.sku).toUpperCase() === String(row.sku).toUpperCase();
 
   for (const row of rows) {
     onProgress?.(done, row.title);
     try {
-      let html = await page(row.handle, section);
-      let read = readPalette(html);
-      if (!read && section) {                 // the section was no use for this kit
-        html = await page(row.handle, null);
+      let read = null;
+      if (section) {
+        try { read = readPalette(await page(row, section)); }
+        catch (e) {
+          /* A section that is not there any more means DAC published a new
+             theme and renamed it — so it is forgotten, and learnt again from
+             the next whole page, rather than every kit after it failing. */
+          if (e.status === 404) { section = null; await idb.del('meta', 'dacSection'); }
+          else throw e;
+        }
+      }
+      if (!read) {
+        // the whole page: slower, but it needs no section name at all
+        const html = await page(row, null);
         read = readPalette(html);
+        const learnt = paletteSection(html);
+        if (learnt && learnt !== section) { section = learnt; await idb.put('meta', section, 'dacSection'); }
       }
-      if (!section) {
-        const m = /data-palette-dialog="dac-palette-dialog-([^"]{1,200}?)-\d+"/.exec(html);
-        if (m) { section = m[1]; await idb.put('meta', section, 'dacSection'); }
-      }
-      if (read) {
+      if (read && mine(row, read)) {
         const codes = read.colours.map(cleanColour).filter(Boolean);
         if (codes.length) {
           legends[row.variant] = { codes, at: nowIso(), shape: read.shape || null, from: 'page' };
           for (const c of codes) if (c.hex) known[c.code] = { code: c.code, name: c.name, hex: c.hex };
           found++;
-        }
+        } else none++;
       } else none++;
-    } catch (e) { /* one kit's page failing is not the run failing */ }
+    } catch (e) { failed++; }   // one kit's page failing is not the run failing
     done++;
     onProgress?.(done, row.title);
     await sleep(350);
   }
   await idb.put('meta', legends, 'legends');
   await idb.put('meta', known, 'drills');
-  return { found, none, done };
+  return { found, none, failed, done };
 }
 
 /* -------------------------------------------------------------------- jobs */
@@ -1773,7 +1791,7 @@ export async function localApi(path, opts = {}) {
       if (!c || !c.variant_id) { missing.push(r.title); continue; }
       if (seen.has(c.variant_id)) continue;      // two of a kit share one list
       seen.add(c.variant_id);
-      kits.push({ variant: c.variant_id, handle: c.handle, title: r.title,
+      kits.push({ variant: c.variant_id, handle: c.handle, sku: c.sku || null, title: r.title,
                   have: (legends[c.variant_id] || {}).from === 'page' });
     }
     const want = kits.filter(k => !k.have);

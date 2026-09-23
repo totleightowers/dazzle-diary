@@ -82,3 +82,20 @@ export function readPalette(html) {
   if (!colours.length) return null;
   return { sku: sku ? sku[1] : null, shape: shape ? shape[1] : null, colours };
 }
+
+/* The name of the section of the page that holds the colour list, so the
+   next kit can be asked for just that section — about a tenth of the page.
+   Shopify names sections after the theme ("template--25650457411777__60c6…"),
+   and DAC publishing a new theme changes the number, so it is read off a real
+   page rather than written down anywhere: the section whose wrapper comes
+   last before the palette is the one it sits in. */
+export function paletteSection(html) {
+  const page = String(html || '');
+  const at = page.indexOf('data-palette-sku');
+  if (at < 0) return null;
+  let found = null;
+  const wrapper = /id="shopify-section-(template--\d+__[\w-]{1,120})"/g;
+  let m;
+  while ((m = wrapper.exec(page)) && m.index < at) found = m[1];
+  return found;
+}
