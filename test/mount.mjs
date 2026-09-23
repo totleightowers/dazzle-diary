@@ -158,6 +158,11 @@ export async function mount({ width = 390, products = null, catalogue = true, sh
     if (productPage) {
       const p = feed.find((x) => x.handle === decodeURIComponent(productPage[1]));
       if (!p) return { ok: false, status: 404 };
+      /* A shop answers ?section_id= only for a section its current theme has.
+         A product that names its section 404s any other, the way DAC did the
+         day it published a new theme and every saved section name went stale. */
+      const wanted = url.searchParams.get('section_id');
+      if (wanted && p.section && wanted !== p.section) return { ok: false, status: 404 };
       return { ok: true, status: 200, text: async () => p.specHtml || '<html></html>' };
     }
     /* One product, the way a Shopify shop answers for it. The app falls back to
