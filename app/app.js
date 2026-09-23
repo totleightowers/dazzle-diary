@@ -1,4 +1,5 @@
 import { api, isStandalone } from './api.js';
+import { FAMILY_SWATCH } from './core/colourstats.js';
 import { statusFromDates, applyStatus, parseHolds, openHold, heldDays,
          ALL_STATUSES } from './core/status.js';
 import { productUrl, shopById, displayCurrency, SHOPS, CURRENCIES } from './core/shops.js';
@@ -2601,6 +2602,78 @@ route(/^#\/summary$/, async () => {
     </div>` : '';
   };
 
+  /* A drill on this page: its colour when it is known, a plain gem when not,
+     and a tap takes you to every kit that holds it. */
+  const drillDot = (c) => c.hex
+    ? `<i class="swatch-dot" style="background:${h(c.hex)}"></i>`
+    : `<span class="gem sm plain"><i></i></span>`;
+  const drillRow = (c, right) => `
+    <button class="row sumdrill" data-act="findcolour" data-k="${h(c.code)}" style="width:100%;text-align:left">
+      ${drillDot(c)}
+      <span class="k" style="flex:1 1 auto;min-width:0;display:block;color:var(--ink)">
+        <span class="tnum" style="font-weight:700">${h(c.code)}</span>${c.finish ? `
+        <span style="font-size:11px;color:var(--ink-mute)"> · ${h(c.finish)}</span>` : ''}
+        ${c.name ? `<span style="display:block;margin-top:2px;font-size:12px;color:var(--ink-mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${h(c.name)}</span>` : ''}
+      </span>
+      <span class="v tnum" style="white-space:nowrap;font-size:12px;color:var(--ink-mid)">${right}</span>
+    </button>`;
+
+  const C = s.colours;
+  const colourSection = !C ? '' : `
+    <div>
+      <h3 class="label">Colours</h3>
+      ${tiles(
+        tile(C.distinct, num(C.distinct), `different drills across ${SUMMARY.year ? 'what you bought' : 'your stash'}`),
+        tile(C.placed, num(C.placed), 'different drills in what you have finished', 'var(--st-completed)'),
+        tile(C.oneOffs.count, num(C.oneOffs.count), `drill${C.oneOffs.count === 1 ? '' : 's'} only one kit uses`)
+      )}
+      ${C.families.length ? `
+      <div class="panel pad-in famcard" style="margin-top:10px">
+        <div style="font-size:13px;color:var(--ink)">Your drills lean towards
+          <b>${h(C.families[0].family)}</b>
+          <span class="tnum" style="color:var(--ink-mute)"> · ${C.families[0].share}%</span></div>
+        <div class="fambar">${C.families.map((f) =>
+          `<i style="flex:${f.n} 1 0;background:${FAMILY_SWATCH[f.family]}" title="${h(f.family)} ${f.share}%"></i>`).join('')}</div>
+        <div class="famkey">${C.families.slice(0, 6).map((f) => `
+          <span><i style="background:${FAMILY_SWATCH[f.family]}"></i>${h(f.family)}
+            <span class="tnum">${Math.round(f.share)}%</span></span>`).join('')}</div>
+      </div>` : ''}
+      ${C.common.length ? `
+      <p class="sumsub">Your staples — the drills in the most kits</p>
+      <div class="panel pad-in">${C.common.map((c) => drillRow(c, `in ${num(c.kits)} kits`)).join('')}</div>` : ''}
+      ${C.oneOffs.sample.length ? `
+      <p class="sumsub">One-offs — drills only one kit uses${C.oneOffs.count > C.oneOffs.sample.length
+        ? ` · ${num(C.oneOffs.sample.length)} of ${num(C.oneOffs.count)}` : ''}</p>
+      <div class="panel pad-in">${C.oneOffs.sample.map((c) => drillRow(c,
+        `<span style="display:inline-block;max-width:9.5em;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom">${h(c.kit.title)}</span>`)).join('')}</div>` : ''}
+      <div class="panel pad-in" style="margin-top:10px">
+        ${pair('Colours', 'Most colours', C.mostColours, 'Fewest colours', C.fewestColours, (v) => num(v) + ' colours')}
+        ${rec('Most specialty diamonds', C.mostSpecial, (v) => num(v))}
+        ${rec('Most one-off drills', C.mostOneOffs, (v) => num(v))}
+        ${pair('Palette', 'Brightest palette', C.brightest, 'Darkest palette', C.darkest, (v) => v + '% light')}
+        ${C.twins ? `
+        <button class="row" data-go="#/p/${C.twins.a.id}" style="width:100%;text-align:left">
+          <span class="k" style="color:var(--ink-mute);flex:1 1 auto;min-width:0;display:block">
+            <span style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:.04em">Palette twins</span>
+            <span style="display:block;color:var(--ink);font-size:14px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${h(C.twins.a.title)}</span>
+            <span style="display:block;color:var(--ink);font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">&amp; ${h(C.twins.b.title)}</span>
+          </span>
+          <span class="v tnum" style="white-space:nowrap;font-weight:700">${num(C.twins.shared)} shared</span>
+        </button>` : ''}
+      </div>
+      ${C.finishes.length ? `
+      <p class="sumsub">Specialty diamonds</p>
+      <div class="finchips">${C.finishes.map((f) => `<span class="finchip">${h(f.finish)}
+        <b class="tnum">${num(f.n)}</b></span>`).join('')}</div>` : ''}
+      <p style="margin:8px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
+        From the colour lists of ${num(C.kits)} of your ${num(C.of)} kit${C.of === 1 ? '' : 's'}.
+        Palette twins are the two kits that share the most drills — each other’s best source of spares.
+        Light is the average of each drill’s colour, from black at 0 to white at 100.</p>
+    </div>`;
+
+  const WEEKDAYS = ['Sundays', 'Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays'];
+  const F = s.favourites;
+
   const chip = (label, on, act, k) =>
     `<button class="chip" style="height:36px;padding:0 12px" data-act="${act}"${
       k == null ? '' : ` data-k="${h(k)}"`} aria-pressed="${on}">${h(label)}</button>`;
@@ -2662,6 +2735,8 @@ route(/^#\/summary$/, async () => {
       ], `Across everything you own. Best value is what a canvas cost per thousand diamonds \u2014 the only fair way to hold a small dear kit against a big cheap one.${
         s.currencies > 1 ? ` Dearest and best value are ranked among the kits you paid for in ${h(s.mainCurrency)}: without exchange rates, holding those against a price in another currency would be a guess.` : ''}`)}
 
+      ${colourSection}
+
       ${section('What you have finished', [
         pair('Canvas', 'Biggest', r.biggestFinished, 'Smallest', r.smallestFinished, (_v, x) => sizeOf(x)),
         pair('Diamonds', 'Most diamonds', r.mostDiamondsFinished, 'Fewest diamonds', r.fewestDiamondsFinished, (v) => bigNum(v)),
@@ -2681,16 +2756,34 @@ route(/^#\/summary$/, async () => {
         rec('Longest put down', r.longestHeld, spanText)
       ], 'Hours come from the sessions you logged, so a hold cannot change them \u2014 nothing is logged while a canvas is put down.')}
 
-      ${(s.favourites.artist || s.favourites.shop) ? `<div>
+      ${section('Waiting', [
+        pair('Delivery', 'Quickest delivery', r.quickestDelivery, 'Slowest delivery', r.slowestDelivery, spanText),
+        pair('Arrived to started', 'Started soonest after it arrived', r.quickestStart,
+             'Waited longest to be started', r.longestWaitToStart, spanText),
+        rec('Longest still unstarted', r.longestUnstarted, spanText)
+      ], 'Delivery is from ordering to arriving. The wait to be started ends the day you started, so it counts in that month; the kit still waiting is about today, so it only shows for all time.')}
+
+      ${(F.artist || F.shop || F.busiestMonth || F.weekday) ? `<div>
         <h3 class="label">Most of all</h3>
         <div class="panel pad-in">
-          ${s.favourites.artist ? `<div class="row"><span class="k">Artist</span>
-            <span class="v">${h(s.favourites.artist[0])} <span class="tnum" style="color:var(--ink-mute)">\u00d7${s.favourites.artist[1]}</span></span></div>` : ''}
+          ${(F.artists || []).length ? `<div class="row" style="align-items:flex-start"><span class="k">${
+            F.artists.length > 1 ? 'Artists' : 'Artist'}${F.artistCount > 1 ? `<span style="display:block;font-size:11px;color:var(--ink-mute)" class="tnum">${num(F.artistCount)} in all</span>` : ''}</span>
+            <span class="v" style="text-align:right">${F.artists.map(([name, n]) =>
+              `<span style="display:block">${h(name)} <span class="tnum" style="color:var(--ink-mute)">\u00d7${n}</span></span>`).join('')}</span></div>` : ''}
           ${s.favourites.shop ? `<div class="row"><span class="k">Shop</span>
             <span class="v" style="display:flex;align-items:center;gap:7px">
               <span class="pip" data-shop="${h(s.favourites.shop[0])}"></span>
               ${h((shopById(s.favourites.shop[0]) || {}).name || s.favourites.shop[0])}
               <span class="tnum" style="color:var(--ink-mute)">\u00d7${s.favourites.shop[1]}</span></span></div>` : ''}
+          ${(F.shapes && (F.shapes.square || F.shapes.round)) ? `<div class="row"><span class="k">Drill shape</span>
+            <span class="v tnum">${[['square', 'Square'], ['round', 'Round']].filter(([k]) => F.shapes[k])
+              .map(([k, label]) => `${label} <span style="color:var(--ink-mute)">\u00d7${F.shapes[k]}</span>`).join(' \u00b7 ')}</span></div>` : ''}
+          ${F.busiestMonth ? `<div class="row"><span class="k">Busiest month</span>
+            <span class="v">${h(MONTHS[Number(F.busiestMonth.month.slice(5, 7)) - 1])} ${h(F.busiestMonth.month.slice(0, 4))}
+              <span class="tnum" style="color:var(--ink-mute)"> \u00b7 ${hoursText(F.busiestMonth.hours)}</span></span></div>` : ''}
+          ${F.weekday ? `<div class="row"><span class="k">Favourite day</span>
+            <span class="v">${h(WEEKDAYS[F.weekday.day])}
+              <span class="tnum" style="color:var(--ink-mute)"> \u00b7 ${hoursText(F.weekday.hours)}</span></span></div>` : ''}
         </div>
       </div>` : ''}
 
