@@ -15,6 +15,7 @@ import { parseHolds, applyStatus } from '../core/status.js';
 import { estimateDrills } from '../core/estimate.js';
 import { drillKind, byDrill } from '../core/drills.js';
 import { readPalette } from '../core/palette.js';
+import { colourStats, distinctDrills } from '../core/colourstats.js';
 import { DAC_STATUS, readSyncResult, cleanColour } from '../core/dacsync.js';
 
 export const PROXY = '/__net/?url=';
@@ -1584,6 +1585,64 @@ export async function localApi(path, opts = {}) {
     const mainCurrency = Object.entries(spentPer).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
     const inMainCurrency = (r) => !mainCurrency || (r.currency || 'GBP') === mainCurrency;
 
+    /* The colour lists, laid side by side. A kit counts if it has one; the
+       rest are left out rather than counted as having no colours, and the page
+       says how many were counted. The drill list fills in a name or a colour a
+       kit's own list lacks, as it does everywhere else. */
+    const legends = (await idb.get('meta', 'legends')) || {};
+    const knownDrills = (await idb.get('meta', 'drills')) || {};
+    const coloursOf = async (r) => {
+      const v = await variantOf(r);
+      const got = v && legends[v];
+      if (!got || !Array.isArray(got.codes) || !got.codes.length) return null;
+      return { id: r.id, title: r.title, shop: r.shop || null, variant: v,
+               colours: got.codes.map((c) => {
+                 const k = knownDrills[c.code] || {};
+                 return { code: c.code, name: c.name || k.name || null, hex: c.hex || k.hex || null,
+                          finish: c.finish || null };
+               }) };
+    };
+    const withColours = async (list) => (await Promise.all(list.map(coloursOf))).filter(Boolean);
+    const stashColours = await withColours(scope);
+    const colours = colourStats(stashColours);
+    if (colours) {
+      colours.of = scope.length;
+      // the drills in everything you have finished, which is to say placed
+      colours.placed = distinctDrills(await withColours(finished));
+    }
+
+    /* How long things waited. Delivery is between ordering and arriving, so it
+       belongs to the period the kit was bought in; the wait to start belongs
+       to the period it was started in, which is when the wait ended. */
+    const delivered = bought.filter(r => r.date_ordered && r.date_received);
+    const deliveryDays = (r) => span(r.date_ordered, r.date_received);
+    const startedIn = owned.filter(r => r.date_received && r.date_started && inPeriod(r.date_started));
+    const waitDays = (r) => span(r.date_received, r.date_started);
+    /* The kit that has sat unstarted the longest is a fact about the stash as
+       it stands today, so it is only ever an all-time record. */
+    const unstarted = period ? [] : owned.filter(r => r.status === 'received' && (r.date_received || r.date_ordered));
+
+    /* When you work. Minutes, not sessions, so one long Sunday outweighs two
+       ten-minute Tuesdays. A single month has only itself to be busiest of. */
+    const perMonth = {}, perWeekday = {};
+    for (const x of sessionsIn) {
+      const mins = Number(x.minutes) || 0;
+      if (!mins || !/^\d{4}-\d{2}-\d{2}$/.test(String(x.on || ''))) continue;
+      perMonth[x.on.slice(0, 7)] = (perMonth[x.on.slice(0, 7)] || 0) + mins;
+      const wd = new Date(x.on + 'T12:00:00Z').getUTCDay();
+      perWeekday[wd] = (perWeekday[wd] || 0) + mins;
+    }
+    const topOf = (o) => Object.entries(o).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0] || null;
+    const busiest = period && period.length === 7 ? null : topOf(perMonth);
+    const weekday = topOf(perWeekday);
+    const artistCounts = Object.entries(scope.reduce((a, r) => {
+      if (r.artist) a[r.artist] = (a[r.artist] || 0) + 1; return a;
+    }, {})).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    const shapes = scope.reduce((a, r) => {
+      const k = /round/i.test(r.shape || '') ? 'round' : /square/i.test(r.shape || '') ? 'square' : null;
+      if (k) a[k] = (a[k] || 0) + 1; return a;
+    }, {});
+
     return {
       period: period || null, years, months, mainCurrency,
       currencies: Object.keys(spentPer).length,
@@ -1636,12 +1695,23 @@ export async function localApi(path, opts = {}) {
         // compare a small dear kit with a big cheap one
         bestValue: least(bought.filter(inMainCurrency), r => (r.price > 0 && r.drills > 0)
           ? Math.round(r.price / (r.drills / 1000) * 100) / 100 : null),
-        longestHeld: most(putDown, r => heldIn(r) || null)
+        longestHeld: most(putDown, r => heldIn(r) || null),
+        quickestDelivery: least(delivered, deliveryDays),
+        slowestDelivery: most(delivered, deliveryDays),
+        quickestStart: least(startedIn, waitDays),
+        longestWaitToStart: most(startedIn, waitDays),
+        longestUnstarted: most(unstarted, r => span(r.date_received || r.date_ordered, today))
       },
       favourites: {
         artist: counted(scope, r => r.artist),
-        shop: counted(scope, r => r.shop)
-      }
+        shop: counted(scope, r => r.shop),
+        artists: artistCounts.slice(0, 3),
+        artistCount: artistCounts.length,
+        shapes,
+        busiestMonth: busiest ? { month: busiest[0], hours: Math.round(busiest[1] / 6) / 10 } : null,
+        weekday: weekday ? { day: Number(weekday[0]), hours: Math.round(weekday[1] / 6) / 10 } : null
+      },
+      colours
     };
   }
 

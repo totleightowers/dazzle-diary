@@ -644,3 +644,84 @@ test('an ampersand in a colour name is unescaped once, not twice', () => {
                                                      ['3865', 'Not &amp;lt;b&amp;gt;bold', '#FFFFFF']]));
   assert.deepEqual(r.colours.map((c) => c.name), ['Black & Blue', 'Not &lt;b&gt;bold']);
 });
+
+/* ------------------------------------------------- the stash in colour */
+
+import { colourStats, distinctDrills, family, lightness } from '../app/core/colourstats.js';
+
+test('colours are put in the family they look like', () => {
+  const cases = { '#000000': 'blacks', '#1b1b1b': 'blacks', '#ffffff': 'whites', '#fbfbf9': 'whites',
+    '#808080': 'greys', '#c62828': 'reds', '#f7a1b5': 'pinks', '#b04a8f': 'pinks', '#ef8a2b': 'oranges',
+    '#7a451f': 'browns', '#e8c49c': 'tans', '#ecc89e': 'tans', '#f2cf3c': 'yellows', '#4f9a4a': 'greens', '#253b73': 'blues',
+    '#3f7c85': 'blues', '#7d52a8': 'purples' };
+  for (const [hex, want] of Object.entries(cases)) assert.equal(family(hex), want, hex);
+  assert.equal(family('nope'), null);
+  assert.equal(family(null), null);
+});
+
+test('lightness runs from black at 0 to white at 100, the way the eye sees it', () => {
+  assert.equal(lightness('#000000'), 0);
+  assert.equal(lightness('#ffffff'), 100);
+  assert.ok(lightness('#ffff00') > lightness('#0000ff'), 'yellow should read lighter than blue');
+  assert.equal(lightness('#12'), null);
+});
+
+const KIT = (id, title, colours, variant = String(id)) => ({ id, title, variant, colours });
+const D = (code, hex = null, finish = null, name = null) => ({ code, hex, finish, name });
+
+test('the staples are the drills in the most kits, and a drill in one kit is a one-off', () => {
+  const s = colourStats([
+    KIT(1, 'Moon Eater', [D('310', '#000000', null, 'Black'), D('3865', '#fbfbf9'), D('105', '#cb9051', 'Aurora Borealis')]),
+    KIT(2, 'Sif', [D('310', '#000000'), D('3865', '#fbfbf9'), D('823', '#1b2853')]),
+    KIT(3, 'Wild Bloom', [D('310', '#000000'), D('105', '#cb9051')])]);
+  assert.deepEqual(s.common.map((c) => [c.code, c.kits]), [['310', 3], ['3865', 2]],
+                   'a drill in only one kit is not a staple');
+  assert.equal(s.common[0].name, 'Black', 'the name from one list was lost');
+  // 105 as an AB drill and 105 as a plain one are different bags
+  assert.equal(s.distinct, 5);
+  assert.deepEqual(s.oneOffs.sample.map((c) => [c.code, c.finish, c.kit.title]),
+                   [['105', null, 'Wild Bloom'], ['105', 'Aurora Borealis', 'Moon Eater'], ['823', null, 'Sif']]);
+  assert.equal(s.oneOffs.count, 3);
+  assert.deepEqual(s.finishes, [{ finish: 'Aurora Borealis', n: 1 }]);
+  assert.equal(s.mostSpecial.title, 'Moon Eater');
+  assert.equal(s.mostColours.value, 3);
+  assert.equal(s.fewestColours.title, 'Wild Bloom');
+});
+
+test('palette twins are the two kits that share the most drills, never two copies of one kit', () => {
+  const s = colourStats([
+    KIT(1, 'Moon Eater', [D('310'), D('3865'), D('823'), D('939')], 'v1'),
+    KIT(2, 'Moon Eater again', [D('310'), D('3865'), D('823'), D('939')], 'v1'),
+    KIT(3, 'Sif', [D('310'), D('3865'), D('823')], 'v3'),
+    KIT(4, 'Tiny', [D('310')], 'v4')]);
+  assert.deepEqual([s.twins.a.title, s.twins.b.title, s.twins.shared], ['Moon Eater', 'Sif', 3]);
+});
+
+test('darkest and brightest palettes, and the family the stash leans towards', () => {
+  const dark = Array.from({ length: 14 }, (_, i) => D(String(100 + i), '#1b2853'));
+  const light = Array.from({ length: 12 }, (_, i) => D(String(200 + i), '#fdf9cd'));
+  const s = colourStats([KIT(1, 'Night', dark), KIT(2, 'Day', light)]);
+  assert.equal(s.darkest.title, 'Night');
+  assert.equal(s.brightest.title, 'Day');
+  assert.equal(s.families[0].family, 'blues');
+  assert.equal(Math.round(s.families.reduce((n, f) => n + f.share, 0)), 100);
+});
+
+test('colour records that need colours say nothing when too few are known', () => {
+  // a list with no colours cannot be ranked for lightness, nor lean anywhere
+  const s = colourStats([KIT(1, 'Codes only', [D('310'), D('3865')]), KIT(2, 'Also codes', [D('310')])]);
+  assert.equal(s.brightest, null);
+  assert.equal(s.darkest, null);
+  assert.deepEqual(s.families, [], 'a list with no colours was called a leaning');
+  // five blues are five blues, not a stash that leans blue
+  const few = colourStats([KIT(1, 'Five', Array.from({ length: 5 }, (_, i) => D(String(i), '#253b73')))]);
+  assert.deepEqual(few.families, [], 'a handful of colours was called a leaning');
+  assert.equal(colourStats([]), null);
+  assert.equal(colourStats([KIT(1, 'Empty', [])]), null);
+});
+
+test('different drills are counted once however many kits hold them', () => {
+  assert.equal(distinctDrills([KIT(1, 'a', [D('310'), D('105', null, 'Aurora Borealis')]),
+                               KIT(2, 'b', [D('310'), D('105')])]), 3);
+  assert.equal(distinctDrills([]), 0);
+});

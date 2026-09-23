@@ -2341,6 +2341,117 @@ test('searching for a drill code finds that code only, not a name with the numbe
   await idbDirect.del('meta', 'legends');
 });
 
+/* The summary lays every colour list side by side: the drills in the most
+   kits, the ones only one kit uses, and the pair of kits that share the most. */
+const colourSummaryMount = async () => {
+  const { m, add } = await legendMount();
+  await idbDirect.del('meta', 'legends');
+  await idbDirect.del('meta', 'drills');
+  const moon = await add('Moon Eater', 'moon-eater', 'completed',
+    { date_ordered: '2026-01-05', date_received: '2026-01-12', date_started: '2026-02-01', date_completed: '2026-04-01' });
+  const bloom = await add('Wild Bloom', 'wild-bloom', 'received',
+    { date_ordered: '2025-06-01', date_received: '2025-07-01' });
+  await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dd: { results: [
+      { variant: '101', owned: true, colors: { status: 'available', codes: [
+        { code: '310', name: 'Black', hex: '#000000' }, { code: '3865', name: 'Winter White', hex: '#fbfbf9' },
+        { code: '105', name: 'Tan', hex: '#cb9051', finish: 'Aurora Borealis' }] } },
+      { variant: '202', owned: true, colors: { status: 'available', codes: [
+        { code: '310', name: 'Black', hex: '#000000' }, { code: '823', name: 'Navy Blue Dark', hex: '#1b2853' }] } }] } }) });
+  return { m, moon, bloom };
+};
+const colourSummaryDone = async () => {
+  await idbDirect.del('meta', 'legends');
+  await idbDirect.del('meta', 'drills');
+};
+
+test('the summary shows the drills in the most kits, the one-offs and the palette twins', async () => {
+  const { m, moon } = await colourSummaryMount();
+  const c = (await m.api('/summary')).colours;
+  assert.ok(c, 'the summary has nothing about colour');
+  assert.equal(c.kits, 2);
+  assert.equal(c.of, 2);
+  assert.equal(c.distinct, 4);
+  assert.deepEqual(c.common.map((x) => [x.code, x.name, x.kits]), [['310', 'Black', 2]]);
+  assert.equal(c.oneOffs.count, 3);
+  assert.deepEqual(c.oneOffs.sample.map((x) => [x.code, x.kit.title]),
+                   [['105', 'Moon Eater'], ['823', 'Wild Bloom'], ['3865', 'Moon Eater']]);
+  assert.deepEqual([c.twins.a.title, c.twins.b.title, c.twins.shared], ['Moon Eater', 'Wild Bloom', 1]);
+  assert.deepEqual(c.finishes, [{ finish: 'Aurora Borealis', n: 1 }]);
+  assert.equal(c.mostColours.id, moon.id);
+  assert.equal(c.placed, 3, 'the drills in the finished kit are the ones placed');
+
+  // a year only holds what was bought in it
+  const y = (await m.api('/summary?year=2025')).colours;
+  assert.equal(y.kits, 1, 'a kit bought in 2026 was counted in 2025');
+  assert.equal(y.placed, 0, 'nothing was finished in 2025');
+  await colourSummaryDone();
+});
+
+test('the summary’s colours are on the page, and a drill opens the finder', async () => {
+  const { m } = await colourSummaryMount();
+  await m.go('#/summary');
+  const text = m.text();
+  assert.ok(/Your staples/.test(text), 'the staples are not shown');
+  assert.ok(/One-offs/.test(text), 'the one-offs are not shown');
+  assert.ok(/Palette twins/.test(text), 'the palette twins are not shown');
+  assert.ok(/From the colour lists of 2 of your 2 kits/.test(text), 'it does not say what it counted');
+  await m.tap('.sumdrill[data-k="310"]');
+  assert.equal(globalThis.location.hash, '#/colours');
+  await m.until(() => m.find('.drillhero'));
+  assert.equal(m.all('.drillgrid .colourhit').length, 2, 'the finder did not show both kits with 310');
+  await colourSummaryDone();
+});
+
+test('with no colour lists the summary says nothing about colour', async () => {
+  const { m } = await legendMount();
+  await idbDirect.del('meta', 'legends');
+  await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: 'Moon Eater', shop: 'dac', dac_handle: 'moon-eater', status: 'received' }) });
+  assert.equal((await m.api('/summary')).colours, null);
+  await m.go('#/summary');
+  assert.ok(!/Your staples|Palette twins/.test(m.text()), 'an empty colour section was drawn');
+});
+
+test('the summary times deliveries and the wait to be started, and says when you work', async () => {
+  const m = await mount();
+  await emptyLogbook(m);
+  const quick = await m.seed({ title: 'Quick', status: 'completed', artist: 'Yuumei Art', shape: 'Square',
+    date_ordered: '2026-01-01', date_received: '2026-01-04', date_started: '2026-01-05', date_completed: '2026-02-01' });
+  await m.seed({ title: 'Slow', status: 'started', artist: 'Yuumei Art', shape: 'Round',
+    date_ordered: '2026-01-01', date_received: '2026-02-20', date_started: '2026-04-20' });
+  const waiting = await m.seed({ title: 'Waiting', status: 'received', artist: 'Chrissabug', shape: 'Square',
+    date_ordered: '2025-01-01', date_received: '2025-01-10' });
+  // Saturday 7 Feb and Saturday 14 Feb, and one short Tuesday in March
+  for (const [on, minutes] of [['2026-02-07', 120], ['2026-02-14', 90], ['2026-03-03', 30]])
+    await m.api(`/projects/${quick.id}/sessions`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on, minutes }) });
+
+  const s = await m.api('/summary');
+  assert.equal(s.records.quickestDelivery.title, 'Quick');
+  assert.equal(s.records.quickestDelivery.value, 3);
+  assert.equal(s.records.slowestDelivery.title, 'Slow');
+  assert.equal(s.records.quickestStart.title, 'Quick');
+  assert.equal(s.records.longestWaitToStart.title, 'Slow');
+  assert.equal(s.records.longestWaitToStart.value, 59);
+  assert.equal(s.records.longestUnstarted.id, waiting.id, 'the kit waiting longest to be started was missed');
+  assert.deepEqual(s.favourites.busiestMonth, { month: '2026-02', hours: 3.5 });
+  assert.deepEqual(s.favourites.weekday, { day: 6, hours: 3.5 }, 'Saturday should be the favourite day');
+  assert.deepEqual(s.favourites.artists, [['Yuumei Art', 2], ['Chrissabug', 1]]);
+  assert.equal(s.favourites.artistCount, 2);
+  assert.deepEqual(s.favourites.shapes, { square: 2, round: 1 });
+
+  // a kit still waiting is about today, so a past year does not name it
+  assert.equal((await m.api('/summary?year=2025')).records.longestUnstarted, null);
+  // a single month has only itself to be busiest of
+  assert.equal((await m.api('/summary?year=2026&month=02')).favourites.busiestMonth, null);
+
+  await m.go('#/summary');
+  const text = m.text();
+  assert.ok(/Quickest delivery/.test(text) && /Busiest month/.test(text) && /Favourite day/.test(text)
+            && /Saturdays/.test(text) && /Drill shape/.test(text), 'the new records are not on the page');
+});
+
 test('Find a drill offers your commonest drills, shows the kits as covers, and filters by status', async () => {
   const { m, add } = await legendMount();
   await add('Moon Eater', 'moon-eater', 'started');
