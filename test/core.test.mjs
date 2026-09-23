@@ -736,3 +736,37 @@ test('the section holding the colours is read off the page, whatever the theme c
                'a page with no colour list named a section anyway');
   assert.equal(paletteSection(''), null);
 });
+
+/* ------------------------------------------- the colour filters' helpers */
+
+import { drillQuery, drillMatches } from '../app/core/drills.js';
+import { leanings } from '../app/core/colourstats.js';
+
+test('a search that looks like a code matches codes only; a word matches names', () => {
+  assert.deepEqual(drillQuery('161'), { code: '161', byName: null });
+  assert.deepEqual(drillQuery(' b5200 '), { code: 'B5200', byName: null });
+  assert.deepEqual(drillQuery('AB972'), { code: 'AB972', byName: null });
+  assert.deepEqual(drillQuery('ecru'), { code: 'ECRU', byName: null });
+  assert.deepEqual(drillQuery('Navy'), { code: 'NAVY', byName: 'navy' });
+  assert.deepEqual(drillQuery('bl'), { code: 'BL', byName: null }, 'two letters is too little to search names on');
+  // 161 is not hiding in "Pantone 1615", which is drill 6030
+  assert.equal(drillMatches('161', '6030', 'Pantone 1615'), false);
+  assert.equal(drillMatches('161', '161', 'Gray Blue'), true);
+  assert.equal(drillMatches('navy', '823', 'Dark Navy Blue'), true);
+  assert.equal(drillMatches('', '310', 'Black'), false);
+});
+
+test('a kit leans towards its biggest colour family, and any other with a quarter of it', () => {
+  const blue = { hex: '#253b73' }, grey = { hex: '#8c8c8c' }, red = { hex: '#c62828' };
+  const kit = (...xs) => xs.map((c, i) => ({ code: String(100 + i), ...c }));
+  // six blues, two greys, two reds: blue, and grey and red are only a fifth each
+  assert.deepEqual(leanings(kit(blue, blue, blue, blue, blue, blue, grey, grey, red, red)), ['blues']);
+  // four blues, three greys, three reds: every one of them is past a quarter
+  assert.deepEqual(leanings(kit(blue, blue, blue, blue, grey, grey, grey, red, red, red)), ['blues', 'reds', 'greys']);
+  // fewer than five colours known says too little
+  assert.deepEqual(leanings(kit(blue, blue, blue, blue, { hex: null }, { hex: null })), []);
+  // a drill named twice counts once
+  const twice = kit(blue, blue, blue, grey, grey, grey);
+  assert.deepEqual(leanings([...twice, twice[0], twice[0], twice[0]]), ['blues', 'greys']);
+  assert.deepEqual(leanings(null), []);
+});

@@ -2325,6 +2325,143 @@ test('Settings fetches the colours without a DAC account, and shows how far it g
   await idbDirect.del('meta', 'drills');
 });
 
+/* The logbook's colour filters. Three kits: a blue one with fairy dust, a red
+   one with aurora borealis, and one with no colour list at all. */
+async function colourMount() {
+  const m = await mount({ products: [DAC_KIT(1, 101, 'Moon Eater'), DAC_KIT(2, 202, 'Wild Bloom'),
+                                     DAC_KIT(3, 303, 'No List')] });
+  await m.sync();
+  await emptyLogbook(m);
+  await idbDirect.del('meta', 'legends');
+  await idbDirect.del('meta', 'drills');
+  const add = (title, handle, status, extra = {}) => m.api('/projects', { method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title, shop: 'dac', dac_handle: handle, status, ...extra }) });
+  await add('Moon Eater', 'moon-eater', 'started');
+  await add('Wild Bloom', 'wild-bloom', 'received');
+  await add('No List', 'no-list', 'received', { colors: 75 });
+  const blue = (code, name) => ({ code, name, hex: '#253b73' });
+  const red = (code, name) => ({ code, name, hex: '#c62828' });
+  await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dd: { results: [
+      { variant: '101', owned: true, colors: { status: 'available', codes: [
+        { code: '310', name: 'Black', hex: '#000000' }, blue('336', 'Navy Blue'), blue('823', 'Dark Navy Blue'),
+        blue('824', 'Very Dark Blue'), blue('825', 'Dark Blue'), blue('939', 'Very Dark Navy Blue'),
+        { code: '161', name: 'Gray Blue', hex: '#788097', finish: 'Fairy Dust' }] } },
+      { variant: '202', owned: true, colors: { status: 'available', codes: [
+        { code: '310', name: 'Black', hex: '#000000' }, red('321', 'Red'), red('304', 'Medium Red'),
+        red('498', 'Dark Red'), red('666', 'Bright Red'), { code: '6030', name: 'Pantone 1615', hex: '#6b3a2f' },
+        { code: '105', name: 'Tan', hex: '#cb9051', finish: 'Aurora Borealis' },
+        // written in lower case, as an account list has been known to
+        { code: 'b5200', name: 'Snow White', hex: '#ffffff' }] } }] } }) });
+  const done = async () => { await idbDirect.del('meta', 'legends'); await idbDirect.del('meta', 'drills'); };
+  return { m, done };
+}
+
+test('the logbook filters by drill, colour family, specialty diamond and number of colours', async () => {
+  const { m, done } = await colourMount();
+  const rows = await m.api('/projects');
+  const moon = rows.find((r) => r.title === 'Moon Eater');
+  assert.deepEqual(moon.colour.leans, ['blues'], 'a blue kit does not lean blue');
+  assert.deepEqual(moon.colour.finishes, ['Fairy Dust']);
+  assert.equal(moon.colour.n, 7);
+  assert.equal(rows.find((r) => r.title === 'No List').colour, null, 'a kit with no list was given colours');
+
+  await m.go('#/');
+  const titles = () => m.all('.card .name').map((n) => n.textContent).sort();
+  await m.tap('[data-act="lbfilters"]');
+
+  // a family
+  await m.tap('[data-act="lbfamily"][data-k="reds"]');
+  assert.deepEqual(titles(), ['Wild Bloom']);
+  assert.ok(/1 kit has no colour list/.test(m.text()), 'the panel does not say a kit was left out');
+  await m.tap('[data-act="lbfamily"][data-k="reds"]');
+  assert.deepEqual(titles(), ['Moon Eater', 'No List', 'Wild Bloom']);
+
+  // a specialty finish, in DAC's own words
+  assert.ok(m.find('[data-act="lbfinish"][data-k="Fairy Dust"]'), 'the finishes in your kits are not offered');
+  await m.tap('[data-act="lbfinish"][data-k="Aurora Borealis"]');
+  assert.deepEqual(titles(), ['Wild Bloom']);
+  await m.tap('[data-act="lbfinish"][data-k="Aurora Borealis"]');
+
+  // how many colours: a kit with no list still has a count from its listing
+  await m.tap('[data-act="lbncol"][data-k="many"]');
+  assert.deepEqual(titles(), ['No List'], 'the count did not fall back to the listing');
+  assert.ok(!/has no colour list/.test(m.text()), 'a count does not need a colour list, so nothing was left out');
+  await m.tap('[data-act="lbncol"][data-k="many"]');
+
+  // drills: every one picked must be in the kit
+  await m.tap('[data-act="lbdrill"][data-k="310"]');
+  assert.deepEqual(titles(), ['Moon Eater', 'Wild Bloom']);
+  await m.until(() => m.find('[data-act="lbdrill"][data-k="336"]'));
+  await m.tap('[data-act="lbdrill"][data-k="336"]');
+  assert.deepEqual(titles(), ['Moon Eater'], 'two drills picked should mean kits with both');
+  assert.ok(/kits with all of these/.test(m.text()), 'it does not say the drills must all be there');
+  assert.equal(m.find('[data-act="lbfilters"] .n').textContent, '1', 'the drills count as one filter');
+  await m.tap('[data-act="lbdrilloff"][data-k="336"]');
+  assert.deepEqual(titles(), ['Moon Eater', 'Wild Bloom']);
+
+  // they survive going somewhere and coming back, and Clear all takes them off
+  await m.go('#/settings');
+  await m.go('#/');
+  assert.deepEqual(titles(), ['Moon Eater', 'Wild Bloom'], 'the drill filter was lost on the way back');
+  await m.tap('[data-act="lbclear"]');
+  assert.deepEqual(titles(), ['Moon Eater', 'No List', 'Wild Bloom']);
+  assert.equal(m.find('[data-act="lbdrilloff"]'), null, 'Clear all left a drill picked');
+  await done();
+});
+
+test('the drill box suggests your staples, and a code never matches inside a name', async () => {
+  const { m, done } = await colourMount();
+  const staples = (await m.api('/colours/drills')).drills;
+  assert.equal(staples[0].code, '310', 'the drill in both kits is not offered first');
+  assert.equal(staples[0].kits, 2);
+  assert.deepEqual((await m.api('/colours/drills?q=161')).drills.map((d) => d.code), ['161'],
+                   '161 found "Pantone 1615"');
+  assert.deepEqual((await m.api('/colours/drills?q=navy')).drills.map((d) => d.code).sort(),
+                   ['336', '823', '939'], 'a word does not search the names');
+
+  await m.go('#/');
+  await m.tap('[data-act="lbfilters"]');
+  await m.until(() => m.find('#lbdsug [data-act="lbdrill"]'));
+  assert.ok(/In most of your kits/.test(m.find('#lbdsug').textContent), 'the staples are not offered');
+  const input = m.find('#lbdq');
+  input.value = '6030';
+  input.oninput();
+  await m.until(() => m.find('#lbdsug [data-act="lbdrill"][data-k="6030"]'));
+  await m.tap('#lbdsug [data-act="lbdrill"][data-k="6030"]');
+  assert.deepEqual(m.all('.card .name').map((n) => n.textContent), ['Wild Bloom']);
+  assert.ok(m.find('[data-act="lbdrilloff"][data-k="6030"] .sdot'), 'the picked drill does not show its colour');
+  await m.tap('[data-act="lbclear"]');
+
+  // a code typed in capitals finds one a list wrote in lower case
+  const box = m.find('#lbdq');
+  box.value = 'B5200';
+  box.oninput();
+  await m.until(() => m.all('#lbdsug [data-act="lbdrill"]').length === 1);
+  assert.equal(m.find('#lbdsug [data-act="lbdrill"]').dataset.k.toUpperCase(), 'B5200');
+  await m.tap('#lbdsug [data-act="lbdrill"]');
+  assert.deepEqual(m.all('.card .name').map((n) => n.textContent), ['Wild Bloom'],
+                   'b5200 in a list was not found by B5200');
+  await m.tap('[data-act="lbclear"]');
+  await done();
+});
+
+test('the drill finder can hand its drill to the logbook as a filter', async () => {
+  const { m, done } = await colourMount();
+  await m.go('#/colours');
+  const input = m.find('#cq');
+  input.value = '336';
+  input.oninput();
+  await m.until(() => m.find('[data-act="drillinlogbook"]'));
+  await m.tap('[data-act="drillinlogbook"]');
+  assert.equal(globalThis.location.hash, '#/');
+  assert.deepEqual(m.all('.card .name').map((n) => n.textContent), ['Moon Eater']);
+  assert.ok(m.find('[data-act="lbdrilloff"][data-k="336"]'), 'the logbook does not show which drill it is filtered by');
+  await m.tap('[data-act="lbclear"]');
+  await done();
+});
+
 test('a kit shows its whole drill list, with DAC\'s colours and what your other kits share', async () => {
   const { m, add } = await legendMount();
   await idbDirect.del('meta', 'legends');

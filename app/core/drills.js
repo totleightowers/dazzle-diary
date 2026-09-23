@@ -34,3 +34,23 @@ export function byDrill(a, b) {
   if (RANK[x] !== RANK[y]) return RANK[x] - RANK[y];
   return String(a.code || a).localeCompare(String(b.code || b), 'en', { numeric: true });
 }
+
+/* How a search for a drill is read. Something that looks like a drill code —
+   161, 3865, B5200, AB972 — is only ever matched as a code: searching names as
+   well found 161 inside "Pantone 1615", which is drill 6030 and a different
+   colour altogether. Names are searched only for words, like "black" or
+   "navy", and only once there are three letters to go on. The finder and the
+   logbook's drill filter both ask this, so they can never disagree. */
+export function drillQuery(q) {
+  const want = String(q || '').trim();
+  const codeLike = /^[A-Za-z]{0,3}\d+$/.test(want) || /^(ecru|blanc|noir)$/i.test(want);
+  return { code: want.toUpperCase(), byName: !codeLike && want.length >= 3 ? want.toLowerCase() : null };
+}
+
+/** Does this drill answer that search? `name` is the best name known for it. */
+export function drillMatches(query, code, name) {
+  const { code: want, byName } = typeof query === 'string' ? drillQuery(query) : query;
+  if (!want) return false;
+  if (String(code || '').toUpperCase() === want) return true;
+  return !!byName && String(name || '').toLowerCase().includes(byName);
+}

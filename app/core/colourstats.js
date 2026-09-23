@@ -80,7 +80,32 @@ export function family(hex) {
   return 'pinks';
 }
 
-const keyOf = (c) => c.code + '|' + (c.finish || '');
+/* Which colour families one kit leans towards. A palette is rarely one
+   colour, so a kit can lean more than one way: its biggest family always
+   counts, and so does any other that makes up at least a quarter of the drills
+   whose colour is known. A list with fewer than five known colours says too
+   little to lean anywhere, and gives nothing rather than a guess. */
+export function leanings(colours, { min = 5, share = 0.25 } = {}) {
+  const fam = {};
+  let known = 0;
+  const seen = new Set();
+  for (const c of colours || []) {
+    if (!c) continue;
+    const key = keyOf(c);
+    if (seen.has(key)) continue;            // a list that names a drill twice holds it once
+    seen.add(key);
+    const f = family(c.hex);
+    if (!f) continue;
+    fam[f] = (fam[f] || 0) + 1; known++;
+  }
+  if (known < min) return [];
+  return Object.entries(fam)
+    .sort((a, b) => b[1] - a[1] || FAMILIES.indexOf(a[0]) - FAMILIES.indexOf(b[0]))
+    .filter(([, n], i) => i === 0 || n / known >= share)
+    .map(([f]) => f);
+}
+
+function keyOf(c) { return c.code + '|' + (c.finish || ''); }
 const byCode = (a, b) => String(a.code).localeCompare(String(b.code), 'en', { numeric: true })
   || String(a.finish || '').localeCompare(String(b.finish || ''));
 

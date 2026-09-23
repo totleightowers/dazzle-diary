@@ -1,5 +1,5 @@
 import { api, isStandalone } from './api.js';
-import { FAMILY_SWATCH } from './core/colourstats.js';
+import { FAMILY_SWATCH, FAMILIES } from './core/colourstats.js';
 import { statusFromDates, applyStatus, parseHolds, openHold, heldDays,
          ALL_STATUSES } from './core/status.js';
 import { productUrl, shopById, displayCurrency, SHOPS, CURRENCIES } from './core/shops.js';
@@ -384,7 +384,9 @@ const S = {
   filter: 'all',
   q: '',
   // the logbook's own filters, beside the status chips and the search box
-  lb: { shop: null, shape: null, size: null, rating: 0, sort: 'recent', open: false, gaps: null },
+  lb: { shop: null, shape: null, size: null, rating: 0, sort: 'recent', open: false, gaps: null,
+        // and the colour ones: drills a kit must hold, a family, a finish, a count
+        drills: [], family: null, finish: null, ncol: null },
   projects: [],
   meta: null,
   importPreview: null,
@@ -806,11 +808,30 @@ const LB_SORT = {
 };
 const RATINGS = [{ k: 0, label: 'Any' }, { k: 3, label: '3+' }, { k: 4, label: '4+' }, { k: 5, label: '5' }];
 
+/* How many colours a kit has, in three sizes of palette. The splits sit where
+   DAC's own kits fall: most are forty-something to seventy, a small one is
+   under forty, and past seventy is a big, busy palette. */
+const COLOUR_BUCKETS = [
+  { k: 'few', label: 'Up to 40', max: 40 },
+  { k: 'mid', label: '41–70', min: 41, max: 70 },
+  { k: 'many', label: '71 or more', min: 71 }
+];
+/* The colour count comes from the colour list when there is one, and from
+   what the listing says when there is not — a count is a fact either way. */
+const colourCount = (p) => (p.colour && p.colour.n) || Number(p.colors) || null;
+
+/** Is a colour filter on that needs a kit's colour list to answer? */
+const lbNeedsList = () => {
+  const f = S.lb;
+  return !!(f.drills.length || f.family || f.finish);
+};
+
 /** How many of the extra filters are on — for the badge, and for "Clear all". */
 const lbActive = () => {
   const f = S.lb;
   return (f.shop ? 1 : 0) + (f.shape ? 1 : 0) + (f.size ? 1 : 0)
-       + (f.rating ? 1 : 0) + (f.gaps ? 1 : 0) + (f.sort !== 'recent' ? 1 : 0);
+       + (f.rating ? 1 : 0) + (f.gaps ? 1 : 0) + (f.sort !== 'recent' ? 1 : 0)
+       + (f.drills.length ? 1 : 0) + (f.family ? 1 : 0) + (f.finish ? 1 : 0) + (f.ncol ? 1 : 0);
 };
 
 /* What a project is missing. A logbook built over months has gaps in it, and
@@ -834,7 +855,25 @@ function logbookGroups() {
   const f = S.lb;
   const bucket = SIZE_BUCKETS.find((x) => x.k === f.size);
   const edge = (p) => (p.width_in && p.height_in) ? Math.max(p.width_in, p.height_in) * 2.54 : null;
+  const ncol = COLOUR_BUCKETS.find((x) => x.k === f.ncol);
+  /* The colour filters. A kit with no colour list cannot say whether it holds
+     a drill, leans blue or has fairy dust, so while any of those is on it is
+     left out — and the panel says how many that is. Picking several drills
+     asks for kits with all of them: the question is "what can I start that
+     uses up these", not "anything with any of these in". */
+  const colourOk = (p) => {
+    const c = p.colour;
+    if (f.drills.length && !(c && f.drills.every((d) => c.codes.includes(String(d.code).toUpperCase())))) return false;
+    if (f.family && !(c && c.leans.includes(f.family))) return false;
+    if (f.finish && !(c && c.finishes.includes(f.finish))) return false;
+    if (ncol) {
+      const n = colourCount(p);
+      if (n == null || (ncol.min && n < ncol.min) || (ncol.max && n > ncol.max)) return false;
+    }
+    return true;
+  };
   const match = (p) =>
+    colourOk(p) &&
     (S.filter === 'all' || p.status === S.filter) &&
     (!q || p.title.toLowerCase().includes(q) || (p.artist || '').toLowerCase().includes(q)) &&
     (!f.shop || p.shop === f.shop) &&
@@ -886,8 +925,97 @@ function logbookFilters() {
       const n = S.projects.filter(g.has).length;
       return n ? chip('lbgaps', g.k, `${g.label} · ${n}`, f.gaps === g.k) : '';
     }).join(''))}
+    ${colourFilters()}
     ${row('Sort each section by', LB_SORTS.map((o) => chip('lbsort', o.k, o.label, f.sort === o.k)).join(''))}
   </div>`;
+}
+
+/* The colour half of the panel. It only appears once some kit has a colour
+   list, and each group only offers what your kits actually hold: the families
+   they lean towards, the finishes DAC names in them. */
+function colourFilters() {
+  const f = S.lb;
+  const withList = S.projects.filter((p) => p.colour);
+  if (!withList.length) return '';
+  const group = (label, inner, extra = '') => inner ? `
+    <div style="margin-top:12px">
+      <span class="label" style="margin-bottom:6px">${label}</span>${extra}
+      <div class="chiprow" style="margin:0;padding:0;flex-wrap:wrap;gap:6px">${inner}</div>
+    </div>` : '';
+  const dot = (hex) => `<i class="sdot" style="background:${h(hex)}"></i>`;
+  const cchip = (act, k, inner, on, label) =>
+    `<button class="chip" style="height:36px;padding:0 12px" data-act="${act}" data-k="${h(k)}"
+             aria-pressed="${on}" aria-label="${h(label)}">${inner}</button>`;
+  const n = (list) => `<span class="n tnum">${list}</span>`;
+
+  const families = FAMILIES.filter((fam) => withList.some((p) => p.colour.leans.includes(fam)));
+  const finishes = [...new Set(withList.flatMap((p) => p.colour.finishes))].sort();
+  const noList = S.projects.length - withList.length;
+
+  return `
+    <div style="margin-top:12px">
+      <span class="label" style="margin-bottom:6px">Has drill${f.drills.length > 1 ? ' — kits with all of these' : ''}</span>
+      ${f.drills.length ? `<div class="chiprow" style="margin:0 0 8px;padding:0;flex-wrap:wrap;gap:6px">${
+        f.drills.map((d) => `<button class="chip" style="height:36px;padding:0 10px 0 12px" data-act="lbdrilloff"
+            data-k="${h(d.code)}" aria-pressed="true" aria-label="Stop filtering by ${h(d.code)}">
+            ${d.hex ? dot(d.hex) : '<span class="gem sm plain"><i></i></span>'}<span class="tnum">${h(d.code)}</span>
+            ${svg('close', 10, 2.6)}</button>`).join('')}</div>` : ''}
+      <div class="search" style="height:40px;margin:0">
+        ${svg('search', 16)}
+        <input id="lbdq" placeholder="Add a drill: 310, or a colour like navy" autocomplete="off" inputmode="text">
+      </div>
+      <div id="lbdsug" class="chiprow" style="margin:8px 0 0;padding:0;flex-wrap:wrap;gap:6px"></div>
+    </div>
+    ${group('Leans towards', families.map((fam) => cchip('lbfamily', fam,
+      `${dot(FAMILY_SWATCH[fam])}<span>${h(fam[0].toUpperCase() + fam.slice(1))}</span>${
+        n(withList.filter((p) => p.colour.leans.includes(fam)).length)}`, f.family === fam, fam)).join(''))}
+    ${group('Specialty diamonds', finishes.map((fin) => cchip('lbfinish', fin,
+      `<span>${h(fin)}</span>${n(withList.filter((p) => p.colour.finishes.includes(fin)).length)}`,
+      f.finish === fin, fin)).join(''))}
+    ${group('Colours in the kit', COLOUR_BUCKETS.map((b) => {
+      const c = S.projects.filter((p) => { const x = colourCount(p); return x != null && (!b.min || x >= b.min) && (!b.max || x <= b.max); }).length;
+      return c ? cchip('lbncol', b.k, `<span>${h(b.label)}</span>${n(c)}`, f.ncol === b.k, b.label) : '';
+    }).join(''))}
+    ${lbNeedsList() && noList ? `<p style="margin:10px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
+      ${num(noList)} kit${noList === 1 ? ' has' : 's have'} no colour list, so ${noList === 1 ? 'it is' : 'they are'}
+      left out while a drill, family or finish is picked.
+      <button data-go="#/settings" style="color:var(--ink);font-weight:700;text-decoration:underline;font-size:12px">
+        Get drill colours</button></p>` : ''}`;
+}
+
+/* Suggestions under the "has drill" box: what answers what has been typed, or
+   with nothing typed, the drills in most of your kits. Painted into their own
+   box so typing never repaints the field and loses the caret. */
+let drillAsk = 0;
+async function paintDrillSuggestions(qs) {
+  const box = document.getElementById('lbdsug');
+  if (!box) return;
+  const mine = ++drillAsk;
+  let r;
+  try { r = await api('/colours/drills?q=' + encodeURIComponent(qs || '')); } catch { return; }
+  if (mine !== drillAsk || !document.getElementById('lbdsug')) return;
+  const picked = new Set(S.lb.drills.map((d) => String(d.code).toUpperCase()));
+  const list = (r.drills || []).filter((d) => !picked.has(String(d.code).toUpperCase()));
+  box.innerHTML = !list.length
+    ? (qs ? `<span style="font-size:12px;color:var(--ink-mute)">None of your kits has ${h(qs)}.</span>` : '')
+    : `${qs ? '' : '<span style="flex:1 0 100%;font-size:11px;color:var(--ink-mute)">In most of your kits</span>'}${
+      list.map((d) => `<button class="chip drillpick" style="height:auto;min-height:36px;padding:5px 12px 5px 10px"
+          data-act="lbdrill" data-k="${h(d.code)}" data-name="${h(d.name || '')}" data-hex="${h(d.hex || '')}">
+          ${d.hex ? `<i class="sdot" style="background:${h(d.hex)}"></i>` : '<span class="gem sm plain"><i></i></span>'}
+          <span style="text-align:left;line-height:1.15"><b class="tnum">${h(d.code)}</b>${
+            d.name ? `<small style="display:block;font-size:10.5px;font-weight:500;color:var(--ink-mute)">${h(d.name)}</small>` : ''}</span>
+          <span class="n tnum">${num(d.kits)}</span></button>`).join('')}`;
+}
+
+function wireDrillSearch() {
+  const input = document.getElementById('lbdq');
+  if (!input) return;
+  let t;
+  input.oninput = () => {
+    clearTimeout(t);
+    t = setTimeout(() => paintDrillSuggestions(input.value.trim()), 180);
+  };
+  paintDrillSuggestions(input.value.trim());
 }
 
 function paintLogbook() {
@@ -955,6 +1083,7 @@ function paintLogbook() {
     input.oninput = (e) => { S.q = e.target.value; paintLogbookBody(); syncClear(); };
   }
   syncClear();
+  if (S.lb.open) wireDrillSearch();
 }
 
 /* Changing what the list holds puts you back at its top: keeping a scroll
@@ -1992,6 +2121,8 @@ route(/^#\/colours$/, async () => {
           ${byCode && c.name ? `<div class="drillname">${h(c.name)}</div>` : ''}
           <div class="drillshare tnum">In <b>${num(r.results.length)}</b> of your ${num(of)} kit${of === 1 ? '' : 's'}</div>
           <div class="drillbar"><i style="width:${Math.round(100 * r.results.length / Math.max(1, of))}%"></i></div>
+          ${byCode ? `<button class="drillmore" data-act="drillinlogbook" data-k="${h(c.code)}"
+                  data-name="${h(c.name || '')}" data-hex="${h(c.hex || '')}">Filter the logbook by ${h(c.code)}</button>` : ''}
         </div>
       </div>
       ${statuses.length > 1 ? `
@@ -3378,8 +3509,33 @@ async function handleClick(e) {
     go('#/');
   }
   else if (act === 'lbclear') {
-    S.lb = { ...S.lb, shop: null, shape: null, size: null, rating: 0, gaps: null, sort: 'recent' };
+    S.lb = { ...S.lb, shop: null, shape: null, size: null, rating: 0, gaps: null, sort: 'recent',
+             drills: [], family: null, finish: null, ncol: null };
     repaintLogbook();
+  }
+  else if (act === 'lbdrill') {
+    const code = el.dataset.k;
+    if (code && !S.lb.drills.some((d) => String(d.code).toUpperCase() === code.toUpperCase()))
+      S.lb.drills = [...S.lb.drills, { code, name: el.dataset.name || null, hex: el.dataset.hex || null }];
+    repaintLogbook();
+  }
+  else if (act === 'lbdrilloff') {
+    S.lb.drills = S.lb.drills.filter((d) => String(d.code).toUpperCase() !== String(el.dataset.k).toUpperCase());
+    repaintLogbook();
+  }
+  else if (act === 'lbfamily' || act === 'lbfinish' || act === 'lbncol') {
+    const f = S.lb, k = el.dataset.k;
+    if (act === 'lbfamily') f.family = f.family === k ? null : k;
+    if (act === 'lbfinish') f.finish = f.finish === k ? null : k;
+    if (act === 'lbncol') f.ncol = f.ncol === k ? null : k;
+    repaintLogbook();
+  }
+  else if (act === 'drillinlogbook') {
+    /* From the finder: the logbook, showing only the kits with this drill. */
+    S.lb = { ...S.lb, open: true, drills: [{ code: el.dataset.k, name: el.dataset.name || null, hex: el.dataset.hex || null }] };
+    S.filter = 'all'; S.q = '';
+    forgetScroll('#/');
+    go('#/');
   }
   else if (act === 'lbshop' || act === 'lbshape' || act === 'lbsize'
            || act === 'lbrating' || act === 'lbgaps' || act === 'lbsort') {
