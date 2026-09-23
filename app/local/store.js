@@ -1791,7 +1791,12 @@ export async function localApi(path, opts = {}) {
       return { legends, results: [], top };
     }
     const code = want.toUpperCase();
-    const byName = want.length >= 3 ? want.toLowerCase() : null;
+    /* Something that looks like a drill code — 161, 3865, B5200, AB972 — is
+       only ever matched as a code. Searching names as well found 161 inside
+       "Pantone 1615", which is drill 6030 and a different colour altogether.
+       Names are searched only for words, like "black" or "navy". */
+    const codeLike = /^[A-Za-z]{0,3}\d+$/.test(want) || /^(ecru|blanc|noir)$/i.test(want);
+    const byName = !codeLike && want.length >= 3 ? want.toLowerCase() : null;
     await catalogue();
     const drills = (await idb.get('meta', 'drills')) || {};      // DAC's own drill list, once
     const results = [];
