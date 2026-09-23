@@ -13,9 +13,9 @@ import { norm } from '../core/match.js';
 import { buildPreview } from '../core/import.js';
 import { parseHolds, applyStatus } from '../core/status.js';
 import { estimateDrills } from '../core/estimate.js';
-import { drillKind, byDrill } from '../core/drills.js';
+import { drillKind, byDrill, drillQuery, drillMatches } from '../core/drills.js';
 import { readPalette } from '../core/palette.js';
-import { colourStats, distinctDrills } from '../core/colourstats.js';
+import { colourStats, distinctDrills, leanings } from '../core/colourstats.js';
 import { DAC_STATUS, readSyncResult, cleanColour } from '../core/dacsync.js';
 
 export const PROXY = '/__net/?url=';
@@ -201,6 +201,36 @@ async function variantOf(row) {
 }
 
 const needsHifi = (r) => !!r && !!r.dac_handle && (Number(r.cover_hifi) || 0) < COVER_FIDELITY;
+
+/* What the logbook's colour filters need to know about each kit, worked out
+   here once rather than by the screen on every tap: which drill codes it holds,
+   which specialty finishes, how many colours, and which families its palette
+   leans towards. A kit with no colour list gets nothing — the filters leave it
+   out rather than guessing. Codes are kept upper-case, so "b5200" picked in the
+   filter finds "B5200" in a list. */
+async function colourFacts(rows) {
+  const out = new Map();
+  const legends = (await idb.get('meta', 'legends')) || {};
+  if (!Object.keys(legends).length) return out;
+  await catalogue();
+  const variantBy = new Map();
+  for (const c of cache.rows) if (c.shop === 'dac' && c.variant_id) variantBy.set(c.handle, c.variant_id);
+  const drills = (await idb.get('meta', 'drills')) || {};
+  for (const r of rows) {
+    if ((r.shop || 'dac') !== 'dac' || !r.dac_handle) continue;
+    const v = variantBy.get(r.dac_handle);
+    const list = v && legends[v] ? legends[v].codes : null;
+    if (!list || !list.length) continue;
+    const filled = list.map((c) => ({ ...c, hex: c.hex || (drills[c.code] || {}).hex || null }));
+    out.set(r.id, {
+      n: new Set(list.map((c) => c.code + '|' + (c.finish || ''))).size,
+      codes: [...new Set(list.map((c) => String(c.code).toUpperCase()))],
+      finishes: [...new Set(list.map((c) => c.finish).filter(Boolean))],
+      leans: leanings(filled)
+    });
+  }
+  return out;
+}
 
 /* Fill in the blanks on projects you own, from the shops that publish more on
    their product page than in their feed. One request per project that is still
@@ -924,7 +954,8 @@ export async function localApi(path, opts = {}) {
     /* Whether a kit's pictures are the small ones is a storage question, and the
        answer rather than the fidelity number is what the logbook needs — so it
        travels with the row and nothing outside has to know what level we are on. */
-    return rows.sort(cmp).map(r => ({ ...r, pics_small: needsHifi(r) }));
+    const colours = await colourFacts(rows);
+    return rows.sort(cmp).map(r => ({ ...r, pics_small: needsHifi(r), colour: colours.get(r.id) || null }));
   }
 
   if (p === '/projects' && m === 'POST') {
@@ -1842,6 +1873,35 @@ export async function localApi(path, opts = {}) {
              total: Object.keys(all).length };
   }
 
+  /* The drills in your kits, for the logbook's "has drill" filter to offer:
+     the ones that answer what has been typed, or with nothing typed, the ones
+     in most of your kits. A drill is its code here, whatever its finish,
+     because that is how the filter matches — the same as the finder. */
+  if (p === '/colours/drills' && m === 'GET') {
+    const legends = (await idb.get('meta', 'legends')) || {};
+    const known = (await idb.get('meta', 'drills')) || {};
+    const query = drillQuery(q(url, 'q'));
+    const seen = new Map();
+    const facts = await colourFacts(await projects());
+    const byCode = new Map();
+    for (const v of Object.values(legends))
+      for (const c of v.codes || []) {
+        const code = String(c.code).toUpperCase();
+        const d = byCode.get(code) || { code: c.code, name: null, hex: null };
+        d.name = d.name || c.name || (known[c.code] || {}).name || null;
+        d.hex = d.hex || c.hex || (known[c.code] || {}).hex || null;
+        byCode.set(code, d);
+      }
+    for (const f of facts.values())
+      for (const code of f.codes) seen.set(code, (seen.get(code) || 0) + 1);
+    const list = [...byCode.entries()]
+      .filter(([code]) => seen.has(code))
+      .filter(([code, d]) => !query.code || drillMatches(query, code, d.name))
+      .map(([code, d]) => ({ ...d, kits: seen.get(code) }))
+      .sort((a, b) => b.kits - a.kits || String(a.code).localeCompare(String(b.code), 'en', { numeric: true }));
+    return { drills: list.slice(0, query.code ? 12 : 8) };
+  }
+
   /* Which of your kits holds this drill? By code exactly, or by colour name. */
   if (p === '/colours' && m === 'GET') {
     const want = String(q(url, 'q') || '').trim();
@@ -1860,13 +1920,8 @@ export async function localApi(path, opts = {}) {
         .slice(0, 18).map(([code, kits]) => ({ code, kits, hex: (known[code] || {}).hex || null }));
       return { legends, results: [], top };
     }
-    const code = want.toUpperCase();
-    /* Something that looks like a drill code — 161, 3865, B5200, AB972 — is
-       only ever matched as a code. Searching names as well found 161 inside
-       "Pantone 1615", which is drill 6030 and a different colour altogether.
-       Names are searched only for words, like "black" or "navy". */
-    const codeLike = /^[A-Za-z]{0,3}\d+$/.test(want) || /^(ecru|blanc|noir)$/i.test(want);
-    const byName = !codeLike && want.length >= 3 ? want.toLowerCase() : null;
+    // a code is matched as a code, a word against names: see drillQuery
+    const query = drillQuery(want);
     await catalogue();
     const drills = (await idb.get('meta', 'drills')) || {};      // DAC's own drill list, once
     const results = [];
@@ -1878,9 +1933,9 @@ export async function localApi(path, opts = {}) {
       searched++;
       /* A name search looks in DAC's drill list as well as the legend, because
          a legend is bare codes: "black" only finds 310 once that list is here. */
-      const named = (c) => (c.name || (drills[c.code] || {}).name || '').toLowerCase();
-      const hit = codes.find(c => c.code.toUpperCase() === code)
-               || (byName && codes.find(c => named(c).includes(byName)));
+      const named = (c) => c.name || (drills[c.code] || {}).name || '';
+      const hit = codes.find(c => c.code.toUpperCase() === query.code)
+               || (query.byName && codes.find(c => drillMatches(query, null, named(c))));
       if (hit) {
         const k = drills[hit.code] || {};
         results.push({ id: r.id, title: r.title, status: r.status, cover: r.cover || null,
