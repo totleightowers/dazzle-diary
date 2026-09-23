@@ -587,7 +587,7 @@ test('the shell is allowed to reach every shop the app knows about', () => {
 
 /* ------------------------------------------------- a kit's colours */
 
-import { readPalette } from '../app/core/palette.js';
+import { readPalette, paletteSection } from '../app/core/palette.js';
 
 const PALETTE = (sku, shape, items, extra = '') => `
   <dac-pdp-palette class="dac-pdp-palette"><details class="palette" data-shape="${shape}" data-palette-sku="${sku}">
@@ -724,6 +724,17 @@ test('different drills are counted once however many kits hold them', () => {
   assert.equal(distinctDrills([KIT(1, 'a', [D('310'), D('105', null, 'Aurora Borealis')]),
                                KIT(2, 'b', [D('310'), D('105')])]), 3);
   assert.equal(distinctDrills([]), 0);
+});
+
+test('the section holding the colours is read off the page, whatever the theme calls it', () => {
+  const page = `<div id="shopify-section-template--1__header"></div>
+    <div id="shopify-section-template--25650457411777__60c6fc7b-2109">
+      ${PALETTE('DAC-6750S-DTC', 'square', [['310', 'Black', '#000000']])}</div>
+    <div id="shopify-section-template--1__footer"></div>`;
+  assert.equal(paletteSection(page), 'template--25650457411777__60c6fc7b-2109');
+  assert.equal(paletteSection('<div id="shopify-section-template--1__main">no colours</div>'), null,
+               'a page with no colour list named a section anyway');
+  assert.equal(paletteSection(''), null);
 });
 
 /* ------------------------------------------- the colour filters' helpers */

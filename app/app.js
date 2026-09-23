@@ -4110,9 +4110,11 @@ async function watchPalettes(jobId) {
       if (j.state === 'error') toast(j.error || 'That did not work');
       else {
         const r = j.result || {};
-        toast(r.found ? `${r.found} colour list${r.found === 1 ? '' : 's'} fetched${
-          r.none ? ` · ${r.none} kit${r.none === 1 ? ' has' : 's have'} none published` : ''}`
-          : 'No new colour lists');
+        const bits = [];
+        if (r.none) bits.push(`${r.none} kit${r.none === 1 ? ' has' : 's have'} none published`);
+        if (r.failed) bits.push(`${r.failed} could not be read — try again later`);
+        toast((r.found ? `${r.found} colour list${r.found === 1 ? '' : 's'} fetched` : 'No new colour lists')
+          + (bits.length ? ' · ' + bits.join(' · ') : ''));
       }
       render();
       return;
