@@ -530,6 +530,59 @@ test('the logbook can be filtered and sorted, not just searched', async () => {
   assert.deepEqual(titles(), ['Big Round DAC', 'Mystical Round', 'Small Square DAC']);
 });
 
+/* The filters are a panel you dip into: a tap outside puts them away, and
+   only that — a stray tap on a card must not also open it. */
+test('a tap outside the filters closes them, without doing anything else', async () => {
+  const m = await mount();
+  for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
+  const kit = await m.seed({ title: 'Tapped Past', status: 'received', shop: 'dac', shape: 'Round' });
+  await m.go('#/');
+  await m.tap('[data-act="lbfilters"]');
+  assert.ok(m.find('.lbpanel'), 'the panel did not open');
+
+  // a chip inside the panel keeps it open
+  await m.tap('.lbpanel [data-act="lbshape"]');
+  assert.ok(m.find('.lbpanel'), 'a tap inside the panel closed it');
+
+  // a card outside it closes the panel, and is not opened
+  await m.tap(`.card[data-id="${kit.id}"]`);
+  assert.equal(m.find('.lbpanel'), null, 'a tap outside did not close the filters');
+  assert.equal(globalThis.location.hash, '#/', 'the tap that closed the filters also opened a project');
+  // the filter chosen inside it is still on
+  assert.match(m.find('[data-act="lbfilters"]').textContent, /1/, 'closing the panel threw the filter away');
+
+  // and once closed, a tap does what it says
+  await m.tap(`.card[data-id="${kit.id}"]`);
+  assert.equal(globalThis.location.hash, `#/p/${kit.id}`);
+});
+
+/* On a tablet, with nothing open, the right-hand pane had nothing to say but
+   "pick a project" — so the logbook takes the whole display until a project
+   is open beside it. */
+test('on a tablet the logbook takes the whole display until a project is opened', async () => {
+  const m = await mount({ width: 1000 });
+  const kit = await m.seed({ title: 'Wide Open', status: 'received' });
+  await m.go('#/');
+  assert.ok(m.find('#side'), 'the tablet layout is not in use');
+  assert.match(m.find('#app').className, /\bsolo\b/, 'the logbook was squeezed beside an empty pane');
+  await m.go(`#/p/${kit.id}`);
+  assert.doesNotMatch(m.find('#app').className, /\bsolo\b/, 'a project opened without the list beside it');
+  assert.ok(m.find('#side .statusrow'), 'the status chips lost their name');
+  await m.go('#/');
+  assert.match(m.find('#app').className, /\bsolo\b/, 'closing the project left the empty pane showing');
+});
+
+test('the filter panel scrolls itself, and the tablet layout is styled for both states', () => {
+  const css = readFileSync(new URL('../app/styles.css', import.meta.url), 'utf8');
+  const rule = (sel) => { const i = css.indexOf(sel + ' {'); return i < 0 ? '' : css.slice(i, css.indexOf('}', i)); };
+  assert.match(rule('.lbpanel'), /overflow-y:\s*auto/, 'the filter panel cannot scroll');
+  assert.match(rule('.lbpanel'), /max-height/, 'the filter panel can grow past the screen');
+  assert.match(rule('#app.two-pane.solo > #main'), /display:\s*none/, 'the empty pane still shows');
+  assert.match(rule('#app.two-pane.solo > #side'), /width:\s*100%/, 'the logbook does not fill the display');
+  assert.match(rule('#app.two-pane:not(.solo) > #side .statusrow'), /nowrap/,
+               'the status chips still wrap into rows beside a project');
+});
+
 test('filtering the logbook puts you back at the top of it', async () => {
   const m = await mount();
   for (let i = 0; i < 12; i++) await m.seed({ title: 'Kit ' + i, status: 'received', shape: i % 2 ? 'Round' : 'Square' });
