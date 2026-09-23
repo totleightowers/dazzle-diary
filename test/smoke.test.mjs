@@ -2317,6 +2317,30 @@ test('a kit shows its whole drill list, with DAC\'s colours and what your other 
   await idbDirect.del('meta', 'drills');
 });
 
+/* 161 is a drill; "Pantone 1615" is the name DAC gives drill 6030. A search
+   for a code must not find it inside another drill's name. */
+test('searching for a drill code finds that code only, not a name with the number in it', async () => {
+  const { m, add } = await legendMount();
+  await idbDirect.del('meta', 'legends');
+  await add('Moon Eater', 'moon-eater', 'received');
+  await add('Wild Bloom', 'wild-bloom', 'received');
+  await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dd: { results: [
+      { variant: '101', owned: true, colors: { status: 'available',
+        codes: [{ code: '161', name: 'Gray Blue', hex: '#788097' }] } },
+      { variant: '202', owned: true, colors: { status: 'available',
+        codes: [{ code: '6030', name: 'Pantone 1615', hex: '#6b3a2f' },
+                { code: '310', name: 'Black', hex: '#000000' }] } }] } }) });
+
+  const hits = (await m.api('/colours?q=161')).results;
+  assert.deepEqual(hits.map((k) => [k.title, k.colour.code]), [['Moon Eater', '161']],
+                   'a code search matched a number inside another drill’s name');
+  // names are still searched for words
+  assert.deepEqual((await m.api('/colours?q=black')).results.map((k) => k.colour.code), ['310']);
+  assert.deepEqual((await m.api('/colours?q=pantone')).results.map((k) => k.colour.code), ['6030']);
+  await idbDirect.del('meta', 'legends');
+});
+
 test('Find a drill offers your commonest drills, shows the kits as covers, and filters by status', async () => {
   const { m, add } = await legendMount();
   await add('Moon Eater', 'moon-eater', 'started');
