@@ -901,3 +901,91 @@ select.fld {
   font: 600 12px/1 var(--sans, system-ui); letter-spacing: .02em;
   color: var(--ink); background: var(--raised); cursor: pointer;
   box-shadow: 0 6px 20px rgb(0 0 0 / .28); }
+
+/* Drill colours borrowed from a DAC legend: a chip per code, its colour first. */
+.swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+.swatch { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px 0 6px;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--raised);
+  color: var(--ink); font: 600 12px/1 var(--sans, system-ui); cursor: pointer; }
+.swatch > i, .swatch-dot { flex: 0 0 auto; width: 18px; height: 18px; border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / .18); }
+.drillrow { display: flex; align-items: center; gap: 12px; width: 100%; padding: 11px 14px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink);
+  cursor: pointer; }
+.drillrow:active { border-color: var(--accent); }
+.drillcodeline { display: block; font-weight: 700; font-size: 14px; }
+.drillsub { display: block; margin-top: 2px; font-size: 12px; color: var(--ink-mute); }
+.drillshared { flex: 0 0 auto; font-size: 11px; font-weight: 600; color: var(--ink-faint); }
+.gem.sm { width: 18px; height: 18px; }
+.gem.sm > i { border-radius: 5px; }
+
+/* Find a drill: the drill up top, then the kits that hold it as covers. */
+.finder-note { margin: 18px 2px 0; font-size: 13px; color: var(--ink-mute); }
+.gem { position: relative; flex: 0 0 auto; width: 22px; height: 22px; display: inline-block;
+  --gem: oklch(0.72 0.02 70); }
+.gem > i { position: absolute; inset: 0; border-radius: 6px; transform: rotate(45deg) scale(.82);
+  background:
+    linear-gradient(135deg, rgb(255 255 255 / .55) 0 22%, transparent 23% 100%),
+    linear-gradient(315deg, rgb(0 0 0 / .28) 0 30%, transparent 31% 100%),
+    var(--gem);
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / .18), 0 1px 3px rgb(0 0 0 / .25); }
+.gem.plain > i { background:
+    linear-gradient(135deg, rgb(255 255 255 / .5) 0 22%, transparent 23% 100%),
+    linear-gradient(315deg, rgb(0 0 0 / .22) 0 30%, transparent 31% 100%),
+    conic-gradient(from 30deg, oklch(0.78 0.08 300), oklch(0.8 0.08 200), oklch(0.82 0.08 100),
+                   oklch(0.78 0.08 20), oklch(0.78 0.08 300)); }
+.gem.big { width: 64px; height: 64px; }
+.gem.big > i { border-radius: 14px; }
+.drillhero { display: flex; align-items: center; gap: 18px; margin: 16px 0 14px; padding: 18px;
+  border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--surface); }
+.drillcode { font-family: var(--serif); font-weight: 600; font-size: 30px; line-height: 1; }
+.drillname { margin-top: 4px; font-size: 13px; color: var(--ink-mid); }
+.drillshare { margin-top: 8px; font-size: 13px; color: var(--ink-mute); }
+.drillshare b { color: var(--ink); }
+.drillbar { margin-top: 8px; height: 5px; border-radius: 999px; background: var(--sunken); overflow: hidden; }
+.drillbar i { display: block; height: 100%; border-radius: inherit; background: var(--st-started-dot); }
+.stfilter { display: flex; gap: 6px; overflow-x: auto; margin: 0 calc(-1 * var(--gutter)) 14px; padding: 2px var(--gutter);
+  scrollbar-width: none; }
+.stfilter::-webkit-scrollbar { display: none; }
+.stchip { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--chip-bg); color: var(--ink-mid);
+  font: 600 12px/1 var(--sans); cursor: pointer; }
+.stchip i { width: 8px; height: 8px; border-radius: 50%; }
+.stchip span { color: var(--ink-faint); }
+.stchip[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.stchip[aria-pressed="true"] span { color: inherit; opacity: .7; }
+.drillgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.colourhit { display: flex; flex-direction: column; align-items: stretch; gap: 0; padding: 0; width: 100%;
+  border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface);
+  color: var(--ink); cursor: pointer; overflow: hidden; text-align: left; }
+.colourhit:active { border-color: var(--accent); }
+.colourhit .thumb { width: 100%; aspect-ratio: 4 / 5; border-radius: 0; }
+.colourhit img { pointer-events: none; -webkit-user-drag: none; }
+.colourhit .hitname { padding: 10px 11px 0; font-family: var(--serif); font-weight: 600; font-size: 14px;
+  line-height: 1.2; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.colourhit .hitmeta { display: flex; align-items: center; gap: 6px; padding: 5px 11px 11px;
+  font-size: 11px; font-weight: 600; color: var(--ink-mute); }
+.colourhit .hitmeta i { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+.topdrills { display: flex; flex-wrap: wrap; gap: 8px; }
+.topdrill { display: inline-flex; align-items: center; gap: 8px; height: 44px; padding: 0 14px 0 10px; text-align: left;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--ink);
+  font: 600 14px/1 var(--sans); cursor: pointer; }
+.topdrill b { white-space: nowrap; }
+.topdrill span { font-size: 11px; color: var(--ink-faint); }
+
+/* Summary: colours. A bar of the colour families, and small rows of drills. */
+.sumsub { margin: 14px 2px 8px; font-size: 12px; font-weight: 600; color: var(--ink-mid); }
+.sumdrill { gap: 12px; padding-top: 8px; padding-bottom: 8px; }
+.sumdrill .swatch-dot, .sumdrill .gem { flex: 0 0 auto; }
+.fambar { display: flex; height: 12px; margin-top: 10px; border-radius: 999px; overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / .12); }
+.fambar i { display: block; min-width: 3px; }
+.famkey { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 10px; font-size: 12px; color: var(--ink-mid); }
+.famkey > span { display: inline-flex; align-items: center; gap: 6px; }
+.famkey i { width: 9px; height: 9px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgb(0 0 0 / .18); }
+.famkey .tnum { color: var(--ink-faint); }
+.finchips { display: flex; flex-wrap: wrap; gap: 6px; }
+.finchip { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--surface);
+  font-size: 12px; font-weight: 600; color: var(--ink-mid); }
+.finchip b { color: var(--ink); }

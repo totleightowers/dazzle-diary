@@ -35,8 +35,11 @@ aapt2 link -I "$SDK_JAR" --manifest AndroidManifest.xml -o build/base.apk \
 
 echo "4/7  compile java"
 find src build/gen -name '*.java' > build/sources.txt
+# Quiet when it works, but never silent when it fails: this used to discard
+# every compiler error, so a failed build said only "exit code 3".
 javac -nowarn -source 8 -target 8 -bootclasspath "$SDK_JAR" \
-  -classpath "$SDK_JAR" -d build/classes @build/sources.txt 2>/dev/null
+  -classpath "$SDK_JAR" -d build/classes @build/sources.txt 2>build/javac.log \
+  || { grep -v '^warning: \[options\]' build/javac.log >&2; exit 1; }
 
 echo "5/7  dex"
 d8 --min-api 24 --lib "$SDK_JAR" --output build $(find build/classes -name '*.class')

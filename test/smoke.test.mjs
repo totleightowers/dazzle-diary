@@ -8,8 +8,9 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync as readdirSyncFs } from 'node:fs';
 import { mount } from './mount.mjs';
+import * as idbDirect from '../app/local/idb.js';
 
 /* The IndexedDB shim outlives a single mount, so a test that means "I do not
    own this yet" has to say so — picking a kit you already have now opens it
@@ -80,6 +81,7 @@ test('a project picked from the catalogue arrives with its picture', async () =>
   await emptyLogbook(m);            // this is the ADD path: nothing here yet
   await m.go('#/browse');
   await m.tap('[data-act="pickcat"]');
+  await m.until(() => globalThis.location.hash !== '#/browse');
   assert.equal(globalThis.location.hash, '#/new');
 
   const box = m.find('#formshot');
@@ -310,6 +312,7 @@ test('a kit picked from the catalogue shows its pictures and a way to the shop',
   await emptyLogbook(m);
   await m.go('#/browse');
   await m.tap('[data-act="pickcat"]');
+  await m.until(() => globalThis.location.hash !== '#/browse');
 
   assert.ok(m.all('#formshots img').length > 1, 'the form shows only one of the shop pictures');
   assert.equal(m.find('#formshots img').getAttribute('data-act'), 'opengallery',
@@ -355,6 +358,7 @@ test('the dots follow the strip, and tapping one moves it', async () => {
   await emptyLogbook(m);
   await m.go('#/browse');
   await m.tap('[data-act="pickcat"]');
+  await m.until(() => globalThis.location.hash !== '#/browse');
 
   const strip = m.find('#formshots'), dots = m.all('#formdots button');
   assert.ok(dots.length > 1, 'a strip of several pictures has no dots to say so');
@@ -465,6 +469,7 @@ test('the catalogue keeps your place, and loses it when the filters change', asy
   body().scrollTop = 500;
 
   await m.tap('[data-act="pickcat"]');          // into New project
+  await m.until(() => globalThis.location.hash !== '#/browse');
   await m.go('#/browse');
   assert.equal(body().scrollTop, 500, 'the catalogue came back at the top');
 
@@ -1041,6 +1046,116 @@ test('progress history goes with the project when it is deleted', async () => {
                'diamonds placed on a canvas you deleted are not diamonds you placed');
 });
 
+/* A backup is only a backup if it holds everything that cannot be fetched
+   again. Anything new the app starts keeping has to be added to it, or listed
+   here as something a sync rebuilds — this test is what makes that a decision
+   rather than an oversight. */
+test('everything the app keeps is either in the backup or rebuilt by a sync', () => {
+  const store = readFileSync(new URL('../app/local/store.js', import.meta.url), 'utf8');
+  const app = readFileSync(new URL('../app/app.js', import.meta.url), 'utf8');
+  const backup = app.slice(app.indexOf("act === 'backup'"), app.indexOf("act === 'export'"));
+
+  // the stores a logbook is kept in
+  const idbSrc = readFileSync(new URL('../app/local/idb.js', import.meta.url), 'utf8');
+  const stores = [...idbSrc.matchAll(/createObjectStore\('(\w+)'/g)].map((x) => x[1]);
+  const REBUILT = {
+    catalogue: 'a catalogue sync downloads it again',
+    blobs: 'nothing is kept here; covers and photos are files'
+  };
+  const IN_BACKUP = { projects: /projects/, photos: /photos/, sessions: /sessions/,
+                      progress: /progress/, meta: /prefs|legends|drills/ };
+  for (const s of stores)
+    assert.ok(REBUILT[s] || IN_BACKUP[s].test(backup), `the ${s} store is not in the backup`);
+
+  // and the named things inside meta, which is a store of odds and ends
+  const keys = [...store.matchAll(/idb\.get\('meta',\s*'(\w+)'\)/g),
+                ...store.matchAll(/idb\.put\('meta',[^;]*?,\s*'(\w+)'\)/g)].map((x) => x[1]);
+  const REBUILT_META = {
+    synced: 'when each shop was last synced; the next sync says so again',
+    timer: 'a session running right now, on this phone',
+    dacTrial: 'whether the first DAC run has happened, for this phone',
+    sessionsMigrated: 'a one-off migration flag',
+    dacSection: 'the name of the bit of a DAC page that holds the colours; learnt again on the next fetch'
+  };
+  const CARRIED = { prefs: /prefs/, legends: /legends/, drills: /drills/ };
+  for (const k of new Set(keys))
+    assert.ok(REBUILT_META[k] || CARRIED[k].test(backup),
+              `meta.${k} is neither backed up nor listed as something a sync rebuilds`);
+});
+
+/* A photo is the one thing in a logbook that cannot be downloaded again, so
+   the backup carries it exactly as it was taken — not a shrunken copy. */
+test('a backup carries photos whole, with your own covers, settings and colour lists', async () => {
+  const m = await mount();
+  await emptyLogbook(m);
+  const p = await m.seed({ title: 'Photographed', status: 'started' });
+  // a photo far bigger than the 1600px copies the old backup wrote
+  const big = Buffer.alloc(300 * 1024, 7);
+  await m.api(`/projects/${p.id}/photos`, { method: 'POST',
+    headers: { 'Content-Type': 'image/jpeg' }, body: big.buffer });
+  // and that photo made the cover, which no catalogue can hand back
+  const mine = (await m.api('/projects/' + p.id)).photos[0];
+  await m.api(`/projects/${p.id}/cover`, { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ photo: mine.file }) });
+  await m.api('/prefs', { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ currency: 'USD' }) });
+  await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dd: { results: [{ variant: '77', owned: true,
+      colors: { status: 'available', codes: ['310', '3865'] } }] } }) });
+
+  await m.go('#/settings');
+  await m.tap('[data-act="backup"]');
+  await m.until(() => m.downloads.some((d) => d.name === 'dazzle-diary-backup.json'));
+  const file = JSON.parse(m.downloads.find((d) => d.name === 'dazzle-diary-backup.json').text);
+
+  assert.equal(file.photos.length, 1, 'the backup has no photos');
+  assert.equal(Buffer.from(file.photos[0].data, 'base64').length, big.length,
+               'the backup shrank the photo');
+  assert.equal(file.covers.length, 1, 'a cover you set yourself was left out of the backup');
+  assert.match(file.covers[0].file, /^own-/);
+  assert.equal(Buffer.from(file.covers[0].data, 'base64').length, big.length,
+               'the cover you set yourself was shrunk');
+  assert.equal(file.prefs.currency, 'USD', 'your settings were left out of the backup');
+  assert.deepEqual(file.legends['77'].codes.map((c) => c.code), ['310', '3865'],
+                   'the drill colours were left out of the backup');
+  assert.ok(file.drills, 'DAC\'s drill list was left out of the backup');
+  await idbDirect.del('meta', 'legends');     // the colour lists are shared between tests
+});
+
+test('restoring brings back your own cover, your settings and your colour lists', async () => {
+  const m = await mount();
+  await emptyLogbook(m);
+  await idbDirect.del('meta', 'legends');
+  const file = {
+    version: 4,
+    projects: [{ id: 9, title: 'From the backup', status: 'started', cover: 'own-9-1-1.jpg', covers: ['own-9-1-1.jpg'] }],
+    photos: [], sessions: [], progress: [],
+    covers: [{ file: 'own-9-1-1.jpg', data: Buffer.from('the picture').toString('base64') }],
+    prefs: { currency: 'EUR', excluded: ['mdd'] },
+    legends: { 77: { codes: ['310'], at: '2026-09-01T00:00:00.000Z' } },
+    drills: { 310: { code: '310', name: 'Black', hex: '#000000' } }
+  };
+  const r = await m.api('/restore', { method: 'POST', body: JSON.stringify(file) });
+  assert.equal(r.ownCovers, 1, 'the cover in the backup was not written');
+  assert.equal(r.legends, 1, 'the colour lists in the backup were not restored');
+  assert.equal(m.files.get('covers/own-9-1-1.jpg').toString(), 'the picture');
+  const back = (await m.api('/projects')).find((x) => x.title === 'From the backup');
+  assert.equal(back.cover, 'own-9-1-1.jpg', 'the restored project lost the cover you chose');
+  assert.equal((await m.api('/prefs')).currency, 'EUR', 'your settings did not come back');
+  assert.deepEqual((await m.api('/legends'))['77'].codes.map((c) => c.code), ['310']);
+  assert.deepEqual((await m.api('/drills'))['310'], { code: '310', name: 'Black', hex: '#000000', finish: null },
+                   'DAC\'s drill list did not come back');
+
+  // a colour list already here is not replaced by an older one from a backup
+  await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dd: { results: [{ variant: '77', owned: true,
+      colors: { status: 'available', codes: ['310', '939'] } }] } }) });
+  await m.api('/restore', { method: 'POST', body: JSON.stringify(file) });
+  assert.equal((await m.api('/legends'))['77'].codes.length, 2,
+               'an older colour list from a backup overwrote a newer one');
+  await idbDirect.del('meta', 'legends');
+});
+
 test('a backup carries progress history, and restoring twice does not double it', async () => {
   const m = await mount();
   for (const q of await m.api('/projects')) await m.api('/projects/' + q.id, { method: 'DELETE' });
@@ -1162,6 +1277,7 @@ test('a new project shows the dates its status implies before you save', async (
   await m.sync();
   await m.go('#/browse');
   await m.tap('[data-act="pickcat"]');
+  await m.until(() => globalThis.location.hash !== '#/browse');
 
   const ordered = m.find('#date_ordered');
   assert.ok(ordered, 'the form has no order date field');
@@ -1328,6 +1444,7 @@ test('a kit picked from the catalogue arrives with its details filled in', async
   await m.sync();
   await m.go('#/browse');
   await m.tap('[data-act="pickcat"]');
+  await m.until(() => globalThis.location.hash !== '#/browse');
   await m.tap('[data-act="save"]');
 
   const [saved] = await m.api('/projects');
@@ -1636,6 +1753,7 @@ test('picking a kit already in the logbook opens it instead of adding it twice',
   m.answerConfirms(true);
   await m.go('#/browse');
   await m.tap('[data-act="pickcat"]');
+  await m.until(() => globalThis.location.hash !== '#/browse');
 
   assert.equal(globalThis.location.hash, '#/p/' + made.id, 'it did not open the kit already logged');
   assert.equal((await m.api('/projects')).length, before, 'a second copy was created anyway');
@@ -1654,6 +1772,7 @@ test('declining opens the New project form so a second copy can still be added',
   m.answerConfirms(false);
   await m.go('#/browse');
   await m.tap('[data-act="pickcat"]');
+  await m.until(() => globalThis.location.hash !== '#/browse');
   assert.equal(globalThis.location.hash, '#/new', 'saying no did not let a second copy be added');
 });
 
@@ -1669,6 +1788,7 @@ test('a kit added by hand is recognised by name, with no listing link', async ()
   m.answerConfirms(true);
   await m.go('#/browse');
   await m.tap('[data-act="pickcat"]');
+  await m.until(() => globalThis.location.hash !== '#/browse');
   assert.equal(globalThis.location.hash, '#/p/' + typed.id, 'the one typed in by hand went unrecognised');
 });
 
@@ -1978,4 +2098,552 @@ test('the price correction is offered on the duplicates tab, as its own button',
   await m.tap('[data-act="importprices"]');
   const all = await m.api('/projects');
   assert.equal(all[0].price, 12.34, 'tapping it did not correct the price');
+});
+
+/* DAC's logbook links an entry to its kit by product and variant ID, and that
+   link is what carries the kit's drill legend. The catalogue threw both away. */
+test('a catalogue row keeps the shop\'s own product and variant IDs', async () => {
+  const m = await mount({ products: [{
+    id: 7001, title: 'Moon Eater', vendor: 'Yuumei Art', handle: 'moon-eater',
+    product_type: 'Diamond Art Kit', images: [{ src: 'https://cdn.shopify.com/kit.jpg' }],
+    variants: [{ id: 99001, sku: 'DAC-7001S', title: '23.6" x 30.7" (59.9cm x 78cm) / Square with 42 Colors / 75433',
+                 price: '169.00', available: true }] }] });
+  await m.sync();
+  const [row] = await m.api('/catalogue/search?q=moon');
+  assert.equal(row.product_id, '7001', 'the product ID was not kept');
+  assert.equal(row.variant_id, '99001', 'the variant ID was not kept');
+  assert.equal(row.sku, 'DAC-7001S', 'the SKU DAC keys "Already purchased" by was not kept');
+});
+
+/* ------------------------------------------------ drill legends from DAC */
+const DAC_KIT = (id, variant, title) => ({
+  id, title, vendor: 'Artist', handle: title.toLowerCase().replace(/\W+/g, '-'),
+  product_type: 'Diamond Art Kit', images: [{ src: 'https://cdn.shopify.com/kit.jpg' }],
+  variants: [{ id: variant, sku: 'DAC-' + variant + 'S', title: '22" x 28" (56cm x 71cm) / Square with 40 Colors / 60000',
+               price: '60.00', available: true }] });
+
+async function legendMount() {
+  const m = await mount({ products: [DAC_KIT(1, 101, 'Moon Eater'), DAC_KIT(2, 202, 'Wild Bloom')] });
+  await m.sync();
+  await emptyLogbook(m);
+  const add = async (title, handle, status, extra = {}) =>
+    m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, shop: 'dac', dac_handle: handle, status, ...extra }) });
+  return { m, add };
+}
+
+test('the kits sent to DAC are the DAC kits you own, with their product page', async () => {
+  const { m, add } = await legendMount();
+  await add('Moon Eater', 'moon-eater', 'received');
+  await add('Wild Bloom', 'wild-bloom', 'wishlist');
+  await add('Typed In', null, 'started');
+  const { kits, missing } = await m.api('/dac/kits');
+  assert.equal(kits.length, 1, 'a wish list or unlinked kit was sent as if owned');
+  assert.deepEqual(kits[0], { variant: '101', handle: 'moon-eater', sku: 'DAC-101S', name: 'Moon Eater' });
+  assert.deepEqual(missing, []);
+});
+
+test('two copies of one kit are sent once, since they share one legend', async () => {
+  const { m, add } = await legendMount();
+  await add('Moon Eater', 'moon-eater', 'received');
+  await add('Moon Eater', 'moon-eater', 'notReceived');
+  assert.equal((await m.api('/dac/kits')).kits.length, 1);
+});
+
+/* The logbook is the source of truth. A sync adds legends and nothing else. */
+test('bringing legends back changes nothing on any project', async () => {
+  const { m, add } = await legendMount();
+  const p = await add('Moon Eater', 'moon-eater', 'started',
+    { date_ordered: '2026-03-01', date_received: '2026-03-10', date_started: '2026-04-01', price: 60 });
+  const before = await m.api('/projects/' + p.id);
+
+  const r = await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tk: { results: [{ variant: '101', state: 'marked', status: 'completed' }] },
+      dd: { done: true, results: [
+      { variant: '101', owned: true,
+        colors: { status: 'available', codes: [{ code: '310', name: 'Black', hex: '000000' },
+                                               { code: 'B5200', name: 'Snow White', hex: 'ffffff' }] } },
+      // even if a result claimed a different status, nothing reads it
+      { variant: '101', owned: true, status: 'completed' } ] } }) });
+  assert.equal(r.legends, 1);
+
+  const after = await m.api('/projects/' + p.id);
+  for (const f of ['status', 'date_ordered', 'date_received', 'date_started', 'date_completed',
+                   'price', 'progress', 'hours'])
+    assert.deepEqual(after[f], before[f], `bringing legends back changed ${f}`);
+});
+
+test('a project shows its legend, and the stash can be searched by drill', async () => {
+  const { m, add } = await legendMount();
+  const moon = await add('Moon Eater', 'moon-eater', 'received');
+  await add('Wild Bloom', 'wild-bloom', 'received');
+  await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dd: { results: [
+      { variant: '101', owned: true, colors: { status: 'available',
+        codes: [{ code: '310', name: 'Black', hex: '000000' }, { code: '3865', name: 'Winter White', hex: 'f9f7f1' }] } },
+      { variant: '202', owned: true, colors: { status: 'available',
+        codes: [{ code: '3865', name: 'Winter White', hex: 'f9f7f1' }] } } ] } }) });
+
+  const legend = await m.api('/projects/' + moon.id + '/legend');
+  assert.equal(legend.colours.length, 2);
+  assert.equal(legend.colours[0].hex, '#000000');
+
+  const both = await m.api('/colours?q=3865');
+  assert.deepEqual(both.results.map((x) => x.title).sort(), ['Moon Eater', 'Wild Bloom']);
+  assert.equal((await m.api('/colours?q=310')).results.length, 1);
+  assert.equal((await m.api('/colours?q=black')).results[0].title, 'Moon Eater',
+               'searching by colour name finds nothing');
+  assert.equal((await m.api('/colours?q=999')).results.length, 0);
+});
+
+/* DAC prints every kit's colours on its own page, for anyone. That is a
+   better source than an account: it names each colour, and it answers for kits
+   you have only wished for. */
+const PAGE = (sku, shape, items) => `<html><body>
+  <dac-pdp-palette class="dac-pdp-palette"><details class="palette" data-shape="${shape}" data-palette-sku="${sku}">
+    <summary data-palette-dialog="dac-palette-dialog-template--777__theme-bits-47423217107137"></summary>
+    <div class="palette-body"><ul class="color-grid">${items.map(([code, name, hex]) => `
+      <li title="${code} · ${name}"><span class="swatch" style="--shade:${hex}"></span><span>${code}</span></li>`).join('')}
+    </ul><div class="palette-foot"></div></div></details></dac-pdp-palette></body></html>`;
+
+test('drill colours come from the kits’ own pages, with no account and no ticking', async () => {
+  const kits = [
+    { ...DAC_KIT(1, 101, 'Moon Eater'), specHtml: PAGE('DAC-101S', 'square',
+        [['310', 'Black', '#000000'], ['3865', 'Winter White', '#FBFBF9']]) },
+    { ...DAC_KIT(2, 202, 'Wild Bloom'), specHtml: PAGE('DAC-202S', 'round', [['823', 'Navy Blue Dark', '#1B2853']]) },
+    { ...DAC_KIT(3, 303, 'Coasters'), specHtml: '<html><body>no list here</body></html>' }];
+  const m = await mount({ products: kits });
+  await m.sync();
+  await emptyLogbook(m);
+  await idbDirect.del('meta', 'legends');
+  await idbDirect.del('meta', 'drills');
+  await idbDirect.del('meta', 'dacSection');
+  const add = (title, handle, status) => m.api('/projects', { method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title, shop: 'dac', dac_handle: handle, status }) });
+  const moon = await add('Moon Eater', 'moon-eater', 'started');
+  await add('Wild Bloom', 'wild-bloom', 'wishlist');      // never bought, still has colours
+  await add('Coasters', 'coasters', 'received');
+
+  const before = await m.api('/dac/palettes');
+  assert.equal(before.total, 3, 'a kit you only wished for was left out');
+  assert.equal(before.have, 0);
+
+  const { job } = await m.api('/dac/palettes', { method: 'POST' });
+  await m.until(async () => (await m.api('/jobs/' + job)).state !== 'running', 8000);
+  const done = await m.api('/jobs/' + job);
+  assert.equal(done.state, 'done', done.error || '');
+  assert.deepEqual(done.result, { found: 2, none: 1, done: 3 });
+
+  // nothing was signed into, and nothing was ticked
+  assert.equal(m.dacScripts.length, 0, 'it went through a DAC account after all');
+  assert.ok(m.net.some((u) => /section_id=template--777__theme-bits/.test(u)),
+            'the second page was fetched whole rather than just the colours');
+
+  const legend = await m.api('/projects/' + moon.id + '/legend');
+  assert.deepEqual(legend.colours.map((c) => [c.code, c.name, c.hex]),
+                   [['310', 'Black', '#000000'], ['3865', 'Winter White', '#fbfbf9']]);
+  assert.equal(legend.shape, 'square');
+
+  const wish = (await m.api('/projects')).find((x) => x.title === 'Wild Bloom');
+  assert.equal((await m.api('/projects/' + wish.id + '/legend')).colours.length, 1,
+               'a wish-list kit did not get its colours');
+
+  const after = await m.api('/dac/palettes');
+  assert.equal(after.have, 2, 'the kits with colours were not counted');
+  assert.equal(after.candidates, 1, 'a kit whose page has no list is asked about again next time');
+
+  await idbDirect.del('meta', 'legends');
+  await idbDirect.del('meta', 'drills');
+});
+
+test('Settings fetches the colours without a DAC account, and shows how far it got', async () => {
+  const kits = [{ ...DAC_KIT(4, 404, 'Sif'), specHtml: PAGE('DAC-404S', 'square', [['310', 'Black', '#000000']]) }];
+  const m = await mount({ products: kits });
+  await m.sync();
+  await emptyLogbook(m);
+  await idbDirect.del('meta', 'legends');
+  await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: 'Sif', shop: 'dac', dac_handle: 'sif', status: 'received' }) });
+
+  await m.go('#/settings');
+  await m.tap('[data-act="getpalettes"]');
+  await m.until(async () => (await m.api('/dac/palettes')).have === 1, 8000);
+  assert.equal((await m.api('/colours')).legends, 1, 'the colours never reached the logbook');
+  assert.equal(m.dacScripts.length, 0, 'Settings signed into DAC to do it');
+  await idbDirect.del('meta', 'legends');
+  await idbDirect.del('meta', 'drills');
+});
+
+test('a kit shows its whole drill list, with DAC\'s colours and what your other kits share', async () => {
+  const { m, add } = await legendMount();
+  await idbDirect.del('meta', 'legends');
+  const moon = await add('Moon Eater', 'moon-eater', 'started');
+  await add('Wild Bloom', 'wild-bloom', 'received');
+  await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dd: {
+      results: [{ variant: '101', owned: true, colors: { status: 'available', shape: 'square',
+                   codes: ['310', 'AB972', 'Z743'] } },
+                { variant: '202', owned: true, colors: { status: 'available', codes: ['310'] } }],
+      options: { square: { data: [{ code: '310', name: 'Black', hex: '000000' }] } } } }) });
+
+  const legend = await m.api('/projects/' + moon.id + '/legend');
+  assert.deepEqual(legend.colours.map((c) => c.code), ['310', 'AB972', 'Z743'], 'the list is not in DAC\'s order');
+  assert.deepEqual(legend.colours.map((c) => c.kind), ['plain', 'ab', 'special']);
+  assert.equal(legend.colours[0].name, 'Black', 'DAC\'s drill list did not reach the kit');
+  assert.equal(legend.colours[0].hex, '#000000');
+  assert.equal(legend.colours[0].others, 1, 'it does not know another kit holds 310');
+  assert.equal(legend.colours[1].others, 0);
+  assert.equal(legend.shape, 'square');
+
+  await m.go('#/p/' + moon.id);
+  await m.tap('[data-go="#/p/' + moon.id + '/colours"]');
+  await m.until(() => m.find('.drillrow'));
+  assert.equal(m.all('.drillrow').length, 3, 'the whole drill list is not shown');
+  const text = m.text();
+  assert.ok(text.includes('Aurora borealis') && text.includes('Special finish'),
+            'the kinds of drill are not named');
+  assert.ok(text.includes('in 1 more'), 'it does not say which drills your other kits share');
+  assert.equal(m.all('.drillshared').length, 1, 'a drill no other kit holds is labelled anyway');
+  assert.ok(/does not say how many drills of each colour/.test(text),
+            'the screen does not say that per-colour amounts are not published');
+
+  await m.tap('.drillrow[data-k="310"]');
+  assert.equal(globalThis.location.hash, '#/colours');
+  await m.until(() => m.find('.drillhero'));
+  assert.ok(m.text().includes('Black'), 'the finder does not show the colour\'s name');
+  assert.match(m.find('.gem.big').getAttribute('style') || '', /#000000/, 'the finder gem is not the drill\'s colour');
+  await idbDirect.del('meta', 'legends');
+  await idbDirect.del('meta', 'drills');
+});
+
+/* 161 is a drill; "Pantone 1615" is the name DAC gives drill 6030. A search
+   for a code must not find it inside another drill's name. */
+test('searching for a drill code finds that code only, not a name with the number in it', async () => {
+  const { m, add } = await legendMount();
+  await idbDirect.del('meta', 'legends');
+  await add('Moon Eater', 'moon-eater', 'received');
+  await add('Wild Bloom', 'wild-bloom', 'received');
+  await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dd: { results: [
+      { variant: '101', owned: true, colors: { status: 'available',
+        codes: [{ code: '161', name: 'Gray Blue', hex: '#788097' }] } },
+      { variant: '202', owned: true, colors: { status: 'available',
+        codes: [{ code: '6030', name: 'Pantone 1615', hex: '#6b3a2f' },
+                { code: '310', name: 'Black', hex: '#000000' }] } }] } }) });
+
+  const hits = (await m.api('/colours?q=161')).results;
+  assert.deepEqual(hits.map((k) => [k.title, k.colour.code]), [['Moon Eater', '161']],
+                   'a code search matched a number inside another drill’s name');
+  // names are still searched for words
+  assert.deepEqual((await m.api('/colours?q=black')).results.map((k) => k.colour.code), ['310']);
+  assert.deepEqual((await m.api('/colours?q=pantone')).results.map((k) => k.colour.code), ['6030']);
+  await idbDirect.del('meta', 'legends');
+});
+
+/* The summary lays every colour list side by side: the drills in the most
+   kits, the ones only one kit uses, and the pair of kits that share the most. */
+const colourSummaryMount = async () => {
+  const { m, add } = await legendMount();
+  await idbDirect.del('meta', 'legends');
+  await idbDirect.del('meta', 'drills');
+  const moon = await add('Moon Eater', 'moon-eater', 'completed',
+    { date_ordered: '2026-01-05', date_received: '2026-01-12', date_started: '2026-02-01', date_completed: '2026-04-01' });
+  const bloom = await add('Wild Bloom', 'wild-bloom', 'received',
+    { date_ordered: '2025-06-01', date_received: '2025-07-01' });
+  await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dd: { results: [
+      { variant: '101', owned: true, colors: { status: 'available', codes: [
+        { code: '310', name: 'Black', hex: '#000000' }, { code: '3865', name: 'Winter White', hex: '#fbfbf9' },
+        { code: '105', name: 'Tan', hex: '#cb9051', finish: 'Aurora Borealis' }] } },
+      { variant: '202', owned: true, colors: { status: 'available', codes: [
+        { code: '310', name: 'Black', hex: '#000000' }, { code: '823', name: 'Navy Blue Dark', hex: '#1b2853' }] } }] } }) });
+  return { m, moon, bloom };
+};
+const colourSummaryDone = async () => {
+  await idbDirect.del('meta', 'legends');
+  await idbDirect.del('meta', 'drills');
+};
+
+test('the summary shows the drills in the most kits, the one-offs and the palette twins', async () => {
+  const { m, moon } = await colourSummaryMount();
+  const c = (await m.api('/summary')).colours;
+  assert.ok(c, 'the summary has nothing about colour');
+  assert.equal(c.kits, 2);
+  assert.equal(c.of, 2);
+  assert.equal(c.distinct, 4);
+  assert.deepEqual(c.common.map((x) => [x.code, x.name, x.kits]), [['310', 'Black', 2]]);
+  assert.equal(c.oneOffs.count, 3);
+  assert.deepEqual(c.oneOffs.sample.map((x) => [x.code, x.kit.title]),
+                   [['105', 'Moon Eater'], ['823', 'Wild Bloom'], ['3865', 'Moon Eater']]);
+  assert.deepEqual([c.twins.a.title, c.twins.b.title, c.twins.shared], ['Moon Eater', 'Wild Bloom', 1]);
+  assert.deepEqual(c.finishes, [{ finish: 'Aurora Borealis', n: 1 }]);
+  assert.equal(c.mostColours.id, moon.id);
+  assert.equal(c.placed, 3, 'the drills in the finished kit are the ones placed');
+
+  // a year only holds what was bought in it
+  const y = (await m.api('/summary?year=2025')).colours;
+  assert.equal(y.kits, 1, 'a kit bought in 2026 was counted in 2025');
+  assert.equal(y.placed, 0, 'nothing was finished in 2025');
+  await colourSummaryDone();
+});
+
+test('the summary’s colours are on the page, and a drill opens the finder', async () => {
+  const { m } = await colourSummaryMount();
+  await m.go('#/summary');
+  const text = m.text();
+  assert.ok(/Your staples/.test(text), 'the staples are not shown');
+  assert.ok(/One-offs/.test(text), 'the one-offs are not shown');
+  assert.ok(/Palette twins/.test(text), 'the palette twins are not shown');
+  assert.ok(/From the colour lists of 2 of your 2 kits/.test(text), 'it does not say what it counted');
+  await m.tap('.sumdrill[data-k="310"]');
+  assert.equal(globalThis.location.hash, '#/colours');
+  await m.until(() => m.find('.drillhero'));
+  assert.equal(m.all('.drillgrid .colourhit').length, 2, 'the finder did not show both kits with 310');
+  await colourSummaryDone();
+});
+
+test('with no colour lists the summary says nothing about colour', async () => {
+  const { m } = await legendMount();
+  await idbDirect.del('meta', 'legends');
+  await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: 'Moon Eater', shop: 'dac', dac_handle: 'moon-eater', status: 'received' }) });
+  assert.equal((await m.api('/summary')).colours, null);
+  await m.go('#/summary');
+  assert.ok(!/Your staples|Palette twins/.test(m.text()), 'an empty colour section was drawn');
+});
+
+test('the summary times deliveries and the wait to be started, and says when you work', async () => {
+  const m = await mount();
+  await emptyLogbook(m);
+  const quick = await m.seed({ title: 'Quick', status: 'completed', artist: 'Yuumei Art', shape: 'Square',
+    date_ordered: '2026-01-01', date_received: '2026-01-04', date_started: '2026-01-05', date_completed: '2026-02-01' });
+  await m.seed({ title: 'Slow', status: 'started', artist: 'Yuumei Art', shape: 'Round',
+    date_ordered: '2026-01-01', date_received: '2026-02-20', date_started: '2026-04-20' });
+  const waiting = await m.seed({ title: 'Waiting', status: 'received', artist: 'Chrissabug', shape: 'Square',
+    date_ordered: '2025-01-01', date_received: '2025-01-10' });
+  // Saturday 7 Feb and Saturday 14 Feb, and one short Tuesday in March
+  for (const [on, minutes] of [['2026-02-07', 120], ['2026-02-14', 90], ['2026-03-03', 30]])
+    await m.api(`/projects/${quick.id}/sessions`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on, minutes }) });
+
+  const s = await m.api('/summary');
+  assert.equal(s.records.quickestDelivery.title, 'Quick');
+  assert.equal(s.records.quickestDelivery.value, 3);
+  assert.equal(s.records.slowestDelivery.title, 'Slow');
+  assert.equal(s.records.quickestStart.title, 'Quick');
+  assert.equal(s.records.longestWaitToStart.title, 'Slow');
+  assert.equal(s.records.longestWaitToStart.value, 59);
+  assert.equal(s.records.longestUnstarted.id, waiting.id, 'the kit waiting longest to be started was missed');
+  assert.deepEqual(s.favourites.busiestMonth, { month: '2026-02', hours: 3.5 });
+  assert.deepEqual(s.favourites.weekday, { day: 6, hours: 3.5 }, 'Saturday should be the favourite day');
+  assert.deepEqual(s.favourites.artists, [['Yuumei Art', 2], ['Chrissabug', 1]]);
+  assert.equal(s.favourites.artistCount, 2);
+  assert.deepEqual(s.favourites.shapes, { square: 2, round: 1 });
+
+  // a kit still waiting is about today, so a past year does not name it
+  assert.equal((await m.api('/summary?year=2025')).records.longestUnstarted, null);
+  // a single month has only itself to be busiest of
+  assert.equal((await m.api('/summary?year=2026&month=02')).favourites.busiestMonth, null);
+
+  await m.go('#/summary');
+  const text = m.text();
+  assert.ok(/Quickest delivery/.test(text) && /Busiest month/.test(text) && /Favourite day/.test(text)
+            && /Saturdays/.test(text) && /Drill shape/.test(text), 'the new records are not on the page');
+});
+
+test('Find a drill offers your commonest drills, shows the kits as covers, and filters by status', async () => {
+  const { m, add } = await legendMount();
+  await add('Moon Eater', 'moon-eater', 'started');
+  await add('Wild Bloom', 'wild-bloom', 'received');
+  await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dd: { results: [
+      { variant: '101', owned: true, colors: { status: 'available', codes: ['310', '3865'] } },
+      { variant: '202', owned: true, colors: { status: 'available', codes: ['3865'] } }] } }) });
+  const top = (await m.api('/colours')).top;
+  assert.equal(top[0].code, '3865', 'the drill both kits share is not first');
+  assert.equal(top[0].kits, 2);
+
+  await m.go('#/colours');
+  await m.tap('.topdrill[data-code="3865"]');
+  await m.until(() => m.find('.drillhero'));
+  assert.match(m.find('.drillshare').textContent, /In 2 of your \d+ kits/);
+  assert.equal(m.all('.drillgrid .colourhit').length, 2);
+  assert.ok(m.find('.drillgrid .colourhit .thumb'), 'the kits are not shown as covers');
+  // what you are working on comes first
+  assert.match(m.all('.drillgrid .hitname')[0].textContent, /Moon Eater/);
+
+  await m.tap('.stchip[data-st="received"]');
+  assert.equal(m.all('.drillgrid .colourhit').length, 1, 'the status filter did not narrow the kits');
+  assert.match(m.find('.drillgrid .hitname').textContent, /Wild Bloom/);
+  await m.tap('.stchip[data-st=""]');
+  assert.equal(m.all('.drillgrid .colourhit').length, 2, 'All did not bring every kit back');
+});
+
+test('a legend brought back later adds to the ones already kept', async () => {
+  const { m, add } = await legendMount();
+  await add('Moon Eater', 'moon-eater', 'received');
+  await add('Wild Bloom', 'wild-bloom', 'received');
+  const send = (results) => m.api('/dac/legends', { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dd: { results } }) });
+  await send([{ variant: '101', owned: true, colors: { status: 'available', codes: ['310'] } },
+              { variant: '202', owned: true, colors: { status: 'checking' } }]);
+  const second = await send([{ variant: '202', owned: true,
+                               colors: { status: 'available', codes: ['3865'] } }]);
+  assert.equal(second.total, 2, 'the second sync threw away the first one\'s legends');
+});
+
+test('Settings sends your DAC kits to the DAC screen, and a result becomes swatches', async () => {
+  const { m, add } = await legendMount();
+  const moon = await add('Moon Eater', 'moon-eater', 'received');
+  m.answerConfirms(true);
+  await m.go('#/settings');
+  await m.tap('[data-act="dacsync"]');
+  assert.equal(m.dacScripts.length, 1, 'nothing was handed to the DAC screen');
+  const sent = m.dacScripts[0];
+  assert.match(sent.tick, /"sku":"DAC-101S"/, 'the tick script does not carry the kit');
+  assert.match(sent.tick, /probe: "\/products\/moon-eater"/, 'no signed-in page to fetch the sign-in details from');
+  assert.ok(sent.legends.includes('"101"'), 'the legend script does not know which kit to read');
+
+  // what the DAC screen would hand back
+  await m.window.__dacSyncDone(JSON.stringify({ tk: { done: true, results: [{ variant: '101', state: 'marked' }] },
+    dd: { done: true, results: [{ variant: '101', owned: true,
+      colors: { status: 'available', codes: [{ code: '310', name: 'Black', hex: '000000' }] } }] } }));
+  await m.settle();
+
+  await m.go('#/p/' + moon.id);
+  assert.ok(m.find('.swatch[data-k="310"]'), 'the kit does not show its drill colours');
+  await m.tap('.swatch[data-k="310"]');
+  assert.equal(globalThis.location.hash, '#/colours');
+  assert.ok(m.text().includes('Moon Eater'), 'tapping a colour did not find the kit holding it');
+});
+
+/* "Already purchased" is a toggle: the first run touches only a few kits, so
+   they can be checked on DAC before the rest are. */
+test('the first run ticks only three kits, and the next does the rest', async () => {
+  const kitsIn = ['a', 'b', 'c', 'd', 'e'].map((x, i) => DAC_KIT(10 + i, 900 + i, 'Kit ' + x));
+  const m = await mount({ products: kitsIn });
+  await m.sync();
+  await emptyLogbook(m);
+  // earlier tests have already had their trial; this one needs a fresh start
+  await idbDirect.del('meta', 'dacTrial');
+  for (const k of kitsIn)
+    await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: k.title, shop: 'dac', dac_handle: k.handle, status: 'received' }) });
+  m.answerConfirms(true);
+
+  assert.equal((await m.api('/dac/kits')).piloted, false, 'sanity: this should be a first run');
+  await m.go('#/settings');
+  await m.tap('[data-act="dacsync"]');
+  assert.match(m.dacScripts[0].tick, /limit: 3/, 'the first run was not a short trial');
+
+  // the trial comes back having ticked some
+  await m.window.__dacSyncDone(JSON.stringify({ tk: { done: true,
+    results: m.dacScripts[0].kits.slice(0, 3).map((k) => ({ variant: k.variant, state: 'marked' })) },
+    dd: { done: true, results: [] } }));
+  await m.settle();
+  await m.go('#/settings');
+  await m.tap('[data-act="dacsync"]');
+  assert.match(m.dacScripts[1].tick, /limit: null/, 'after the trial, the next run did not do them all');
+});
+
+test('declining the warning sends nothing to DAC', async () => {
+  const { m, add } = await legendMount();
+  await add('Moon Eater', 'moon-eater', 'received');
+  m.answerConfirms(false);
+  await m.go('#/settings');
+  await m.tap('[data-act="dacsync"]');
+  assert.equal(m.dacScripts.length, 0, 'it went ahead after being told no');
+});
+
+test('a sign-in closed early is said so, and changes nothing', async () => {
+  const { m } = await legendMount();
+  const before = (await m.api('/colours')).legends;   // the shim keeps earlier tests' lists
+  await m.go('#/settings');
+  await m.window.__dacSyncDone(null);
+  await m.settle();
+  const said = m.find('.toast');
+  assert.ok(said && /closed before it finished/.test(said.textContent),
+            'closing the DAC screen early went unremarked');
+  assert.equal((await m.api('/colours')).legends, before, 'a cancelled sign-in changed the colour lists');
+});
+
+/* The app is compiled against Android's own stubs, which lack the method javac
+   needs to build a lambda — so a lambda compiles fine on an ordinary JDK and
+   then fails the real build with no useful message. None allowed. */
+test('the Android source has no lambdas or method references', () => {
+  const dir = new URL('../android/src/org/logbook/solo/', import.meta.url);
+  for (const f of readdirSyncFs(dir).filter((n) => n.endsWith('.java'))) {
+    const code = readFileSync(new URL(f, dir), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')      // comments
+      .replace(/"(?:\\.|[^"\\])*"/g, '""');                          // strings
+    assert.doesNotMatch(code, /\)\s*->|\w\s*->\s*[{\w(]/, `${f} has a lambda`);
+    assert.doesNotMatch(code, /\w::\w/, `${f} has a method reference`);
+  }
+});
+
+/* Ticking is a toggle. A kit the account owns but DAC has no colour list for
+   yet would otherwise be pressed again on every run: off, then back on. */
+test('the DAC screen skips every kit the account already owns, not only the ones with colours', () => {
+  const src = readFileSync(new URL('../android/src/org/logbook/solo/DacActivity.java', import.meta.url), 'utf8');
+  const have = src.slice(src.indexOf('private static JSONArray haveFrom'));
+  const body = have.slice(0, have.indexOf('\n    }'));
+  assert.match(body, /optBoolean\("owned"\)/, 'kits already owned are not skipped');
+  assert.doesNotMatch(body, /"available"/, 'a kit without a colour list is still ticked every run');
+});
+
+/* A kit that could not be ticked is only fixable if its page can be seen. */
+test('a kit that could not be ticked leaves a report on the phone, kept whole', async () => {
+  const { m } = await legendMount();
+  await m.go('#/settings');
+  await m.window.__dacSyncDone(JSON.stringify({
+    tk: { done: true, results: [{ variant: '101', state: 'failed', name: 'Moon Eater',
+              error: 'someone@example.com refused', reply: 'https://cdn.example/ap.js' }] },
+    dd: { done: true, results: [] } }));
+  await m.settle();
+  const report = m.downloads.find((d) => d.name === 'dac-report.json');
+  assert.ok(report, 'no report was saved');
+  assert.match(report.text, /cdn\.example\/ap\.js/, 'the report does not say what the page loaded');
+  assert.match(report.text, /someone@example\.com/, 'the report was altered on the way to the phone');
+  assert.match(m.find('.toast').textContent, /1 not done/);
+});
+
+/* "Already ticked" proves nothing about whether pressing works — a bug once made
+   every kit look already ticked. Only a press seen to work ends the trial. */
+test('a run where every kit looked already ticked does not end the trial', async () => {
+  const kitsIn = ['p', 'q', 'r', 's'].map((x, i) => DAC_KIT(40 + i, 940 + i, 'Trial ' + x));
+  const m = await mount({ products: kitsIn });
+  await m.sync();
+  await emptyLogbook(m);
+  await idbDirect.del('meta', 'dacTrial');
+  for (const k of kitsIn)
+    await m.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: k.title, shop: 'dac', dac_handle: k.handle, status: 'received' }) });
+  await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tk: { results: kitsIn.slice(0, 3).map((k) => ({ variant: String(k.variants[0].id), state: 'skipped' })) },
+                           dd: { done: true, results: [] } }) });
+  assert.equal((await m.api('/dac/kits')).piloted, false, 'a run that pressed nothing was taken as a successful trial');
+  await m.api('/dac/legends', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tk: { results: [{ variant: '940', state: 'marked' }] }, dd: { done: true, results: [] } }) });
+  assert.equal((await m.api('/dac/kits')).piloted, true, 'a press seen to work did not end the trial');
+});
+
+/* "It said it worked, but it did not" is exactly when a report is needed. */
+test('every run leaves a report, including one where everything said it worked', async () => {
+  const { m } = await legendMount();
+  const before = m.downloads.length;
+  await m.go('#/settings');
+  await m.window.__dacSyncDone(JSON.stringify({
+    tk: { done: true, results: [{ variant: '101', state: 'marked', name: 'Moon Eater' }] }, dd: { done: true, results: [] } }));
+  await m.settle();
+  assert.ok(m.downloads.slice(before).some((d) => d.name === 'dac-report.json'),
+            'a run where every kit said "ticked" left no report');
+});
+
+/* Earlier builds ended the trial on results that were not true. */
+test('a trial ended by an earlier build does not count', async () => {
+  const { m, add } = await legendMount();
+  await add('Moon Eater', 'moon-eater', 'received');
+  await idbDirect.put('meta', { done: true, at: '2026-09-19' }, 'dacTrial');   // how 3.29 left it
+  assert.equal((await m.api('/dac/kits')).piloted, false, 'an old, untrustworthy trial was honoured');
 });

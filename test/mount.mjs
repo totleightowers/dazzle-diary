@@ -20,6 +20,8 @@ export async function mount({ width = 390, products = null, catalogue = true, sh
   const document = makeDocument();
   const files = new Map();          // the native file store
   const net = [];                   // every URL the app asked for, in order
+  const dacScripts = [];            // scripts handed to the DAC screen
+  const dacForgotten = { n: 0 };
   const downloads = [];
   const listeners = Object.create(null);
   const confirms = [];
@@ -42,6 +44,9 @@ export async function mount({ width = 390, products = null, catalogue = true, sh
       exists: (p) => files.has(p),
       remove: (p) => files.delete(p),
       isSystemDark: () => true,
+      // the DAC screen: record what would be run there, and forget on request
+      dacSync: (kits, tick, legends) => { dacScripts.push({ kits: JSON.parse(kits), tick, legends }); return true; },
+      dacForget: () => { dacForgotten.n++; return true; },
       setBarColor() {},
       saveDownload: (name, b64, mime) => {
         downloads.push({ name, mime, text: Buffer.from(b64, 'base64').toString('utf8') });
@@ -121,7 +126,9 @@ export async function mount({ width = 390, products = null, catalogue = true, sh
     const raw = String(u);
     net.push(decodeURIComponent(raw.replace('/__net/?url=', '')));
     const real = decodeURIComponent(raw.replace('/__net/?url=', ''));
-    if (/\.(jpg|jpeg|png|webp)/i.test(real)) {
+    /* A picture from the web is a stand-in, but a file this phone already
+       holds is served as itself — otherwise every photo looks the same size. */
+    if (!/^\/(photos|covers)\//.test(raw) && /\.(jpg|jpeg|png|webp)/i.test(real)) {
       if (slowImages) await new Promise((r) => setTimeout(r, slowImages));
       return { ok: true, status: 200, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
                blob: async () => new globalThis.Blob(['x'], { type: 'image/jpeg' }) };
@@ -129,9 +136,11 @@ export async function mount({ width = 390, products = null, catalogue = true, sh
     const local = raw.match(/^\/(photos|covers)\/(.+)$/);
     if (local) {
       const key = local[1] + '/' + decodeURIComponent(local[2]);
+      /* The real bytes, not a stand-in: a backup that quietly shrank a photo
+         would otherwise look the same as one that carried it whole. */
       return files.has(key)
         ? { ok: true, status: 200, arrayBuffer: async () => files.get(key).buffer,
-            blob: async () => new globalThis.Blob(['x'], { type: 'image/jpeg' }) }
+            blob: async () => new globalThis.Blob([files.get(key).toString('binary')], { type: 'image/jpeg' }) }
         : { ok: false, status: 404 };
     }
     if (/version\.json$/.test(raw)) {
@@ -188,11 +197,30 @@ export async function mount({ width = 390, products = null, catalogue = true, sh
   /* Tap something that is actually on screen. If the selector matches nothing,
      say so loudly — a test that silently taps nothing proves nothing. */
   const tap = async (selector) => {
+    /* Screens draw some of their content after loading it, so wait a moment for
+       the thing to appear — a tap that raced a busy machine used to fail with
+       "nothing on screen" while the list was still loading. Still loud if it
+       never comes. */
+    for (let i = 0; i < 150 && !document.querySelector(selector); i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
     const el = document.querySelector(selector);
     if (!el) throw new Error(`nothing on screen matches ${selector}`);
     el.dispatchEvent({ type: 'click' });
     await settle();
     return el;
+  };
+
+  /* Wait for something to become true, rather than for a fixed time. A tap
+     whose handler waits on the database finishes when it finishes; a fixed
+     settle guessed how long that takes, and under load guessed wrong. */
+  const until = async (check, ms = 3000) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      if (await check()) return true;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    return false;
   };
 
   const sync = async () => {
@@ -220,7 +248,7 @@ export async function mount({ width = 390, products = null, catalogue = true, sh
   };
 
   return {
-    document, window: win, api, app, go, tap, settle, sync, seed, fire, files, downloads, dropCsv, net,
+    document, window: win, api, app, go, tap, settle, until, sync, seed, fire, files, downloads, dropCsv, net, dacScripts, dacForgotten,
     html: () => document.documentElement.innerHTML,
     text: () => document.documentElement.textContent,
     screen: () => (document.getElementById('main') || app).innerHTML,

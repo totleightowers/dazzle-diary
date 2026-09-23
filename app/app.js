@@ -1,7 +1,9 @@
 import { api, isStandalone } from './api.js';
+import { FAMILY_SWATCH } from './core/colourstats.js';
 import { statusFromDates, applyStatus, parseHolds, openHold, heldDays,
          ALL_STATUSES } from './core/status.js';
 import { productUrl, shopById, displayCurrency, SHOPS, CURRENCIES } from './core/shops.js';
+import { buildTickScript, buildLegendScript } from './core/dacsync.js';
 const SHOP_BY_NAME = Object.fromEntries(SHOPS.map((s) => [s.name, s]));
 /* Dazzle Diary — the whole client. Vanilla; no build step. */
 
@@ -315,24 +317,9 @@ function lightbox(items, startIndex = 0) {
 }
 
 
-/* Phone cameras produce 7–12 MB frames. A progress photo is looked at on a
- * phone screen, so 1600px at q0.82 is indistinguishable and ~40x smaller —
- * which is the difference between a 12 MB backup and a 500 MB one. */
-async function downscale(file, maxEdge = 1600, quality = 0.82) {
-  if (!file || !/^image\//.test(file.type || '')) return file;
-  try {
-    const bitmap = await createImageBitmap(file);
-    const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
-    if (scale === 1 && file.size < 900 * 1024) { bitmap.close?.(); return file; }
-    const w = Math.round(bitmap.width * scale), h = Math.round(bitmap.height * scale);
-    const canvas = document.createElement('canvas');
-    canvas.width = w; canvas.height = h;
-    canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
-    bitmap.close?.();
-    const blob = await new Promise((ok) => canvas.toBlob(ok, 'image/jpeg', quality));
-    return blob && blob.size < file.size ? blob : file;
-  } catch { return file; }        // unreadable image: send it as-is
-}
+/* Photos used to be shrunk to 1600px on the way in, which made a backup
+ * small but threw away the picture you actually took. They are kept as they
+ * came off the camera now, and backed up whole. */
 
 /* Android's WebView ignores downloads entirely unless the app installs a
  * DownloadListener — and it cannot handle blob: URLs even then. So hand the
@@ -418,6 +405,14 @@ const S = {
 };
 
 /* --------------------------------------------------------------- fragments */
+/* A drill: its own colour when DAC's drill list has been fetched, otherwise a
+   plain gem, so a bare code still looks like a drill rather than a blank. */
+const swatch = (c) => `
+  <button class="swatch" data-act="findcolour" data-k="${h(c.code)}"
+          aria-label="Find other kits with ${h(c.code)}${c.name ? ' ' + h(c.name) : ''}">
+    ${c.hex ? `<i style="background:${h(c.hex)}"></i>` : `<span class="gem sm plain"><i></i></span>`}
+    <span class="tnum">${h(c.code)}</span></button>`;
+
 const thumb = (p, cls = '') => {
   const src = p.cover ? `/covers/${encodeURIComponent(p.cover)}` : null;
   return `<div class="thumb ${cls}" style="background:${stVar(p.status)}">${
@@ -1066,6 +1061,8 @@ route(/^#\/p\/(\d+)$/, async (id) => {
       }
     } catch { /* offline: the hero simply stays empty */ }
   }
+  // borrowed from a DAC account (see core/dacsync.js); empty for most kits
+  const legend = await api('/projects/' + id + '/legend').catch(() => ({ colours: [] }));
   const spec = [
     ['Canvas size', sizeText(p) + (p.width_in ? ` · ${p.width_in}" × ${p.height_in}"` : '')],
     ['Drill shape', p.shape], ['Coverage', p.coverage],
@@ -1322,6 +1319,14 @@ route(/^#\/p\/(\d+)$/, async (id) => {
             Use the shop\u2019s image as the cover</button>` : ''}
         </div>
 
+        ${legend.colours && legend.colours.length ? `
+        <div>
+          <h3 class="label">Drill colours · ${legend.colours.length}</h3>
+          <div class="swatches">${legend.colours.slice(0, 24).map(swatch).join('')}</div>
+          <button class="btn ghost wide" style="margin-top:10px" data-go="#/p/${p.id}/colours">
+            ${legend.colours.length > 24 ? `All ${legend.colours.length} drill colours` : 'The whole drill list'}</button>
+        </div>` : ''}
+
         <div>
           <h3 class="label">Notes</h3>
           <textarea class="fld" id="notes" placeholder="Colour matches, missing drills, where you got to…">${h(p.notes || '')}</textarea>
@@ -1374,11 +1379,10 @@ route(/^#\/p\/(\d+)$/, async (id) => {
       say();
       for (const f of files) {
         try {
-          const small = await downscale(f);
           await api(`/projects/${p.id}/photos`, {
             method: 'POST',
-            headers: { 'Content-Type': small.type || 'image/jpeg' },
-            body: isStandalone() ? await small.arrayBuffer() : small
+            headers: { 'Content-Type': f.type || 'image/jpeg' },
+            body: isStandalone() ? await f.arrayBuffer() : f
           });
         } catch { failed++; }
         done++;
@@ -1870,6 +1874,151 @@ route(/^#\/(new|p\/(\d+)\/edit)$/, async (_all, id) => {
     link();
     cmHint(); recalc();
     toast('Filled from the catalogue');
+  };
+});
+
+/* =================================================== #/p/:id/colours
+   One kit's whole drill list. DAC gives the codes, and its own drill list
+   gives the colours and names when a sync has fetched it; the rest is what
+   the codes themselves say and what your other kits hold. */
+route(/^#\/p\/(\d+)\/colours$/, async (id) => {
+  const [p, legend] = await Promise.all([api('/projects/' + id), api('/projects/' + id + '/legend')]);
+  /* Grouped the way the kit's page groups them, in DAC's own words where it
+     gave any: Standard, then Aurora Borealis, Fairy Dust, Iridescent and the
+     rest. A legend that came from a DAC account has only codes to go on. */
+  const label = (c) => c.finish || (c.kind === 'ab' ? 'Aurora borealis'
+                                  : c.kind === 'special' ? 'Special finish' : 'Standard');
+  const order = (name) => (name === 'Standard' ? 0 : 1);
+  const groups = [...new Set(legend.colours.map(label))]
+    .sort((x, y) => order(x) - order(y) || x.localeCompare(y))
+    .map((name) => [name, legend.colours.filter((c) => label(c) === name)]);
+  const shared = legend.colours.filter((c) => c.others).length;
+  $out.innerHTML = `
+  <div class="screen reading">
+    <div class="topbar">${topbar('Drill colours', { back: '#/p/' + id, sub: true })}</div>
+    <div class="scroll pad" style="padding-bottom:26px">
+      <p style="margin:16px 2px 0;font-size:13px;color:var(--ink-mute)">
+        ${h(p.title)} — <span class="tnum">${num(legend.colours.length)}</span> drill colours${
+        legend.shape ? `, ${h(legend.shape)}` : ''}${p.drills ? `, ${p.drills_estimated ? '≈' : ''}${num(p.drills)} diamonds` : ''}.
+        ${legend.named ? '' : 'Diamond Art Club has not given this app its drill list yet, so the codes have no colours — the next sync fetches it.'}</p>
+      ${p.colors && p.colors !== legend.colours.length ? `
+      <p style="margin:8px 2px 0;font-size:12px;color:var(--ink-mute)">The listing says ${
+        num(p.colors)} colours; Diamond Art Club’s list has ${num(legend.colours.length)}.</p>` : ''}
+      ${groups.map(([label, list]) => `
+        <h3 class="label" style="margin:22px 2px 10px">${h(label)} · ${num(list.length)}</h3>
+        <div class="stack">${list.map((c) => `
+          <button class="drillrow" data-act="findcolour" data-k="${h(c.code)}">
+            ${c.hex ? `<i class="swatch-dot" style="background:${h(c.hex)}"></i>`
+                    : `<span class="gem plain"><i></i></span>`}
+            <span style="flex:1 1 auto;min-width:0;text-align:left">
+              <span class="drillcodeline tnum">${h(c.code)}</span>
+              ${c.name ? `<span class="drillsub">${h(c.name)}</span>` : ''}
+            </span>
+            ${c.others ? `<span class="drillshared tnum">in ${num(c.others)} more</span>` : ''}
+          </button>`).join('')}</div>`).join('')}
+      <p style="margin:18px 2px 0;font-size:11px;line-height:1.5;color:var(--ink-mute)">
+        Tap a colour to find your other kits that use it.${legend.at ? ` From Diamond Art Club, ${
+          dateText(legend.at.slice(0, 10))}.` : ''}
+        Diamond Art Club does not say how many drills of each colour a kit holds, so neither does this.</p>
+    </div>
+  </div>`;
+});
+
+/* ========================================================== #/colours
+   Which of your kits holds this drill? Works offline, from colour lists
+   borrowed from a DAC account. By code (310, B5200) or by name (black). */
+route(/^#\/colours$/, async () => {
+  const q0 = S.colourQ || '';
+  const first = await api('/colours?q=' + encodeURIComponent(q0));
+  $out.innerHTML = `
+  <div class="screen reading">
+    <div class="topbar">
+      ${topbar('Find a drill', { back: '#/settings', sub: true })}
+      <div class="search">
+        ${svg('search', 18)}
+        <input id="cq" value="${h(q0)}" placeholder="A code like 310, or a colour like black"
+               autocomplete="off" inputmode="text">
+      </div>
+    </div>
+    <div class="scroll pad" id="colourbody" style="padding-bottom:24px"></div>
+  </div>`;
+  const input = document.getElementById('cq');
+  /* A drill as a little faceted gem: its own colour when the list has one,
+     otherwise a neutral one so the code still reads as a drill. */
+  const gem = (c, big = false) => `<span class="gem${big ? ' big' : ''}${c.hex ? '' : ' plain'}"${
+    c.hex ? ` style="--gem:${h(c.hex)}"` : ''}><i></i></span>`;
+  const search = (code) => {
+    input.value = code;
+    input.oninput();
+  };
+  const paint = (r, q) => {
+    const body = document.getElementById('colourbody');
+    if (!body) return;
+    if (!r.legends) {
+      body.innerHTML = `<div class="empty">${svg('search', 36, 1.4)}<h2>No colour lists yet</h2>
+        <p>Get them from Diamond Art Club in Settings, under Drill colours.</p></div>`;
+      return;
+    }
+    if (!q) {
+      body.innerHTML = `
+        <p class="finder-note tnum">Searching ${num(r.legends)} kit${r.legends === 1 ? '' : 's'}’ colour lists.</p>
+        ${r.top && r.top.length ? `
+          <h3 class="label" style="margin:22px 2px 10px">In most of your kits</h3>
+          <div class="topdrills">${r.top.map((t) => `
+            <button class="topdrill tnum" data-code="${h(t.code)}">${gem(t)}<b>${h(t.code)}</b><span>${num(t.kits)}</span></button>`).join('')}
+          </div>` : ''}`;
+      body.querySelectorAll('[data-code]').forEach((b) => { b.onclick = () => search(b.dataset.code); });
+      return;
+    }
+    if (!r.results.length) {
+      body.innerHTML = `<div class="empty">${svg('search', 36, 1.4)}<h2>Not in any of your kits</h2>
+        <p>None of the ${num(r.legends)} colour lists has ${h(q)}.</p></div>`;
+      return;
+    }
+    const c = r.results[0].colour;
+    const byCode = r.results.every((k) => k.colour.code === c.code);
+    const counts = {};
+    for (const k of r.results) counts[k.status] = (counts[k.status] || 0) + 1;
+    const statuses = ORDER.filter((s) => counts[s]);
+    if (S.colourSt && !counts[S.colourSt]) S.colourSt = null;
+    const shown = r.results.filter((k) => !S.colourSt || k.status === S.colourSt)
+      .sort((x, y) => ORDER.indexOf(x.status) - ORDER.indexOf(y.status) || x.title.localeCompare(y.title));
+    const of = r.searched || r.legends;
+    body.innerHTML = `
+      <div class="drillhero">
+        ${byCode ? gem(c, true) : `<span class="gem big plain"><i></i></span>`}
+        <div style="min-width:0;flex:1 1 auto">
+          <div class="drillcode tnum">${byCode ? h(c.code) : h(q)}</div>
+          ${byCode && c.name ? `<div class="drillname">${h(c.name)}</div>` : ''}
+          <div class="drillshare tnum">In <b>${num(r.results.length)}</b> of your ${num(of)} kit${of === 1 ? '' : 's'}</div>
+          <div class="drillbar"><i style="width:${Math.round(100 * r.results.length / Math.max(1, of))}%"></i></div>
+        </div>
+      </div>
+      ${statuses.length > 1 ? `
+      <div class="stfilter">
+        <button class="stchip" aria-pressed="${!S.colourSt}" data-st="">All <span class="tnum">${num(r.results.length)}</span></button>
+        ${statuses.map((s) => `<button class="stchip" aria-pressed="${S.colourSt === s}" data-st="${s}">
+          <i style="background:${stDot(s)}"></i>${h(statusOf(s).short)} <span class="tnum">${num(counts[s])}</span></button>`).join('')}
+      </div>` : ''}
+      <div class="drillgrid">${shown.map((k) => `
+        <button class="colourhit" data-go="#/p/${k.id}">
+          ${thumb(k)}
+          <span class="hitname">${h(k.title)}</span>
+          <span class="hitmeta"><i style="background:${stDot(k.status)}"></i>${h(statusOf(k.status).short)}${
+            byCode ? '' : ` · <span class="tnum">${h(k.colour.code)}</span>`}</span>
+        </button>`).join('')}</div>`;
+    body.querySelectorAll('[data-st]').forEach((b) => {
+      b.onclick = () => { S.colourSt = b.dataset.st || null; paint(r, q); };
+    });
+  };
+  paint(first, q0);
+  let t;
+  input.oninput = () => {
+    clearTimeout(t);
+    t = setTimeout(async () => {
+      S.colourQ = input.value.trim();
+      paint(await api('/colours?q=' + encodeURIComponent(S.colourQ)), S.colourQ);
+    }, 200);
   };
 });
 
@@ -2453,6 +2602,78 @@ route(/^#\/summary$/, async () => {
     </div>` : '';
   };
 
+  /* A drill on this page: its colour when it is known, a plain gem when not,
+     and a tap takes you to every kit that holds it. */
+  const drillDot = (c) => c.hex
+    ? `<i class="swatch-dot" style="background:${h(c.hex)}"></i>`
+    : `<span class="gem sm plain"><i></i></span>`;
+  const drillRow = (c, right) => `
+    <button class="row sumdrill" data-act="findcolour" data-k="${h(c.code)}" style="width:100%;text-align:left">
+      ${drillDot(c)}
+      <span class="k" style="flex:1 1 auto;min-width:0;display:block;color:var(--ink)">
+        <span class="tnum" style="font-weight:700">${h(c.code)}</span>${c.finish ? `
+        <span style="font-size:11px;color:var(--ink-mute)"> · ${h(c.finish)}</span>` : ''}
+        ${c.name ? `<span style="display:block;margin-top:2px;font-size:12px;color:var(--ink-mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${h(c.name)}</span>` : ''}
+      </span>
+      <span class="v tnum" style="white-space:nowrap;font-size:12px;color:var(--ink-mid)">${right}</span>
+    </button>`;
+
+  const C = s.colours;
+  const colourSection = !C ? '' : `
+    <div>
+      <h3 class="label">Colours</h3>
+      ${tiles(
+        tile(C.distinct, num(C.distinct), `different drills across ${SUMMARY.year ? 'what you bought' : 'your stash'}`),
+        tile(C.placed, num(C.placed), 'different drills in what you have finished', 'var(--st-completed)'),
+        tile(C.oneOffs.count, num(C.oneOffs.count), `drill${C.oneOffs.count === 1 ? '' : 's'} only one kit uses`)
+      )}
+      ${C.families.length ? `
+      <div class="panel pad-in famcard" style="margin-top:10px">
+        <div style="font-size:13px;color:var(--ink)">Your drills lean towards
+          <b>${h(C.families[0].family)}</b>
+          <span class="tnum" style="color:var(--ink-mute)"> · ${C.families[0].share}%</span></div>
+        <div class="fambar">${C.families.map((f) =>
+          `<i style="flex:${f.n} 1 0;background:${FAMILY_SWATCH[f.family]}" title="${h(f.family)} ${f.share}%"></i>`).join('')}</div>
+        <div class="famkey">${C.families.slice(0, 6).map((f) => `
+          <span><i style="background:${FAMILY_SWATCH[f.family]}"></i>${h(f.family)}
+            <span class="tnum">${Math.round(f.share)}%</span></span>`).join('')}</div>
+      </div>` : ''}
+      ${C.common.length ? `
+      <p class="sumsub">Your staples — the drills in the most kits</p>
+      <div class="panel pad-in">${C.common.map((c) => drillRow(c, `in ${num(c.kits)} kits`)).join('')}</div>` : ''}
+      ${C.oneOffs.sample.length ? `
+      <p class="sumsub">One-offs — drills only one kit uses${C.oneOffs.count > C.oneOffs.sample.length
+        ? ` · ${num(C.oneOffs.sample.length)} of ${num(C.oneOffs.count)}` : ''}</p>
+      <div class="panel pad-in">${C.oneOffs.sample.map((c) => drillRow(c,
+        `<span style="display:inline-block;max-width:9.5em;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom">${h(c.kit.title)}</span>`)).join('')}</div>` : ''}
+      <div class="panel pad-in" style="margin-top:10px">
+        ${pair('Colours', 'Most colours', C.mostColours, 'Fewest colours', C.fewestColours, (v) => num(v) + ' colours')}
+        ${rec('Most specialty diamonds', C.mostSpecial, (v) => num(v))}
+        ${rec('Most one-off drills', C.mostOneOffs, (v) => num(v))}
+        ${pair('Palette', 'Brightest palette', C.brightest, 'Darkest palette', C.darkest, (v) => v + '% light')}
+        ${C.twins ? `
+        <button class="row" data-go="#/p/${C.twins.a.id}" style="width:100%;text-align:left">
+          <span class="k" style="color:var(--ink-mute);flex:1 1 auto;min-width:0;display:block">
+            <span style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:.04em">Palette twins</span>
+            <span style="display:block;color:var(--ink);font-size:14px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${h(C.twins.a.title)}</span>
+            <span style="display:block;color:var(--ink);font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">&amp; ${h(C.twins.b.title)}</span>
+          </span>
+          <span class="v tnum" style="white-space:nowrap;font-weight:700">${num(C.twins.shared)} shared</span>
+        </button>` : ''}
+      </div>
+      ${C.finishes.length ? `
+      <p class="sumsub">Specialty diamonds</p>
+      <div class="finchips">${C.finishes.map((f) => `<span class="finchip">${h(f.finish)}
+        <b class="tnum">${num(f.n)}</b></span>`).join('')}</div>` : ''}
+      <p style="margin:8px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
+        From the colour lists of ${num(C.kits)} of your ${num(C.of)} kit${C.of === 1 ? '' : 's'}.
+        Palette twins are the two kits that share the most drills — each other’s best source of spares.
+        Light is the average of each drill’s colour, from black at 0 to white at 100.</p>
+    </div>`;
+
+  const WEEKDAYS = ['Sundays', 'Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays'];
+  const F = s.favourites;
+
   const chip = (label, on, act, k) =>
     `<button class="chip" style="height:36px;padding:0 12px" data-act="${act}"${
       k == null ? '' : ` data-k="${h(k)}"`} aria-pressed="${on}">${h(label)}</button>`;
@@ -2514,6 +2735,8 @@ route(/^#\/summary$/, async () => {
       ], `Across everything you own. Best value is what a canvas cost per thousand diamonds \u2014 the only fair way to hold a small dear kit against a big cheap one.${
         s.currencies > 1 ? ` Dearest and best value are ranked among the kits you paid for in ${h(s.mainCurrency)}: without exchange rates, holding those against a price in another currency would be a guess.` : ''}`)}
 
+      ${colourSection}
+
       ${section('What you have finished', [
         pair('Canvas', 'Biggest', r.biggestFinished, 'Smallest', r.smallestFinished, (_v, x) => sizeOf(x)),
         pair('Diamonds', 'Most diamonds', r.mostDiamondsFinished, 'Fewest diamonds', r.fewestDiamondsFinished, (v) => bigNum(v)),
@@ -2533,16 +2756,34 @@ route(/^#\/summary$/, async () => {
         rec('Longest put down', r.longestHeld, spanText)
       ], 'Hours come from the sessions you logged, so a hold cannot change them \u2014 nothing is logged while a canvas is put down.')}
 
-      ${(s.favourites.artist || s.favourites.shop) ? `<div>
+      ${section('Waiting', [
+        pair('Delivery', 'Quickest delivery', r.quickestDelivery, 'Slowest delivery', r.slowestDelivery, spanText),
+        pair('Arrived to started', 'Started soonest after it arrived', r.quickestStart,
+             'Waited longest to be started', r.longestWaitToStart, spanText),
+        rec('Longest still unstarted', r.longestUnstarted, spanText)
+      ], 'Delivery is from ordering to arriving. The wait to be started ends the day you started, so it counts in that month; the kit still waiting is about today, so it only shows for all time.')}
+
+      ${(F.artist || F.shop || F.busiestMonth || F.weekday) ? `<div>
         <h3 class="label">Most of all</h3>
         <div class="panel pad-in">
-          ${s.favourites.artist ? `<div class="row"><span class="k">Artist</span>
-            <span class="v">${h(s.favourites.artist[0])} <span class="tnum" style="color:var(--ink-mute)">\u00d7${s.favourites.artist[1]}</span></span></div>` : ''}
+          ${(F.artists || []).length ? `<div class="row" style="align-items:flex-start"><span class="k">${
+            F.artists.length > 1 ? 'Artists' : 'Artist'}${F.artistCount > 1 ? `<span style="display:block;font-size:11px;color:var(--ink-mute)" class="tnum">${num(F.artistCount)} in all</span>` : ''}</span>
+            <span class="v" style="text-align:right">${F.artists.map(([name, n]) =>
+              `<span style="display:block">${h(name)} <span class="tnum" style="color:var(--ink-mute)">\u00d7${n}</span></span>`).join('')}</span></div>` : ''}
           ${s.favourites.shop ? `<div class="row"><span class="k">Shop</span>
             <span class="v" style="display:flex;align-items:center;gap:7px">
               <span class="pip" data-shop="${h(s.favourites.shop[0])}"></span>
               ${h((shopById(s.favourites.shop[0]) || {}).name || s.favourites.shop[0])}
               <span class="tnum" style="color:var(--ink-mute)">\u00d7${s.favourites.shop[1]}</span></span></div>` : ''}
+          ${(F.shapes && (F.shapes.square || F.shapes.round)) ? `<div class="row"><span class="k">Drill shape</span>
+            <span class="v tnum">${[['square', 'Square'], ['round', 'Round']].filter(([k]) => F.shapes[k])
+              .map(([k, label]) => `${label} <span style="color:var(--ink-mute)">\u00d7${F.shapes[k]}</span>`).join(' \u00b7 ')}</span></div>` : ''}
+          ${F.busiestMonth ? `<div class="row"><span class="k">Busiest month</span>
+            <span class="v">${h(MONTHS[Number(F.busiestMonth.month.slice(5, 7)) - 1])} ${h(F.busiestMonth.month.slice(0, 4))}
+              <span class="tnum" style="color:var(--ink-mute)"> \u00b7 ${hoursText(F.busiestMonth.hours)}</span></span></div>` : ''}
+          ${F.weekday ? `<div class="row"><span class="k">Favourite day</span>
+            <span class="v">${h(WEEKDAYS[F.weekday.day])}
+              <span class="tnum" style="color:var(--ink-mute)"> \u00b7 ${hoursText(F.weekday.hours)}</span></span></div>` : ''}
         </div>
       </div>` : ''}
 
@@ -2555,14 +2796,17 @@ route(/^#\/summary$/, async () => {
 
 /* ========================================================== #/settings */
 route(/^#\/settings$/, async () => {
-  const [state, stats, gaps, soft] = await Promise.all([
+  const [state, stats, gaps, soft, drills, pal] = await Promise.all([
     api('/state'), api('/stats'), api('/projects/backfill-dates').catch(() => ({ candidates: 0 })),
-    api('/projects/upgrade-covers').catch(() => ({ candidates: 0 }))]);
+    api('/projects/upgrade-covers').catch(() => ({ candidates: 0 })),
+    api('/colours').catch(() => ({ legends: 0 })),
+    api('/dac/palettes').catch(() => ({ total: 0, have: 0, candidates: 0, running: null }))]);
   const synced = state.catalogue.syncedAt ? dateText(state.catalogue.syncedAt.slice(0, 10)) : null;
   /* A fetch already under way when this screen is painted — because it started
      on launch, or because the screen was painted again — is picked back up
      rather than looking like nothing is happening. */
   if (soft.running) setTimeout(() => watchCovers(soft.running), 0);
+  if (pal.running) setTimeout(() => watchPalettes(pal.running), 0);
   setTimeout(() => {
     const r = document.getElementById('restore');
     if (!r) return;
@@ -2578,6 +2822,8 @@ route(/^#\/settings$/, async () => {
         if (res.skipped) bits.push(`${res.skipped} unchanged`);
         bits.push(`${res.photos} photos`);
         if (res.photosFailed) bits.push(`${res.photosFailed} photos could not be read`);
+        if (res.ownCovers) bits.push(`${res.ownCovers} of your own covers`);
+        if (res.legends) bits.push(`${res.legends} colour lists`);
         bits.push(`${res.covers} covers fetched`);
         if (res.catalogueEmpty) bits.push('covers need the catalogue synced first');
         else if (res.coversMissing) bits.push(`${res.coversMissing} without a cover`);
@@ -2709,6 +2955,49 @@ route(/^#\/settings$/, async () => {
       </div>
 
       <div>
+        <h3 class="label">Drill colours</h3>
+        <div class="panel pad-in" style="margin-bottom:10px">
+          <div class="row" style="align-items:flex-start">
+            <span class="k" style="flex:1 1 auto;color:var(--ink)">
+              <span style="display:block;font-weight:600" id="palcount">${pal.have
+                ? `${num(pal.have)} of ${num(pal.total)} kit${pal.total === 1 ? '' : 's'} have their colours`
+                : 'Find spare drills in kits you own'}</span>
+              <span style="display:block;margin-top:5px;height:4px;border-radius:999px;background:var(--sunken);overflow:hidden">
+                <span id="palbar" style="display:block;height:100%;width:${
+                  pal.total ? Math.round(pal.have / pal.total * 100) : 0}%;background:var(--st-started-dot)"></span></span>
+              <span style="display:block;margin-top:6px;font-size:12px;line-height:1.5;color:var(--ink-mute)" id="palwhy">
+                Diamond Art Club prints every kit’s colour list on its own page, with DMC’s name and
+                the colour itself. This reads those pages — no account, nothing signed into, and
+                kits you have only wished for count too.</span>
+            </span>
+          </div>
+          <div style="display:flex;gap:8px;padding:8px 0">
+            ${drills.legends ? `<button class="btn ghost" style="flex:1 1 auto;height:40px;font-size:13px"
+                    data-go="#/colours">Find a drill</button>` : ''}
+            <button class="btn ghost" style="flex:1 1 auto;height:40px;font-size:13px"
+                    data-act="getpalettes">${pal.candidates ? (pal.have ? 'Fetch the rest' : 'Get drill colours')
+                                                            : 'Check for changes'}</button>
+          </div>
+          <div id="palbox"></div>
+          ${pal.missing ? `<p style="margin:2px 2px 8px;font-size:11px;color:var(--ink-mute)">${
+            num(pal.missing)} kit${pal.missing === 1 ? ' could' : 's could'} not be matched to a DAC listing —
+            Update all shops may fix that.</p>` : ''}
+          <details style="margin-top:2px">
+            <summary style="font-size:12px;color:var(--ink-mute);cursor:pointer">The old way, through a DAC account</summary>
+            <p style="margin:8px 2px;font-size:12px;line-height:1.5;color:var(--ink-mute)">
+              Signs into a DAC account and adds your kits to it as purchased, so their legends come back.
+              The pages above say more and ask for nothing, so this is only worth it for a kit whose page
+              has no list. Your logbook is never changed by it.</p>
+            <div style="display:flex;gap:8px;padding:2px 0 8px">
+              <button class="btn ghost" style="flex:1 1 auto;height:38px;font-size:12px"
+                      data-act="dacsync">${drills.legends ? 'Fetch again from the account' : 'Get colours from a DAC account'}</button>
+            </div>
+            <div id="dacbox"></div>
+            ${drills.legends ? `<button class="btn ghost wide" style="height:36px;font-size:12px"
+                    data-act="dacforget">Sign out of Diamond Art Club in this app</button>` : ''}
+          </details>
+        </div>
+
         <h3 class="label">Your data</h3>
         ${gaps.candidates ? `
         <div class="panel pad-in" style="margin-bottom:10px">
@@ -2757,7 +3046,9 @@ route(/^#\/settings$/, async () => {
         <div id="backupbox"></div>
         <p style="margin:8px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
           Projects and progress photos, in one file. Lands in your <strong>Downloads</strong> folder as
-          <code>dazzle-diary-backup.json</code>. It is the only copy of your logbook that exists
+          <code>dazzle-diary-backup.json</code>. It holds the projects, your photos at full size, the
+          covers you set yourself, the sessions and progress, your settings and the drill colours.
+          Shop covers are fetched again on restore. It is the only copy of your logbook that exists
           anywhere else, so take one now and then.</p>
         ${isStandalone() ? `
         <label class="btn ghost wide" style="margin-top:10px">Restore from a backup file
@@ -3035,6 +3326,45 @@ async function handleClick(e) {
       if (job) watchCovers(job);
     } catch (e) { toast(e.message); el.disabled = false; render(); }
   }
+  else if (act === 'dacsync') {
+    const n = window.LogbookNative;
+    if (!n || typeof n.dacSync !== 'function') { toast('This needs the Android app'); return; }
+    const { kits, missing, piloted } = await api('/dac/kits');
+    if (!kits.length) {
+      toast(missing.length ? 'Update all shops first, so DAC kits can be matched' : 'No DAC kits to send');
+      return;
+    }
+    /* Kits that already have colours are never touched. Of the rest, a first
+       run ticks three, so you can look at them on DAC before the others are. */
+    const limit = piloted ? null : 3;
+    if (!confirm('Sign into the Diamond Art Club account to use, and this ticks "Already purchased" '
+        + (piloted ? `on your ${kits.length} DAC kits` : 'on 3 of your DAC kits as a first try')
+        + ' through DAC\'s own service, then fetches their colour lists. Kits that already have '
+        + 'colours are left alone. Your logbook is not changed.'
+        + (missing.length ? `\n\n${missing.length} could not be matched to a DAC listing `
+                           + 'and will be skipped \u2014 Update all shops may fix that.' : ''))) return;
+    const box = document.getElementById('dacbox');
+    if (box) box.innerHTML = '<p style="margin:0 0 8px;font-size:12px;color:var(--ink-mute)">Waiting for Diamond Art Club\u2026</p>';
+    n.dacSync(JSON.stringify(kits),
+              buildTickScript(kits, { limit, probe: '/products/' + encodeURIComponent(kits[0].handle) }),
+              buildLegendScript(kits.map((k) => k.variant)));
+  }
+  else if (act === 'getpalettes') {
+    const box = document.getElementById('palbox');
+    if (box) box.innerHTML = `<p style="margin:2px 2px 8px;font-size:12px;color:var(--ink-mute)">Reading kit pages…</p>`;
+    try {
+      const { job } = await api('/dac/palettes', { method: 'POST' });
+      if (job) watchPalettes(job);
+    } catch (e) { toast(e.message); }
+  }
+  else if (act === 'dacforget') {
+    try { window.LogbookNative?.dacForget?.(); } catch { /* nothing to forget */ }
+    toast('Signed out of Diamond Art Club here. The colours you have are kept.');
+  }
+  else if (act === 'findcolour') {
+    S.colourQ = el.dataset.k || '';
+    go('#/colours');
+  }
   else if (act === 'showsmallpics') {
     S.lb = { ...S.lb, gaps: 'pics', open: true };
     S.filter = 'all'; S.q = '';
@@ -3075,11 +3405,24 @@ async function handleClick(e) {
     const say = (t) => { if (box) box.innerHTML = `<p style="margin:10px 2px 0;font-size:12px;color:var(--ink-mute)">${h(t)}</p>`; };
     el.disabled = true;
     try {
+      /* Everything that cannot be downloaded again: the projects, the work
+         (sessions and progress), the photos as taken, the covers you chose
+         yourself, your settings and the drill colours borrowed from DAC.
+         Shop covers are left out and re-fetched on restore — they are the one
+         part a catalogue sync can rebuild exactly. */
       say('Collecting projects…');
       const projects = await api('/projects');
+      const b64 = async (blob) => {
+        const buf = new Uint8Array(await blob.arrayBuffer());
+        let bin = '';
+        for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+        return btoa(bin);
+      };
       const photos = [];
       const sessions = [];
       const progress = [];
+      const covers = [];
+      const seenCover = new Set();
       let n = 0;
       for (const p of projects) {
         const full = await api('/projects/' + p.id);
@@ -3087,24 +3430,32 @@ async function handleClick(e) {
         // when the work happened, which the current percentage cannot say
         for (const h of (full.progress_history || [])) progress.push({ ...h, project_id: p.id });
         for (const ph of (full.photos || [])) {
-          say(`Shrinking photo ${++n}…`);
+          say(`Copying photo ${++n}…`);
           const res = await fetch('/photos/' + encodeURIComponent(ph.file));
           if (!res.ok) continue;
-          const small = await downscale(new File([await res.blob()], ph.file, { type: 'image/jpeg' }));
-          const buf = new Uint8Array(await small.arrayBuffer());
-          let bin = '';
-          for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
-          photos.push({ ...ph, project_id: p.id, data: btoa(bin) });
+          photos.push({ ...ph, project_id: p.id, data: await b64(await res.blob()) });
+        }
+        // a cover you set from your own picture: nothing else has a copy
+        for (const file of [p.cover, ...(full.covers || [])]) {
+          if (!file || !/^own-/.test(file) || seenCover.has(file)) continue;
+          seenCover.add(file);
+          say(`Copying cover ${h(p.title)}…`);
+          const res = await fetch('/covers/' + encodeURIComponent(file));
+          if (res.ok) covers.push({ file, data: await b64(await res.blob()) });
         }
       }
-      const json = JSON.stringify({ version: 3, exportedAt: new Date().toISOString(),
-                                    projects, photos, sessions, progress });
+      say('Collecting settings and colours…');
+      const prefs = await api('/prefs').catch(() => null);
+      const legends = await api('/legends').catch(() => ({}));
+      const drills = await api('/drills').catch(() => ({}));
+      const json = JSON.stringify({ version: 4, exportedAt: new Date().toISOString(),
+                                    projects, photos, sessions, progress, covers, prefs, legends, drills });
       const blob = new Blob([json], { type: 'application/json' });
       say('Writing the file…');
       const where = await saveToPhone('dazzle-diary-backup.json', blob);
       say(`Saved to ${where} — ${projects.length} projects, ${photos.length} photos, ${
-        sessions.length} sessions, ${progress.length} progress entries, ${
-        (blob.size / 1048576).toFixed(1)} MB`);
+        covers.length} of your own covers, ${sessions.length} sessions, ${progress.length} progress entries, ${
+        Object.keys(legends || {}).length} colour lists, ${(blob.size / 1048576).toFixed(1)} MB`);
       toast('Backup saved');
     } catch (e) { say(e.message); }
     el.disabled = false;
@@ -3490,6 +3841,37 @@ window.addEventListener('hashchange', (e) => {
    is waste. So it happens once, by itself, on the first launch after updating.
    It needs a connection; anything it cannot reach keeps its mark and is simply
    tried again next time. */
+/* What the Diamond Art Club screen brought back. It was written by a script on
+   someone else's page, so it goes straight to the store, which keeps only the
+   colours and validates every one. Nothing on a project changes. */
+window.__dacSyncDone = async (text) => {
+  if (text == null) { toast('Diamond Art Club was closed before it finished'); render(); return; }
+  try {
+    const r = await api('/dac/legends', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: text });
+    if (r.error && !r.legends && !r.marked && !r.already) { toast(r.error); render(); return; }
+    const parts = [];
+    if (r.marked) parts.push(`${r.marked} ticked`);
+    if (r.already) parts.push(`${r.already} already had colours`);
+    if (r.deferred) parts.push(`${r.deferred} left for the next run`);
+    parts.push(`${r.legends} colour list${r.legends === 1 ? '' : 's'}`);
+    if (r.pending) parts.push(`${r.pending} still being checked by DAC`);
+    if (r.missing.length) parts.push(`${r.missing.length} not done`);
+    /* Every run leaves a report of what happened on each kit's page, whether
+       it worked or not — "it said it worked but did not" is exactly the case
+       that most needs one. Emails scrubbed once more before it is saved. */
+    {
+      try {
+        // kept whole: the point of the report is to show the real request
+        const where = await saveToPhone('dac-report.json', new Blob([String(text)], { type: 'application/json' }));
+        parts.push(`report saved to ${where}`);
+      } catch { /* the toast still says what happened */ }
+    }
+    toast(parts.join(' \u00b7 '));
+  } catch (e) { toast(e.message || 'Could not read what DAC sent back'); }
+  render();
+};
+
 /* A hundred kits is a long fetch, and it carries on whatever screen you are
    looking at — nothing cancels it. The only sign of it used to live on the
    Settings screen though, so walking away was indistinguishable from it having
@@ -3545,6 +3927,41 @@ async function watchCovers(jobId) {
       return;
     }
   } finally { coverWatch = null; }
+}
+
+/* The colour lists come one page at a time, and there are a hundred kits, so
+   Settings shows how far it has got and picks it up again if you come back. */
+let paletteWatch = null;
+async function watchPalettes(jobId) {
+  if (paletteWatch === jobId) return;
+  paletteWatch = jobId;
+  const set = (id, text) => { const e = document.getElementById(id); if (e) e.textContent = text; };
+  try {
+    for (;;) {
+      let j, pal;
+      try { [j, pal] = await Promise.all([api('/jobs/' + jobId), api('/dac/palettes')]); }
+      catch { coverPill(null); return; }
+      set('palcount', `${num(pal.have)} of ${num(pal.total)} kit${pal.total === 1 ? '' : 's'} have their colours`);
+      const bar = document.getElementById('palbar');
+      if (bar) bar.style.width = (pal.total ? Math.round(pal.have / pal.total * 100) : 0) + '%';
+      if (j.state === 'running') {
+        coverPill(`Colours · ${num(j.done)}/${num(j.total)}`);
+        if (j.message) set('palwhy', j.message);
+        await new Promise((r) => setTimeout(r, 400));
+        continue;
+      }
+      coverPill(null);
+      if (j.state === 'error') toast(j.error || 'That did not work');
+      else {
+        const r = j.result || {};
+        toast(r.found ? `${r.found} colour list${r.found === 1 ? '' : 's'} fetched${
+          r.none ? ` · ${r.none} kit${r.none === 1 ? ' has' : 's have'} none published` : ''}`
+          : 'No new colour lists');
+      }
+      render();
+      return;
+    }
+  } finally { paletteWatch = null; }
 }
 
 async function catchUpCovers() {
