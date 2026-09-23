@@ -9,7 +9,9 @@
  * be shown as DAC writes it.
  */
 
-export function drillKind(code) {
+export function drillKind(code, finish) {
+  /* When the kit's page says what the drill is, that is the answer. */
+  if (finish) return /aurora|\bab\b/i.test(finish) ? 'ab' : 'special';
   const c = String(code || '').trim().toUpperCase();
   if (!c) return 'plain';
   if (/^AB/.test(c)) return 'ab';
@@ -28,7 +30,7 @@ export function drillPrefix(code) {
    then the AB drills, then the rest. */
 const RANK = { plain: 0, ab: 1, special: 2 };
 export function byDrill(a, b) {
-  const x = drillKind(a.code || a), y = drillKind(b.code || b);
+  const x = drillKind(a.code || a, a.finish), y = drillKind(b.code || b, b.finish);
   if (RANK[x] !== RANK[y]) return RANK[x] - RANK[y];
   return String(a.code || a).localeCompare(String(b.code || b), 'en', { numeric: true });
 }

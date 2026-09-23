@@ -282,8 +282,11 @@ test('a result reports what was ticked, what already had colours, and what faile
 
 test('only sane colours survive the trip back', () => {
   assert.deepEqual(cleanColour({ code: '310', name: 'Black', hex: '000000' }),
-                   { code: '310', name: 'Black', hex: '#000000' });
-  assert.deepEqual(cleanColour('B5200'), { code: 'B5200', name: null, hex: null });
+                   { code: '310', name: 'Black', hex: '#000000', finish: null });
+  assert.deepEqual(cleanColour('B5200'), { code: 'B5200', name: null, hex: null, finish: null });
+  // what DAC calls a specialty drill comes back in its own words, tags stripped
+  assert.equal(cleanColour({ code: '105', finish: 'Aurora Borealis' }).finish, 'Aurora Borealis');
+  assert.equal(cleanColour({ code: '105', finish: '<b>Fairy Dust</b>' }).finish, 'Fairy Dust');
   assert.equal(cleanColour({ code: '<img onerror=x>' }), null);
   assert.equal(cleanColour({ code: '' }), null);
   assert.equal(cleanColour({ code: '310', hex: 'javascript:1' }).hex, null);
@@ -317,10 +320,10 @@ test('a sync still stands when DAC will not give up its drill list', async () =>
 
 test('DAC\'s drill list is read whatever shape it arrives in, and rubbish is ignored', async () => {
   assert.deepEqual(readDrillOptions({ square: { data: [{ code: '310', name: 'Black', hex: '#000000' }] } }),
-                   { 310: { code: '310', name: 'Black', hex: '#000000' } });
+                   { 310: { code: '310', name: 'Black', hex: '#000000', finish: null } });
   assert.deepEqual(readDrillOptions({ square: { drills: [{ value: '3865', label: 'Winter White', color: 'fbfbf9' }] } }),
-                   { 3865: { code: '3865', name: 'Winter White', hex: '#fbfbf9' } });
-  assert.deepEqual(readDrillOptions({ round: ['310'] }), { 310: { code: '310', name: null, hex: null } });
+                   { 3865: { code: '3865', name: 'Winter White', hex: '#fbfbf9', finish: null } });
+  assert.deepEqual(readDrillOptions({ round: ['310'] }), { 310: { code: '310', name: null, hex: null, finish: null } });
   assert.deepEqual(readDrillOptions({ square: { data: [{ code: '<script>', hex: 'nope' }] } }), {},
                    'a code that is not a code was taken');
   assert.deepEqual(readDrillOptions(null), {});
@@ -331,5 +334,5 @@ test('a sync carries the drill list and each kit\'s shape back to the app', asyn
       colors: { status: 'available', shape: 'round', codes: ['310'] } }],
     options: { round: { data: [{ code: '310', name: 'Black', hex: '000000' }] } } } });
   assert.deepEqual(r.shapes, { 111: 'round' });
-  assert.deepEqual(r.drills['310'], { code: '310', name: 'Black', hex: '#000000' });
+  assert.deepEqual(r.drills['310'], { code: '310', name: 'Black', hex: '#000000', finish: null });
 });

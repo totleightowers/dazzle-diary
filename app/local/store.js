@@ -14,6 +14,8 @@ import { buildPreview } from '../core/import.js';
 import { parseHolds, applyStatus } from '../core/status.js';
 import { estimateDrills } from '../core/estimate.js';
 import { drillKind, byDrill } from '../core/drills.js';
+import { readPalette } from '../core/palette.js';
+import { colourStats, distinctDrills } from '../core/colourstats.js';
 import { DAC_STATUS, readSyncResult, cleanColour } from '../core/dacsync.js';
 
 export const PROXY = '/__net/?url=';
@@ -254,6 +256,65 @@ export async function backfillCovers(onProgress) {
     }
   }
   return done;
+}
+
+/* Drill colours, from the kit's own page.
+ *
+ * Diamond Art Club prints the whole colour list on every product page, for
+ * anyone — no account, no "already purchased" tick, and kits you have only
+ * wished for as well as the ones you own. That page is the better source: it
+ * carries DMC's name and the colour itself, not just the code, and it has
+ * lists for kits DAC's own logbook says it is still reviewing.
+ *
+ * The list lives in one section of the page, and Shopify will render that
+ * section on its own — about a tenth of the bytes. The section's name comes
+ * from the theme, so it is learnt from the first full page fetched and then
+ * used for the rest; a section that comes back without a colour list falls
+ * back to the whole page before the kit is given up on.
+ */
+export async function fetchPalettes(rows, onProgress) {
+  const legends = (await idb.get('meta', 'legends')) || {};
+  const known = (await idb.get('meta', 'drills')) || {};
+  let section = await idb.get('meta', 'dacSection');
+  let done = 0, found = 0, none = 0;
+
+  const page = async (handle, useSection) => {
+    const url = `https://www.diamondartclub.com/products/${encodeURIComponent(handle)}`
+      + (useSection ? `?section_id=${encodeURIComponent(useSection)}` : '');
+    const res = await fetch(via(url), { headers: { Accept: 'text/html' } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.text();
+  };
+
+  for (const row of rows) {
+    onProgress?.(done, row.title);
+    try {
+      let html = await page(row.handle, section);
+      let read = readPalette(html);
+      if (!read && section) {                 // the section was no use for this kit
+        html = await page(row.handle, null);
+        read = readPalette(html);
+      }
+      if (!section) {
+        const m = /data-palette-dialog="dac-palette-dialog-([^"]{1,200}?)-\d+"/.exec(html);
+        if (m) { section = m[1]; await idb.put('meta', section, 'dacSection'); }
+      }
+      if (read) {
+        const codes = read.colours.map(cleanColour).filter(Boolean);
+        if (codes.length) {
+          legends[row.variant] = { codes, at: nowIso(), shape: read.shape || null, from: 'page' };
+          for (const c of codes) if (c.hex) known[c.code] = { code: c.code, name: c.name, hex: c.hex };
+          found++;
+        }
+      } else none++;
+    } catch (e) { /* one kit's page failing is not the run failing */ }
+    done++;
+    onProgress?.(done, row.title);
+    await sleep(350);
+  }
+  await idb.put('meta', legends, 'legends');
+  await idb.put('meta', known, 'drills');
+  return { found, none, done };
 }
 
 /* -------------------------------------------------------------------- jobs */
@@ -1016,7 +1077,8 @@ export async function localApi(path, opts = {}) {
     const colours = mine.codes.slice().sort(byDrill).map((c) => {
       const k = known[c.code] || {};
       return { code: c.code, name: c.name || k.name || null, hex: c.hex || k.hex || null,
-               kind: drillKind(c.code), others: shared.get(c.code) || 0 };
+               finish: c.finish || null, kind: drillKind(c.code, c.finish),
+               others: shared.get(c.code) || 0 };
     });
     return { variant: v, colours, at: mine.at, shape: mine.shape || null,
              named: colours.filter((c) => c.hex).length };
@@ -1523,6 +1585,64 @@ export async function localApi(path, opts = {}) {
     const mainCurrency = Object.entries(spentPer).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
     const inMainCurrency = (r) => !mainCurrency || (r.currency || 'GBP') === mainCurrency;
 
+    /* The colour lists, laid side by side. A kit counts if it has one; the
+       rest are left out rather than counted as having no colours, and the page
+       says how many were counted. The drill list fills in a name or a colour a
+       kit's own list lacks, as it does everywhere else. */
+    const legends = (await idb.get('meta', 'legends')) || {};
+    const knownDrills = (await idb.get('meta', 'drills')) || {};
+    const coloursOf = async (r) => {
+      const v = await variantOf(r);
+      const got = v && legends[v];
+      if (!got || !Array.isArray(got.codes) || !got.codes.length) return null;
+      return { id: r.id, title: r.title, shop: r.shop || null, variant: v,
+               colours: got.codes.map((c) => {
+                 const k = knownDrills[c.code] || {};
+                 return { code: c.code, name: c.name || k.name || null, hex: c.hex || k.hex || null,
+                          finish: c.finish || null };
+               }) };
+    };
+    const withColours = async (list) => (await Promise.all(list.map(coloursOf))).filter(Boolean);
+    const stashColours = await withColours(scope);
+    const colours = colourStats(stashColours);
+    if (colours) {
+      colours.of = scope.length;
+      // the drills in everything you have finished, which is to say placed
+      colours.placed = distinctDrills(await withColours(finished));
+    }
+
+    /* How long things waited. Delivery is between ordering and arriving, so it
+       belongs to the period the kit was bought in; the wait to start belongs
+       to the period it was started in, which is when the wait ended. */
+    const delivered = bought.filter(r => r.date_ordered && r.date_received);
+    const deliveryDays = (r) => span(r.date_ordered, r.date_received);
+    const startedIn = owned.filter(r => r.date_received && r.date_started && inPeriod(r.date_started));
+    const waitDays = (r) => span(r.date_received, r.date_started);
+    /* The kit that has sat unstarted the longest is a fact about the stash as
+       it stands today, so it is only ever an all-time record. */
+    const unstarted = period ? [] : owned.filter(r => r.status === 'received' && (r.date_received || r.date_ordered));
+
+    /* When you work. Minutes, not sessions, so one long Sunday outweighs two
+       ten-minute Tuesdays. A single month has only itself to be busiest of. */
+    const perMonth = {}, perWeekday = {};
+    for (const x of sessionsIn) {
+      const mins = Number(x.minutes) || 0;
+      if (!mins || !/^\d{4}-\d{2}-\d{2}$/.test(String(x.on || ''))) continue;
+      perMonth[x.on.slice(0, 7)] = (perMonth[x.on.slice(0, 7)] || 0) + mins;
+      const wd = new Date(x.on + 'T12:00:00Z').getUTCDay();
+      perWeekday[wd] = (perWeekday[wd] || 0) + mins;
+    }
+    const topOf = (o) => Object.entries(o).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0] || null;
+    const busiest = period && period.length === 7 ? null : topOf(perMonth);
+    const weekday = topOf(perWeekday);
+    const artistCounts = Object.entries(scope.reduce((a, r) => {
+      if (r.artist) a[r.artist] = (a[r.artist] || 0) + 1; return a;
+    }, {})).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    const shapes = scope.reduce((a, r) => {
+      const k = /round/i.test(r.shape || '') ? 'round' : /square/i.test(r.shape || '') ? 'square' : null;
+      if (k) a[k] = (a[k] || 0) + 1; return a;
+    }, {});
+
     return {
       period: period || null, years, months, mainCurrency,
       currencies: Object.keys(spentPer).length,
@@ -1575,12 +1695,23 @@ export async function localApi(path, opts = {}) {
         // compare a small dear kit with a big cheap one
         bestValue: least(bought.filter(inMainCurrency), r => (r.price > 0 && r.drills > 0)
           ? Math.round(r.price / (r.drills / 1000) * 100) / 100 : null),
-        longestHeld: most(putDown, r => heldIn(r) || null)
+        longestHeld: most(putDown, r => heldIn(r) || null),
+        quickestDelivery: least(delivered, deliveryDays),
+        slowestDelivery: most(delivered, deliveryDays),
+        quickestStart: least(startedIn, waitDays),
+        longestWaitToStart: most(startedIn, waitDays),
+        longestUnstarted: most(unstarted, r => span(r.date_received || r.date_ordered, today))
       },
       favourites: {
         artist: counted(scope, r => r.artist),
-        shop: counted(scope, r => r.shop)
-      }
+        shop: counted(scope, r => r.shop),
+        artists: artistCounts.slice(0, 3),
+        artistCount: artistCounts.length,
+        shapes,
+        busiestMonth: busiest ? { month: busiest[0], hours: Math.round(busiest[1] / 6) / 10 } : null,
+        weekday: weekday ? { day: Number(weekday[0]), hours: Math.round(weekday[1] / 6) / 10 } : null
+      },
+      colours
     };
   }
 
@@ -1630,6 +1761,43 @@ export async function localApi(path, opts = {}) {
   /* Every DAC kit you own, with what it takes to open its product page. A wish
      list kit is not bought, so it is never marked as purchased. A kit the
      catalogue cannot link to a DAC listing is listed as missing instead. */
+  /* Drill colours from the kits' own pages: no sign-in, and kits you have
+     only wished for count too, since the page does not care who is asking. */
+  if (p === '/dac/palettes') {
+    await catalogue();
+    const legends = (await idb.get('meta', 'legends')) || {};
+    const kits = [], missing = [], seen = new Set();
+    for (const r of await projects()) {
+      if ((r.shop || 'dac') !== 'dac' || !r.dac_handle) continue;
+      const c = cache.rows.find(x => x.shop === 'dac' && x.handle === r.dac_handle);
+      if (!c || !c.variant_id) { missing.push(r.title); continue; }
+      if (seen.has(c.variant_id)) continue;      // two of a kit share one list
+      seen.add(c.variant_id);
+      kits.push({ variant: c.variant_id, handle: c.handle, title: r.title,
+                  have: (legends[c.variant_id] || {}).from === 'page' });
+    }
+    const want = kits.filter(k => !k.have);
+    const live = [...jobs.values()].find(j => j.kind === 'palettes' && j.state === 'running');
+    if (m === 'GET') return { total: kits.length, have: kits.length - want.length,
+                              candidates: want.length, missing: missing.length,
+                              running: live ? live.id : null };
+    if (m !== 'POST') throw Object.assign(new Error('Not found'), { status: 404 });
+    if (live) return { job: live.id };
+    /* Everything again, if you ask for it after they are all here — DAC edits
+       a list now and then, and a kit whose page had none may have one now. */
+    const rows = want.length ? want : kits;
+    const job = newJob('palettes-' + Date.now());
+    job.kind = 'palettes';
+    job.total = rows.length;
+    (async () => {
+      try {
+        job.result = await fetchPalettes(rows, (n, title) => { job.done = n; job.message = title || ''; });
+        job.state = 'done';
+      } catch (e) { job.error = e.message; job.state = 'error'; }
+    })();
+    return { job: job.id };
+  }
+
   if (p === '/dac/kits' && m === 'GET') {
     await catalogue();
     const kits = [], missing = [], seen = new Set();
@@ -1693,7 +1861,12 @@ export async function localApi(path, opts = {}) {
       return { legends, results: [], top };
     }
     const code = want.toUpperCase();
-    const byName = want.length >= 3 ? want.toLowerCase() : null;
+    /* Something that looks like a drill code — 161, 3865, B5200, AB972 — is
+       only ever matched as a code. Searching names as well found 161 inside
+       "Pantone 1615", which is drill 6030 and a different colour altogether.
+       Names are searched only for words, like "black" or "navy". */
+    const codeLike = /^[A-Za-z]{0,3}\d+$/.test(want) || /^(ecru|blanc|noir)$/i.test(want);
+    const byName = !codeLike && want.length >= 3 ? want.toLowerCase() : null;
     await catalogue();
     const drills = (await idb.get('meta', 'drills')) || {};      // DAC's own drill list, once
     const results = [];
