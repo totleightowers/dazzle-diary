@@ -174,6 +174,11 @@ img { max-width: 100%; display: block; }
 .drillmore { margin-top: 10px; padding: 0; border: 0; background: none; color: var(--ink);
              font: 700 12px/1.3 var(--sans); text-decoration: underline; cursor: pointer; }
 
+/* The logbook's filters live in the header, which does not scroll, so a
+   panel taller than the screen had its lower half out of reach. It scrolls on
+   its own instead, and stops there rather than scrolling the page under it. */
+.lbpanel { max-height: 58vh; max-height: 58dvh; overflow-y: auto; overscroll-behavior: contain; }
+
 /* ------------------------------------------------------------------- chips */
 .chiprow { display: flex; gap: 8px; overflow-x: auto; margin: 0 calc(-1 * var(--gutter));
            padding: 0 var(--gutter); }
@@ -690,6 +695,28 @@ select.fld {
   flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column;
 }
 #app.two-pane > #side .actionbar { padding-left: 12px; padding-right: 12px; }
+/* Nothing open: the logbook takes the whole display, with as many columns as
+   fit, rather than a narrow column beside an empty "pick a project". */
+#app.two-pane.solo > #side { width: 100%; border-right: 0; }
+#app.two-pane.solo > #main { display: none; }
+/* Beside a project the list is narrow, and seven status chips wrapped into
+   four rows of it; one row that scrolls sideways keeps the cards in view. */
+#app.two-pane:not(.solo) > #side .statusrow {
+  flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+  margin: 0 -12px; padding: 0 12px;
+}
+#app.two-pane:not(.solo) > #side .statusrow::-webkit-scrollbar { display: none; }
+/* The same narrow pane had "9 projects" breaking over two lines and the
+   grid/list switch pushed off its edge; a little tighter and it all fits. */
+#app.two-pane:not(.solo) > #side #lbcount { white-space: nowrap; font-size: 12px; }
+#app.two-pane:not(.solo) > #side .seg.compact { padding: 3px; }
+#app.two-pane:not(.solo) > #side .seg.compact button { width: 34px; }
+#app.two-pane:not(.solo) > #side [data-act="lbfilters"] { padding: 0 12px; }
+#app.two-pane:not(.solo) > #side .actionbar { gap: 8px; }
+#app.two-pane:not(.solo) > #side .actionbar .btn.primary {
+  flex: 1 1 auto; min-width: 0; white-space: nowrap; font-size: 14px; padding: 0 12px; }
+#app.two-pane:not(.solo) > #side .actionbar .btn.square { width: 44px; flex: 0 0 44px; }
+#app.two-pane:not(.solo) > #side .actionbar .btn.primary svg { flex: 0 0 auto; }
 #app.two-pane > #side .card .name { font-size: 14px; }
 
 /* On a phone the app is the screen. Unfolded, or on a tablet, a column that

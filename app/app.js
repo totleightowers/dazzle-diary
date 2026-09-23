@@ -545,6 +545,11 @@ async function render() {
   }
 
   const two = setupPanes();
+  /* With nothing open there is nothing for the right-hand pane to say but
+     "pick a project", so the logbook takes the whole display instead, and the
+     split only appears once a project is open beside it. */
+  if (two && (hash === '#/' || hash === '')) $app.classList.add('solo');
+  else $app.classList.remove('solo');
 
   /* On a tablet the logbook is always there on the left, whatever is open on
      the right — that is the whole point of the mode. */
@@ -910,7 +915,7 @@ function logbookFilters() {
     `<button class="chip" style="height:36px;padding:0 12px" data-act="${act}" data-k="${k}"${
       shop ? ` data-shop="${h(shop)}"` : ''} aria-pressed="${on}">${h(label)}</button>`;
   return `
-  <div class="panel" style="padding:12px 14px 16px;margin-top:2px">
+  <div class="panel lbpanel" style="padding:12px 14px 16px;margin-top:2px">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
       <span class="label" style="margin:0">Filters${lbActive() ? ` \u00b7 ${lbActive()} on` : ''}</span>
       <button class="btn ghost" style="height:32px;font-size:12px;font-weight:700;padding:0 12px"
@@ -1040,7 +1045,7 @@ function paintLogbook() {
         <input id="q" value="${h(S.q)}" placeholder="Search by title or artist" autocomplete="off">
         ${S.q ? `<button class="iconbtn" data-act="clearq" aria-label="Clear"><span class="clear">${svg('close', 12, 2.6)}</span></button>` : ''}
       </div>
-      <div class="chiprow">${chips.map((c) => `
+      <div class="chiprow statusrow">${chips.map((c) => `
         <button class="chip" data-act="filter" data-k="${c.k}" aria-pressed="${S.filter === c.k}">
           <span>${h(c.label)}</span><span class="n tnum">${c.n}</span></button>`).join('')}
       </div>
@@ -3410,6 +3415,16 @@ document.addEventListener('click', (e) => { handleClick(e).catch((err) => {
 }); });
 
 async function handleClick(e) {
+  /* The filters are a panel you dip into, not a page: a tap anywhere outside
+     them puts them away, and does only that — the card or chip under your
+     finger is not opened as well, which is what makes a stray tap safe. */
+  if (e.type !== 'change' && S.lb.open && document.querySelector('.lbpanel')
+      && !e.target.closest('.lbpanel') && !e.target.closest('[data-act="lbfilters"]')) {
+    S.lb.open = false;
+    paintLogbook();
+    e.preventDefault?.();
+    return;
+  }
   const backEl = e.target.closest('[data-back]');
   if (backEl) { back(backEl.dataset.back); return; }
   const goEl = e.target.closest('[data-go]');
