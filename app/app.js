@@ -2207,15 +2207,16 @@ function paintImportPick(state) {
       <label class="dropzone" id="drop">
         ${svg('imp', 34, 1.6)}
         <span style="font-family:var(--serif);font-size:19px;font-weight:600">Choose your order history</span>
-        <span style="font-size:13px;line-height:1.5;color:var(--ink-mute)">The CSV you exported from ${
-          h(chosen ? chosen.name : 'your shop')}.<br>Nothing leaves your phone.</span>
-        <input type="file" accept=".csv,text/csv" id="csv" hidden>
+        <span style="font-size:13px;line-height:1.5;color:var(--ink-mute)">The order history you exported from ${
+          h(chosen ? chosen.name : 'your shop')} — a CSV, or Diamond Art Club’s spreadsheet (.xlsx).<br>Nothing leaves your phone.</span>
+        <input type="file" accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" id="csv" hidden>
       </label>
       <div class="panel pad-in">
         ${[['Kits become projects', 'Each canvas is matched to the catalogue, so it arrives with its cover, artist, size, colours, drill count and special diamonds.'],
            ['Tools and accessories are skipped', 'Multiplacers, tweezers, wax, trays and coasters are recognised by product type and left out.'],
-           ['Status comes from fulfilment', 'Shipped orders arrive as Received, not started. Anything still processing arrives as Not received.'],
-           ['Prices are worked out where they can be', 'A kit ordered on its own takes the order total exactly. Several kits with no accessories split the total between them. Otherwise the catalogue list price is used, and every project says which it got.']]
+           ['Only delivered kits arrive as received', 'Fulfilled means it was sent, not that it came. Kits arrive as Not received until an order says delivered \u2014 and a kit already in your logbook keeps whatever status you gave it.'],
+           ['Prices are worked out where they can be', 'Diamond Art Club\u2019s spreadsheet says what each item cost after discounts, so those prices are exact. From a CSV, a kit ordered on its own takes the order total; several kits with no accessories split it; otherwise the catalogue list price is used. Every project says which it got.'],
+           ['Kits you already have are merged, not doubled', 'They are listed under Logged. Anything they are missing \u2014 order date, order number, size \u2014 can be filled in, and a price that differs can be corrected, each only if you say so. A price you typed yourself is never changed.']]
           .map(([t, b], i, a) => `<div class="row" style="align-items:flex-start;${i === a.length - 1 ? 'border-bottom:0' : ''}">
             <span style="flex:1 1 auto"><span style="display:block;font-size:14px;font-weight:700">${h(t)}</span>
             <span style="display:block;margin-top:2px;font-size:13px;line-height:1.5;color:var(--ink-mute)">${h(b)}</span></span></div>`).join('')}
@@ -2228,9 +2229,15 @@ function paintImportPick(state) {
     const file = input.files[0]; if (!file) return;
     document.getElementById('drop').classList.add('on');
     try {
-      const text = await file.text();
+      /* A spreadsheet is a zip, and has to go as bytes; a CSV goes as text.
+         Told apart by what the file starts with, not by its name, which a
+         download manager is free to change. */
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const xlsx = bytes.length > 3 && bytes[0] === 0x50 && bytes[1] === 0x4b;
       S.importPreview = await api('/import/preview?shop=' + encodeURIComponent(S.importShop),
-        { method: 'POST', headers: { 'Content-Type': 'text/csv' }, body: text });
+        xlsx ? { method: 'POST', headers: { 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
+                 body: bytes.buffer }
+             : { method: 'POST', headers: { 'Content-Type': 'text/csv' }, body: new TextDecoder().decode(bytes) });
       S.importSel = new Set(S.importPreview.kits.filter((k) => !k.duplicate).map((k) => k.key));
       S.importTab = 'new';
       paintImportReview();
@@ -2353,10 +2360,13 @@ const importRow = (r) => {
       ${r.cover ? `<span class="thumb" style="width:44px;height:44px;border-radius:8px">
           <img src="${h(sized(r.cover, 120))}" alt="" loading="lazy" referrerpolicy="no-referrer"></span>` : ''}
       <span style="flex:1 1 auto;min-width:0;text-align:left">
-        <span style="display:block;font-family:var(--serif);font-weight:600;font-size:15px;line-height:1.25">${h(r.title)}</span>
+        <span style="display:block;font-family:var(--serif);font-weight:600;font-size:15px;line-height:1.25">${h(r.title)}${
+          r.qty > 1 ? ` <span class="tnum" style="font-family:var(--sans);font-size:12px;color:var(--ink-mute)">\u00d7${r.qty}</span>` : ''}</span>
         <span style="display:block;margin-top:2px;font-size:11px;color:var(--ink-mute)" class="tnum">${
           h(r.status === 'received' ? 'Received' : 'Not received')}${r.artist ? ' · ' + h(r.artist) : ''}${
-          r.drills ? ' · ' + num(r.drills) : ''}</span>
+          r.drills ? ' · ' + num(r.drills) : ''}${
+          /* one of two bought in one order is priced as one, and logged once */
+          r.qty > 1 && r.price != null ? ` \u00b7 ${money(r.price, r.currency)} each` : ''}</span>
       </span>
     </button>
     ${r.duplicate

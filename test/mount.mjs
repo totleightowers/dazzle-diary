@@ -108,14 +108,18 @@ export async function mount({ width = 390, products = null, catalogue = true, sh
   globalThis.confirm = (q) => { confirms.push(q); return confirmAnswer; };
   globalThis.btoa = (s) => Buffer.from(s, 'binary').toString('base64');
   globalThis.atob = (s) => Buffer.from(s, 'base64').toString('binary');
+  /* Parts are text or bytes. A spreadsheet is bytes, and joining those as
+     text — which is all this did before — turns a zip into a list of numbers. */
+  const partBytes = (x) => (x instanceof ArrayBuffer ? Buffer.from(x)
+    : ArrayBuffer.isView(x) ? Buffer.from(x.buffer, x.byteOffset, x.byteLength) : Buffer.from(String(x)));
   globalThis.Blob = class {
     constructor(parts, opts) { this.parts = parts || []; this.type = (opts || {}).type || ''; }
-    get size() { return this.parts.reduce((n, x) => n + Buffer.byteLength(String(x)), 0); }
+    get size() { return this.parts.reduce((n, x) => n + partBytes(x).length, 0); }
     // the import reads the chosen file with .text(); without it here the only
     // way to reach the review screen was to set the app's own state by hand
-    async text() { return this.parts.join(''); }
+    async text() { return Buffer.concat(this.parts.map(partBytes)).toString('utf8'); }
     async arrayBuffer() {
-      const b = Buffer.from(this.parts.join(''));
+      const b = Buffer.concat(this.parts.map(partBytes));
       return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
     }
   };

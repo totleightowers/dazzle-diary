@@ -7,8 +7,42 @@ import { resolveFragments, disambiguate, norm, cmFromIn, round2 } from './match.
 import { estimateDrills } from './estimate.js';
 import { displayCurrency } from './shops.js';
 
-const statusFor = (fulfillment) =>
-  /fulfilled|shipped|delivered|complete/i.test(fulfillment || '') ? 'received' : 'notReceived';
+/* Fulfilled only means it was sent. A kit is received once it has been
+   delivered, and nothing else says so — so a fulfilled or shipped order stays
+   Not received until it arrives. "Unfulfilled" has to be ruled out first: it
+   contains the word it negates. */
+const statusFor = (fulfillment) => {
+  const f = String(fulfillment || '').toLowerCase();
+  return !/\bun/.test(f) && /delivered/.test(f) ? 'received' : 'notReceived';
+};
+
+/* One line of the spreadsheet export is one item, so it is matched on its own
+   rather than being stitched back together like the CSV's comma-joined titles.
+   The variant says how many drills the kit has — "… / 39,601" — which tells
+   apart canvases that share a title far more surely than a price can. */
+function resolveLine(cat, line) {
+  let [r] = resolveFragments(cat, [line.title]);
+  /* A title the catalogue does not have whole may be a listing and a variant
+     name: "Starry Night - Night Music" is sold as "Starry Night". */
+  if ((!r || !r.product) && / - /.test(line.title)) {
+    const [alt] = resolveFragments(cat, [line.title.slice(0, line.title.lastIndexOf(' - '))]);
+    if (alt && alt.product) r = { ...alt, title: line.title, loose: true };
+  }
+  r = r || { title: line.title, candidates: [], variants: [], product: null };
+  if (line.drills != null) {
+    const pool = [...(r.candidates || []), ...(r.variants || [])];
+    let exact = pool.filter((c) => Number(c.drills) === line.drills);
+    /* A kit sold square and round has the same drill count both ways, and the
+       variant says which it was. */
+    const shape = /\b(square|round)\b/i.exec(line.variant || '');
+    if (exact.length > 1 && shape) {
+      const same = exact.filter((c) => String(c.shape || '').toLowerCase() === shape[1].toLowerCase());
+      if (same.length) exact = same;
+    }
+    if (exact.length === 1) { r.product = exact[0]; r.candidates = [exact[0], ...(r.candidates || []).filter((c) => c !== exact[0])]; r.byDrills = true; }
+  }
+  return r;
+}
 
 /**
  * @param cat       { byTitle, byPrefix }
@@ -21,17 +55,23 @@ const statusFor = (fulfillment) =>
  *                  Corrections stick: if you told it a "Starry Night" line is
  *                  the Wanda Mumm one, it stops guessing next time.
  */
-export function buildPreview(cat, existing, csvText, shopName = 'Diamond Art Club', known = new Map(), prefCurrency = 'GBP') {
-  const { orders, warnings } = parseOrders(csvText);
+export function buildPreview(cat, existing, input, shopName = 'Diamond Art Club', known = new Map(), prefCurrency = 'GBP') {
+  // a CSV's text, or orders already read out of a spreadsheet
+  const { orders, warnings } = typeof input === 'string' ? parseOrders(input) : input;
   const kits = [], skipped = [];
   let lineCount = 0;
 
   for (const order of orders) {
-    const resolved = resolveFragments(cat, order.fragments);
+    const lines = order.lines || null;
+    const resolved = lines ? lines.map((l) => resolveLine(cat, l)) : resolveFragments(cat, order.fragments);
+    if (lines) resolved.forEach((r, i) => { r.line = lines[i]; });
     lineCount += resolved.length;
     const flag = order.paymentStatus && order.paymentStatus !== 'paid' ? order.paymentStatus : null;
 
-    const { chosen, confident } = disambiguate(resolved, order.total);
+    /* The price-fit guess is only needed where the variant did not settle it. */
+    const { chosen, confident } = lines
+      ? { chosen: resolved.map((r) => r.product), confident: resolved.every((r) => r.byDrills || (r.candidates || []).length <= 1) }
+      : disambiguate(resolved, order.total);
     resolved.forEach((r, i) => {
       // A choice you made once beats anything inferred — including when the
       // product you picked is not among this line's candidates at all (yours
@@ -42,6 +82,7 @@ export function buildPreview(cat, existing, csvText, shopName = 'Diamond Art Clu
         : null;
       r.product = direct || chosen[i] || r.product;
       r.pinned = !!direct;
+      if (r.byDrills && !direct) r.pinned = true;      // the variant named it; nothing to second-guess
       if (direct && !(r.candidates || []).some(c => c.handle === direct.handle))
         r.candidates = [direct, ...(r.candidates || [])];
     });
@@ -66,6 +107,9 @@ export function buildPreview(cat, existing, csvText, shopName = 'Diamond Art Clu
      * quotes — Diamond Art Club quotes USD, Mystical Dream Diamonds CAD. Each
      * price carries its own, so nothing gets a £ sign it has not earned. */
     const priceFor = (k) => {
+      // the spreadsheet says what each item cost, discounts and all
+      if (k.r.line && k.r.line.paid != null)
+        return { price: k.r.line.paid, source: 'order', currency: order.currency };
       if (canAllocate && orderKits.length === 1)
         return { price: round2(order.total), source: 'order', currency: order.currency };
       if (canAllocate)
@@ -100,6 +144,7 @@ export function buildPreview(cat, existing, csvText, shopName = 'Diamond Art Clu
         handle: p.handle, shop: p.shop, shopName,
         artist: p.artist, cover: p.image,
         uncertain: (r.candidates || []).length > 1 && !confident && !r.pinned,
+        qty: r.line ? r.line.qty : 1,
         pinned: !!r.pinned,
         alternatives: (() => {
           const all = [...(r.candidates || []), ...(r.variants || [])];
