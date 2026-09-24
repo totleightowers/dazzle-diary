@@ -271,10 +271,17 @@ test('a lone kit takes the order total exactly', () => {
   assert.equal(g.status, 'notReceived', 'still processing');
 });
 
-test('fulfilment decides the status', () => {
-  const cat = fakeCat([kit('a', 'Alpha', 70), kit('b', 'Beta', 50)]);
+/* Fulfilled means sent, not arrived. Only a delivery makes a kit Received. */
+test('a fulfilled order is not received until it is delivered', () => {
+  const cat = fakeCat([kit('a', 'Alpha', 70), kit('b', 'Beta', 50), kit('g', 'Gamma', 40)]);
   const p = buildPreview(cat, new Map(), CSV, 'Diamond Art Club');
-  assert.ok(p.kits.filter(k => k.orderRef === '#100').every(k => k.status === 'received'));
+  assert.ok(p.kits.filter(k => k.orderRef === '#100').every(k => k.status === 'notReceived'),
+            'a fulfilled (shipped) order was marked received');
+  const delivered = buildPreview(cat, new Map(), CSV.replace('paid,fulfilled', 'paid,delivered'), 'Diamond Art Club');
+  assert.ok(delivered.kits.filter(k => k.orderRef === '#100').every(k => k.status === 'received'),
+            'a delivered order was not marked received');
+  const undelivered = buildPreview(cat, new Map(), CSV.replace('paid,fulfilled', 'paid,undelivered'), 'Diamond Art Club');
+  assert.ok(undelivered.kits.every(k => k.status === 'notReceived'), '"undelivered" read as delivered');
 });
 
 test('a choice you already made is reused instead of re-guessed', () => {
@@ -769,4 +776,104 @@ test('a kit leans towards its biggest colour family, and any other with a quarte
   const twice = kit(blue, blue, blue, grey, grey, grey);
   assert.deepEqual(leanings([...twice, twice[0], twice[0], twice[0]]), ['blues', 'greys']);
   assert.deepEqual(leanings(null), []);
+});
+
+/* ------------------------------------------ Diamond Art Club's spreadsheet */
+
+import { readXlsx, excelDate, looksLikeXlsx } from '../app/core/xlsx.js';
+import { parseDacWorkbook, splitItem, isDacWorkbook } from '../app/core/dacworkbook.js';
+import { makeXlsx, dacExport } from './xlsxfixture.mjs';
+
+test('a spreadsheet is read, whichever way it stores its text', async () => {
+  for (const shared of [false, true]) {
+    const book = await readXlsx(makeXlsx({
+      // the last is the literal text "&lt;", which only unescaping & last keeps
+      First: [['Name', 'Count'], ['Fish & Chips <hot>', 3], ['', 4.5], ['&lt;b&gt;']],
+      'Second tab': [['only']] }, { shared }));
+    assert.deepEqual(book.names, ['First', 'Second tab']);
+    assert.deepEqual(book.sheets.First[0], { A: 'Name', B: 'Count' });
+    assert.deepEqual(book.sheets.First[1], { A: 'Fish & Chips <hot>', B: 3 }, 'text or numbers were misread');
+    assert.deepEqual(book.sheets.First[2], { B: 4.5 }, 'an empty cell was given a value');
+    assert.deepEqual(book.sheets.First[3], { A: '&lt;b&gt;' }, 'text was unescaped twice');
+  }
+});
+
+test('a spreadsheet date is the day it names, and a zip is told from text', () => {
+  assert.equal(excelDate(46289.642060185186), '2026-09-24');
+  assert.equal(excelDate(1), '1899-12-31');
+  assert.equal(excelDate(''), null);
+  assert.equal(looksLikeXlsx(new Uint8Array(makeXlsx({ A: [['x']] }))), true);
+  assert.equal(looksLikeXlsx(new TextEncoder().encode('Order,Date\n')), false);
+});
+
+test('an item splits into its title and variant at the canvas size, not the first dash', () => {
+  assert.deepEqual(splitItem('Coasters - Blooms - 4" x 4" (10cm x 10cm) / Round with 20 Colors / 2,970'),
+    { title: 'Coasters - Blooms', variant: '4" x 4" (10cm x 10cm) / Round with 20 Colors / 2,970', drills: 2970 });
+  assert.equal(splitItem('Fishergal - 22" x 29″ (56cm x 74cm) / Square With 54 Colors / 64,532').title, 'Fishergal');
+  assert.equal(splitItem('Starry Night - Night Music - 13" x 18" (33cm x 46cm) / Square / 24,156').title, 'Starry Night - Night Music');
+  assert.deepEqual(splitItem('Twist-On Dual-Threaded Premium Drill Pen – Seafoam Swirl'),
+    { title: 'Twist-On Dual-Threaded Premium Drill Pen – Seafoam Swirl', variant: null, drills: null });
+});
+
+test('each item costs its original price less its share of the discount', async () => {
+  const book = await readXlsx(dacExport([
+    // the "final" price already discounted here, and not on the next one: DAC does both
+    { ref: '#1', serial: 46289.5, delivery: 'Fulfilled', items: [
+      { name: 'Gobbler - 25" x 22" (63.7cm x 55.8cm) / Square / 57,344', original: 55, final: 49.5, discount: 5.5 },
+      { name: 'Stainless Steel 12 Tip Multiplacer', original: 18, discount: 2.7 }] },
+    { ref: '#2', serial: 46290, items: [
+      { name: 'Fairy Lights - 22" x 28" (56cm x 71cm) / Square / 62,101', original: 110, qty: 2, discount: 53.41 }] },
+    { ref: '#3', serial: 46291, shipping: 5, items: [
+      { name: 'Aura - 22" x 28" (55.8cm x 70.7cm) / Square / 63,616', original: 60 },
+      { name: 'Moon Eater - 23.6" x 30.7" (60cm x 78cm) / Square / 75,433', original: 40 }] },
+    { ref: '#4', serial: 46292, cancelled: 'Yes', items: [{ name: 'Sif - 22" x 31" / Square / 70,784', original: 70 }] }]));
+  assert.equal(isDacWorkbook(book), true);
+  const { orders, warnings } = parseDacWorkbook(book);
+  assert.deepEqual(warnings, []);
+  assert.deepEqual(orders.map((o) => o.ref), ['#1', '#2', '#3'], 'a cancelled order was imported');
+  const [a, b, c] = orders;
+  assert.equal(a.date, '2026-09-24');
+  assert.equal(a.fulfillmentStatus, 'fulfilled');
+  assert.deepEqual(a.lines.map((l) => l.paid), [49.5, 15.3], 'a discount was taken off twice, or not at all');
+  assert.equal(a.lines[0].drills, 57344);
+  assert.deepEqual([b.lines[0].qty, b.lines[0].paid], [2, 28.3], 'two of a kit were not priced one at a time');
+  assert.deepEqual(c.lines.map((l) => l.paid), [63, 42], 'shipping was not shared out over the items');
+  for (const o of orders)
+    assert.ok(Math.abs(o.lines.reduce((n, l) => n + l.paid * l.qty, 0) - o.total) < 0.02, `${o.ref} does not add up`);
+});
+
+test('a kit sold square and round is told apart by the shape its line names', async () => {
+  const both = [
+    { ...kit('magic-round', 'A Little Bit of Magic', 46), shape: 'Round', drills: 39601 },
+    { ...kit('magic-square', 'A Little Bit of Magic', 47), shape: 'Square', drills: 39601 }];
+  const book = await readXlsx(dacExport([{ ref: '#5', serial: 46289, items: [
+    { name: 'A Little Bit of Magic - 19.5" x 19.5" (49.6cm x 49.6cm) / Square with 62 Colors / 39,601', original: 47 }] }]));
+  const [magic] = buildPreview(fakeCat(both), new Map(), parseDacWorkbook(book), 'Diamond Art Club').kits;
+  assert.equal(magic.handle, 'magic-square', 'the shape on the line did not pick the square kit');
+  assert.equal(magic.uncertain, false, 'a kit the line names exactly was still called uncertain');
+});
+
+test('a spreadsheet that is not an order export says so', async () => {
+  const book = await readXlsx(makeXlsx({ Budget: [['Month', 'Spent'], ['May', 40]] }));
+  assert.equal(isDacWorkbook(book), false);
+  assert.match(parseDacWorkbook(book).warnings[0], /not a Diamond Art Club order export/);
+});
+
+test('a spreadsheet line is matched by its drill count when titles collide', async () => {
+  const twoAlices = [
+    { ...kit('alice-a', 'Alice in Wonderland', 80), drills: 119425 },
+    { ...kit('alice-b', 'Alice in Wonderland', 80), drills: 56000 },
+    kit('tool', 'Stainless Steel 12 Tip Multiplacer', 18)];
+  twoAlices[2].kind = 'accessory';
+  const book = await readXlsx(dacExport([{ ref: '#9', serial: 46289, delivery: 'Unfulfilled', items: [
+    { name: 'Alice in Wonderland - 20" x 28" (51cm x 71cm) / Square / 56,000', original: 64, discount: 9.6 },
+    { name: 'Stainless Steel 12 Tip Multiplacer', original: 18 }] }]));
+  const p = buildPreview(fakeCat(twoAlices), new Map(), parseDacWorkbook(book), 'Diamond Art Club');
+  assert.equal(p.kits.length, 1);
+  const alice = p.kits[0];
+  assert.equal(alice.handle, 'alice-b', 'the drill count did not pick the kit');
+  assert.equal(alice.uncertain, false);
+  assert.deepEqual([alice.price, alice.priceSource], [54.4, 'order'], 'the exact price was not used');
+  assert.equal(alice.status, 'notReceived');
+  assert.equal(p.skipped.length, 1, 'the multiplacer was not left out');
 });

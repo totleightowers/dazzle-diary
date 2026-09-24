@@ -10,6 +10,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync as readdirSyncFs } from 'node:fs';
 import { mount } from './mount.mjs';
+import { dacExport } from './xlsxfixture.mjs';
 import * as idbDirect from '../app/local/idb.js';
 
 /* The IndexedDB shim outlives a single mount, so a test that means "I do not
@@ -1682,6 +1683,73 @@ test('backing out of a review returns to the file picker, not out of the import'
   await m.go('#/');
   await m.go('#/import');
   assert.ok(m.find('#csv'), 'the abandoned file came back');
+});
+
+/* Diamond Art Club's order history now comes as a spreadsheet. It merges like
+   the CSV did — new kits are offered, kits already logged are matched — but
+   its prices are exact, and fulfilled still only means sent. */
+test('DAC’s spreadsheet export imports, and merges with kits already logged', async () => {
+  const m = await mount({ products: [
+    { ...DAC_KIT(1, 101, 'Moon Eater') },
+    { ...DAC_KIT(2, 202, 'Wild Bloom') },
+    { id: 3, title: 'Stainless Steel 12 Tip Multiplacer', vendor: 'DAC', handle: 'multiplacer',
+      product_type: 'Accessories', images: [{ src: 'https://cdn.shopify.com/kit.jpg' }],
+      variants: [{ id: 303, sku: 'ACC-1', title: 'Default Title', price: '18.00', available: true }] }] });
+  await m.sync();
+  await emptyLogbook(m);
+  // already logged, with a price from a guess
+  const logged = await m.seed({ title: 'Wild Bloom', status: 'started', shop: 'dac', dac_handle: 'wild-bloom',
+                                price: 60, price_source: 'catalogue' });
+
+  const file = dacExport([
+    { ref: '#100001', serial: 46289.64, delivery: 'Fulfilled', items: [
+      { name: 'Moon Eater - 22" x 28" (56cm x 71cm) / Square with 40 Colors / 60,000', original: 47, discount: 7.05 },
+      { name: 'Stainless Steel 12 Tip Multiplacer', original: 18, discount: 2.7 }] },
+    { ref: '#100002', serial: 46200.2, delivery: 'Unfulfilled', items: [
+      { name: 'Wild Bloom - 22" x 28" (56cm x 71cm) / Square with 40 Colors / 60,000', original: 94, discount: 14.1 }] }]);
+  await m.go('#/import');
+  assert.match(m.find('#csv').getAttribute('accept'), /\.xlsx/, 'the picker does not offer spreadsheets');
+  await m.dropCsv(file, 'Diamond-Art-Club-Orders-2026-09-24.xlsx');
+  assert.ok(m.find('[data-act="itab"]'), 'choosing the spreadsheet did not reach the review');
+
+  const P = await m.api('/import/preview?shop=dac', { method: 'POST', body: new Uint8Array(file).buffer });
+  assert.deepEqual(P.warnings, []);
+  const moon = P.kits.find((k) => k.title === 'Moon Eater');
+  assert.equal(moon.duplicate, false);
+  assert.deepEqual([moon.price, moon.priceSource, moon.orderDate], [39.95, 'order', '2026-09-24']);
+  assert.equal(moon.status, 'notReceived', 'a fulfilled order arrived as received');
+  assert.equal(P.skipped.length, 1, 'the multiplacer was not left out');
+
+  const wild = P.kits.find((k) => k.title === 'Wild Bloom');
+  assert.equal(wild.duplicate, true, 'a kit already logged was offered as new');
+  assert.equal(wild.duplicateId, logged.id);
+  assert.deepEqual(wild.priceUpdate, { from: 60, to: 79.9, yours: false }, 'the exact price was not offered as a correction');
+  // a blank the order can fill is offered; a date the logbook already has is not
+  assert.equal(wild.fills.order_ref, '#100002', 'the order number was not offered to fill the blank');
+  assert.equal(wild.fills.date_ordered, undefined, 'a date you already have was offered for replacing');
+
+  // the merge: fill the blanks and correct the price, and nothing else moves
+  const before = await m.api('/projects/' + logged.id);
+  await m.api('/import/fill', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kits: [wild] }) });
+  await m.api('/import/prices', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kits: [wild] }) });
+  const after = await m.api('/projects/' + logged.id);
+  assert.equal(after.status, 'started', 'the import changed a status you set');
+  assert.deepEqual([after.price, after.price_source, after.order_ref], [79.9, 'order', '#100002']);
+  assert.equal(after.date_ordered, before.date_ordered, 'the merge replaced a date you already had');
+});
+
+test('a spreadsheet that is not an order export is turned away politely', async () => {
+  const m = await mount();
+  await m.sync();
+  const { makeXlsx } = await import('./xlsxfixture.mjs');
+  await assert.rejects(
+    m.api('/import/preview?shop=dac', { method: 'POST', body: new Uint8Array(makeXlsx({ Budget: [['Month']] })).buffer }),
+    /not an order export/);
+  await assert.rejects(
+    m.api('/import/preview?shop=dac', { method: 'POST', body: new TextEncoder().encode('%PDF-1.4').buffer }),
+    /neither a CSV nor a spreadsheet/);
 });
 
 test('leaving the import by any other route lets go of a half-read file', async () => {

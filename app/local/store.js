@@ -11,6 +11,8 @@ import * as idb from './idb.js';
 import { SHOPS, shopById, toRow } from '../core/shops.js';
 import { norm } from '../core/match.js';
 import { buildPreview } from '../core/import.js';
+import { readXlsx, looksLikeXlsx } from '../core/xlsx.js';
+import { parseDacWorkbook, isDacWorkbook } from '../core/dacworkbook.js';
 import { parseHolds, applyStatus } from '../core/status.js';
 import { estimateDrills } from '../core/estimate.js';
 import { drillKind, byDrill, drillQuery, drillMatches } from '../core/drills.js';
@@ -823,7 +825,21 @@ export async function localApi(path, opts = {}) {
     for (const r of rows) if (r.dac_handle) known.set(norm(r.title), r.dac_handle);
     const s = shopById(shop);
     const pref = ((await idb.get('meta', 'prefs')) || {}).currency || 'GBP';
-    const preview = buildPreview(catFor(shop), existing, String(opts.body), s ? s.name : 'Diamond Art Club', known, pref);
+    /* A CSV arrives as text; Diamond Art Club's newer export is a spreadsheet,
+       and arrives as its bytes. */
+    const body = opts.body;
+    const bytes = body instanceof ArrayBuffer ? new Uint8Array(body)
+      : (body instanceof Uint8Array ? body : null);
+    let input = bytes ? null : String(body);
+    if (bytes) {
+      if (!looksLikeXlsx(bytes))
+        throw Object.assign(new Error('That file is neither a CSV nor a spreadsheet.'), { status: 400 });
+      const book = await readXlsx(bytes);
+      if (!isDacWorkbook(book))
+        throw Object.assign(new Error('That spreadsheet is not an order export this app recognises.'), { status: 400 });
+      input = parseDacWorkbook(book);
+    }
+    const preview = buildPreview(catFor(shop), existing, input, s ? s.name : 'Diamond Art Club', known, pref);
 
     /* An order history knows things about projects you already have — when you
        ordered them above all. The import only ever created what was missing and
