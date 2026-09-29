@@ -660,6 +660,87 @@ test('the summary can be narrowed to a year and to a month', async () => {
   assert.equal(february.totals.hours, 4.5, 'but 4.5 hours were worked');
 });
 
+test('the summary ranks ten oldest and newest kits by acquisition date within the period', async () => {
+  const m = await mount();
+  await emptyLogbook(m);
+  const ids = [];
+  for (let day = 12; day >= 1; day--) {
+    const p = await m.seed({ title: `Kit ${day}`, status: ['received', 'started', 'onHold'][day % 3],
+      date_ordered: `2026-01-${String(day).padStart(2, '0')}`, date_received: '2026-02-01' });
+    ids.unshift(p.id);
+  }
+  const oldest = await m.seed({ title: 'Delivery only', status: 'received', date_received: '2025-12-01' });
+  await m.api('/projects/' + oldest.id, { method: 'PATCH',
+    body: JSON.stringify({ date_ordered: null }) });
+  const undated = await m.seed({ title: 'Undated', status: 'received' });
+  await m.api('/projects/' + undated.id, { method: 'PATCH',
+    body: JSON.stringify({ date_ordered: null, date_received: null }) });
+  await m.seed({ title: 'Old wish', status: 'wishlist', date_ordered: '2000-01-01' });
+  await m.seed({ title: 'New wish', status: 'wishlist', date_ordered: '2099-01-01' });
+
+  const all = await m.api('/summary');
+  assert.deepEqual(all.oldestKits.map(x => x.id), [oldest.id, ...ids.slice(0, 9)]);
+  assert.deepEqual(all.newestKits.map(x => x.id), ids.slice(2).reverse());
+  assert.equal(all.oldestKits[0].date, '2025-12-01');
+  assert.equal(all.oldestKits[0].dateType, 'Received');
+  assert.equal(all.newestKits[0].date, '2026-01-12');
+  assert.equal(all.newestKits[0].dateType, 'Ordered');
+  const year = await m.api('/summary?year=2026');
+  assert.deepEqual(year.oldestKits.map(x => x.id), ids.slice(0, 10));
+  const month = await m.api('/summary?year=2025&month=12');
+  assert.deepEqual(month.oldestKits.map(x => x.id), [oldest.id]);
+  assert.deepEqual(month.newestKits.map(x => x.id), [oldest.id]);
+  const empty = await m.api('/summary?year=2026&month=02');
+  assert.deepEqual(empty.oldestKits, []);
+  assert.deepEqual(empty.newestKits, []);
+
+  // In-hand rankings must filter before taking ten, even when excluded kits
+  // would otherwise take both ends of the list.
+  for (const status of ['notReceived', 'completed', 'abandoned']) {
+    for (const date_ordered of ['2000-01-01', '2099-01-01']) {
+      await m.seed({ title: `${status} ${date_ordered}`, status, date_ordered });
+    }
+  }
+  const unfinished = await m.api('/summary');
+  assert.deepEqual(unfinished.oldestUnfinishedKits.map(x => x.id), [oldest.id, ...ids.slice(0, 9)]);
+  assert.deepEqual(unfinished.newestUnfinishedKits.map(x => x.id), ids.slice(2).reverse());
+  const unfinishedYear = await m.api('/summary?year=2026');
+  assert.deepEqual(unfinishedYear.oldestUnfinishedKits.map(x => x.id), ids.slice(0, 10));
+  const unfinishedMonth = await m.api('/summary?year=2025&month=12');
+  assert.deepEqual(unfinishedMonth.oldestUnfinishedKits.map(x => x.id), [oldest.id]);
+  assert.deepEqual(unfinishedMonth.newestUnfinishedKits.map(x => x.id), [oldest.id]);
+  assert.deepEqual(empty.oldestUnfinishedKits, []);
+  assert.deepEqual(empty.newestUnfinishedKits, []);
+});
+
+for (const width of [390, 1028]) {
+  test(`oldest and newest kit rows open their kits at ${width}px`, async () => {
+    const m = await mount({ width });
+    await emptyLogbook(m);
+    await m.go('#/summary');
+    assert.ok(!m.text().includes('10 oldest kits'), 'empty lists should be hidden');
+    const older = await m.seed({ title: 'Older canvas', status: 'received', date_ordered: '2025-01-01' });
+    const newer = await m.seed({ title: 'Newer canvas', status: 'received', date_ordered: '2026-01-01' });
+    for (const [heading, expected] of [
+      ['10 oldest kits', older], ['10 newest kits', newer],
+      ['10 oldest unfinished kits', older], ['10 newest unfinished kits', newer]
+    ]) {
+      await m.go('#/summary');
+      const section = m.all('h3').find(el => el.textContent === heading).parentElement;
+      const rows = section.querySelectorAll('button[data-go]');
+      assert.equal(rows.length, 2);
+      assert.equal(rows[0].getAttribute('data-go'), `#/p/${expected.id}`);
+      assert.ok(rows[0].textContent.includes(expected.title));
+      assert.match(rows[0].textContent, /01 Jan 202[56]/);
+      rows[0].dispatchEvent({ type: 'click' });
+      await m.settle();
+      assert.equal(globalThis.location.hash, `#/p/${expected.id}`);
+      assert.ok(!broke(m));
+      assert.ok(m.screen().includes(expected.title));
+    }
+  });
+}
+
 test('the summary page shows the figures and narrows when a month is tapped', async () => {
   const m = await mount();
   await summarySeed(m);
