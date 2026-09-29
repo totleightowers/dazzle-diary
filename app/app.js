@@ -2881,6 +2881,22 @@ route(/^#\/summary$/, async () => {
       ], `Across everything you own. Best value is what a canvas cost per thousand diamonds \u2014 the only fair way to hold a small dear kit against a big cheap one.${
         s.currencies > 1 ? ` Dearest and best value are ranked among the kits you paid for in ${h(s.mainCurrency)}: without exchange rates, holding those against a price in another currency would be a guess.` : ''}`)}
 
+      ${section('10 oldest kits', s.oldestKits.map((x, i) =>
+        rec(`${i + 1} · ${x.dateType}`, x, () => h(dateText(x.date)))),
+        'Up to ten kits by earliest order date, or received date when no order date is known. Uses the selected period; wishlist and undated kits are excluded.')}
+
+      ${section('10 newest kits', s.newestKits.map((x, i) =>
+        rec(`${i + 1} · ${x.dateType}`, x, () => h(dateText(x.date)))),
+        'Up to ten kits by latest order date, or received date when no order date is known. Uses the selected period; wishlist and undated kits are excluded.')}
+
+      ${section('10 oldest unfinished kits', s.oldestUnfinishedKits.map((x, i) =>
+        rec(`${i + 1} · ${x.dateType}`, x, () => h(dateText(x.date)))),
+        'Received, started or on hold only. Earliest order date first, falling back to received date. Uses the selected period; undated kits are excluded.')}
+
+      ${section('10 newest unfinished kits', s.newestUnfinishedKits.map((x, i) =>
+        rec(`${i + 1} · ${x.dateType}`, x, () => h(dateText(x.date)))),
+        'Received, started or on hold only. Latest order date first, falling back to received date. Uses the selected period; undated kits are excluded.')}
+
       ${colourSection}
 
       ${section('What you have finished', [

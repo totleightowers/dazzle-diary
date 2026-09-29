@@ -1523,6 +1523,14 @@ export async function localApi(path, opts = {}) {
     const finished = rows.filter(r => r.status === 'completed' && inPeriod(r.date_completed));
     const acquiredInPeriod = owned.filter(r => inPeriod(acquired(r)));
     const scope = period ? acquiredInPeriod : owned;
+    const datedKits = scope.filter(r => acquired(r)).map(r => ({
+      id: r.id, title: r.title, shop: r.shop || null, status: r.status,
+      date: acquired(r), dateType: r.date_ordered ? 'Ordered' : 'Received'
+    }));
+    const unfinishedKits = datedKits.filter(r => ['received', 'started', 'onHold'].includes(r.status));
+    const rankKits = (direction, list = datedKits) => [...list].sort((a, b) =>
+      direction * a.date.localeCompare(b.date) || a.title.localeCompare(b.title) || a.id - b.id
+    ).slice(0, 10);
 
     const mins = sessions.filter(x => inPeriod(x.on))
                          .reduce((n, x) => n + (Number(x.minutes) || 0), 0);
@@ -1710,6 +1718,8 @@ export async function localApi(path, opts = {}) {
 
     return {
       period: period || null, years, months, mainCurrency,
+      oldestKits: rankKits(1), newestKits: rankKits(-1),
+      oldestUnfinishedKits: rankKits(1, unfinishedKits), newestUnfinishedKits: rankKits(-1, unfinishedKits),
       currencies: Object.keys(spentPer).length,
       totals: {
         done: period ? finished.length : rows.filter(r => r.status === 'completed').length,

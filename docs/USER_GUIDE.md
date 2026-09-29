@@ -440,6 +440,17 @@ The time period is applied according to the meaning of each statistic:
 - purchases use ordered/received dates
 - painting time uses session dates
 
+The **10 oldest kits** and **10 newest kits** lists show up to ten kits each,
+ranked by order date (or received date when no order date is known). They follow
+the selected year/month and exclude wishlist kits and kits with neither date.
+Each row shows the date used; tap it to open that kit. Kits bought on the same
+day are listed alphabetically.
+
+The **10 oldest unfinished kits** and **10 newest unfinished kits** use the same
+dates and period, but include only kits in hand: **Received**, **Started**, or
+**On hold**. Completed, abandoned, wishlist, and not-yet-received kits are excluded.
+Tap any row to open the kit.
+
 ### Totals
 
 Depending on the selected period, Summary can show:
