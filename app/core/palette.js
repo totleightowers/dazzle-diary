@@ -18,6 +18,13 @@ const ITEM = /<li\b[^>]*\btitle="([^"]*)"[^>]*>([\s\S]*?)<\/li>/gi;
 const SHADE = /--shade:\s*(#?[0-9a-fA-F]{3,6})/;
 const CODE = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,15}$/;
 
+const COUNT = /^([\d,]+) drills?$/i;
+const countOf = (s) => {
+  if (!/^(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(s)) return null;
+  const n = Number(s.replace(/,/g, ''));
+  return Number.isSafeInteger(n) && n >= 0 ? n : null;
+};
+
 /* The ampersand is unescaped LAST: "&amp;lt;" is the text "&lt;", and
    unescaping the ampersand first would turn it into a "<". */
 const tidy = (s) => s.replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"').replace(/&nbsp;/g, ' ')
@@ -47,7 +54,7 @@ function paletteBlocks(html) {
 
 /**
  * Read a kit's colours out of its product page.
- * Returns { sku, shape, colours: [{ code, name, hex, finish }] } — or null
+ * Returns { sku, shape, totalDrills?, colours: [{ code, name, hex, finish, count? }] } — or null
  * when the page has no colour list, which is how DAC ships a kit whose
  * list it has not published (coasters, the MEGA Dazzles, some older kits).
  */
@@ -69,18 +76,32 @@ export function readPalette(html) {
     while ((m = ITEM.exec(body))) {
       const parts = tidy(m[1]).split('·').map((x) => x.trim()).filter(Boolean);
       const code = parts[0] || '';
-      if (!CODE.test(code) || seen.has(code)) continue;
-      seen.add(code);
+      if (!CODE.test(code)) continue;
+      // Counts follow the name/finish in DAC's current title attribute.
+      const quantity = COUNT.exec(parts[parts.length - 1] || '');
+      const count = quantity ? countOf(quantity[1]) : null;
+      if (quantity) parts.pop();
       /* "310 · Black" is a standard drill; "105 · Tan · Aurora Borealis" is a
          specialty one, and the last part is the finish rather than the name. */
       const finish = parts.length > 2 ? parts[parts.length - 1] : null;
       const name = parts.length > 1 ? parts.slice(1, parts.length > 2 ? -1 : undefined).join(' · ') : null;
+      const key = code + '|' + (finish || '');
+      if (seen.has(key)) {
+        const previous = colours.find((c) => c.code === code && c.finish === finish);
+        if (previous && previous.count == null && count != null) previous.count = count;
+        continue;
+      }
+      seen.add(key);
       colours.push({ code, name: name ? name.slice(0, 60) : null, hex: hexOf(m[2]),
-                     finish: finish ? finish.slice(0, 40) : null });
+                     finish: finish ? finish.slice(0, 40) : null,
+                     ...(count != null ? { count } : {}) });
     }
   }
   if (!colours.length) return null;
-  return { sku: sku ? sku[1] : null, shape: shape ? shape[1] : null, colours };
+  const total = /([\d,]+) drills in this design/i.exec(blocks[0]);
+  const totalDrills = total ? countOf(total[1]) : null;
+  return { sku: sku ? sku[1] : null, shape: shape ? shape[1] : null, colours,
+           ...(totalDrills != null ? { totalDrills } : {}) };
 }
 
 /* The name of the section of the page that holds the colour list, so the

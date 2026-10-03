@@ -352,7 +352,8 @@ export async function fetchPalettes(rows, onProgress) {
       if (read && mine(row, read)) {
         const codes = read.colours.map(cleanColour).filter(Boolean);
         if (codes.length) {
-          legends[row.variant] = { codes, at: nowIso(), shape: read.shape || null, from: 'page' };
+          legends[row.variant] = { codes, at: nowIso(), shape: read.shape || null, from: 'page',
+            ...(read.totalDrills != null ? { totalDrills: read.totalDrills } : {}) };
           for (const c of codes) if (c.hex) known[c.code] = { code: c.code, name: c.name, hex: c.hex };
           found++;
         } else none++;
@@ -1142,10 +1143,10 @@ export async function localApi(path, opts = {}) {
     const colours = mine.codes.slice().sort(byDrill).map((c) => {
       const k = known[c.code] || {};
       return { code: c.code, name: c.name || k.name || null, hex: c.hex || k.hex || null,
-               finish: c.finish || null, kind: drillKind(c.code, c.finish),
+               finish: c.finish || null, kind: drillKind(c.code, c.finish), count: c.count ?? null,
                others: shared.get(c.code) || 0 };
     });
-    return { variant: v, colours, at: mine.at, shape: mine.shape || null,
+    return { variant: v, colours, at: mine.at, shape: mine.shape || null, totalDrills: mine.totalDrills ?? null,
              named: colours.filter((c) => c.hex).length };
   }
 
@@ -1467,7 +1468,9 @@ export async function localApi(path, opts = {}) {
         const codes = Array.isArray(got && got.codes) ? got.codes.map(cleanColour).filter(Boolean) : null;
         if (!codes || !codes.length) continue;
         if (all[v] && String(all[v].at || '') >= String(got.at || '')) continue;
-        all[v] = { codes, at: got.at || nowIso(), shape: got.shape || null };
+        all[v] = { codes, at: got.at || nowIso(), shape: got.shape || null,
+          ...(got.from === 'page' ? { from: 'page' } : {}),
+          ...(Number.isSafeInteger(got.totalDrills) && got.totalDrills >= 0 ? { totalDrills: got.totalDrills } : {}) };
         legends++;
       }
       if (legends) await idb.put('meta', all, 'legends');
@@ -1858,9 +1861,9 @@ export async function localApi(path, opts = {}) {
                               running: live ? live.id : null };
     if (m !== 'POST') throw Object.assign(new Error('Not found'), { status: 404 });
     if (live) return { job: live.id };
-    /* Everything again, if you ask for it after they are all here — DAC edits
-       a list now and then, and a kit whose page had none may have one now. */
-    const rows = want.length ? want : kits;
+    /* Explicit refresh includes saved lists even when other kits still have
+       none published. Otherwise fill missing lists first, as before. */
+    const rows = q(url, 'all') === '1' ? kits : want.length ? want : kits;
     const job = newJob('palettes-' + Date.now());
     job.kind = 'palettes';
     job.total = rows.length;

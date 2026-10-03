@@ -626,3 +626,24 @@ The new APK must be signed with the same signing key as the installed one.
 The sync job can complete for reachable shops while reporting another as failed.
 
 Retry later or sync that shop individually from Settings.
+
+
+## DAC drill counts and matching regular/special colours
+
+In **Settings → Drill colours**, choose **Update drill info for all kits** to
+refresh existing colour lists as well as fetch missing ones. This works even
+when some DAC kits have no published list. It includes wishlist kits and needs
+no DAC account. Lists that cannot be fetched are kept.
+
+Open a kit’s **Drill colours** to see the published design total and each
+colour’s drill count. Per-colour counts are approximate and exclude extra drills
+supplied with the kit. Older lists can still be used; refresh them to get counts
+where DAC now publishes them. Refreshing does not overwrite your kit details.
+The counts are included in JSON backups and restored with the colour lists.
+
+**Summary → Regular and special versions of the same colour** lists every kit
+containing both versions of a base code, such as **211 + Z211** or **216 + AB216**.
+It also recognises the same code with an explicit special finish. Matching uses
+codes, not similar colour swatches. Each entry shows all matching codes and opens
+the kit’s drill list. The list follows Summary’s year/month selection, excludes
+wishlist kits, and uses only kits with saved colour lists.

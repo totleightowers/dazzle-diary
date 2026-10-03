@@ -236,7 +236,8 @@ export function cleanColour(c) {
     .replace(/[^A-Za-z0-9 '&()-]/g, '').replace(/\s+/g, ' ').trim().slice(0, 40);
   return { code, name: name || null,
            hex: HEX.test(hex) ? (hex.startsWith('#') ? hex : '#' + hex).toLowerCase() : null,
-           finish: finish || null };
+           finish: finish || null,
+           ...(Number.isSafeInteger(raw.count) && raw.count >= 0 ? { count: raw.count } : {}) };
 }
 
 /* DAC's drill list comes back as its own shape, and has changed before. Any
