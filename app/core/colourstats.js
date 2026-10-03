@@ -14,6 +14,8 @@
  * Pure: no storage, no DOM. Given the kits, it returns plain data.
  */
 
+import { drillKind } from './drills.js';
+
 const HEX = /^#?([0-9a-f]{6})$/i;
 
 function rgb(hex) {
@@ -108,6 +110,26 @@ export function leanings(colours, { min = 5, share = 0.25 } = {}) {
 function keyOf(c) { return c.code + '|' + (c.finish || ''); }
 const byCode = (a, b) => String(a.code).localeCompare(String(b.code), 'en', { numeric: true })
   || String(a.finish || '').localeCompare(String(b.finish || ''));
+
+/** Regular and special drills with the same base code, within one kit.
+ * Prefixes identify finishes, never a different base colour: Z211 -> 211.
+ * Explicit finishes can also distinguish two drills both printed as 211.
+ * B5200 is a standard DMC code, so its B is not stripped. */
+export function regularSpecialPairs(colours) {
+  const groups = new Map();
+  for (const c of colours || []) {
+    const code = String(c.code || '').trim().toUpperCase();
+    const special = drillKind(code, c.finish) !== 'plain';
+    const base = special && code !== 'B5200' ? code.replace(/^[A-Z]+(?=\d+$)/, '') : code;
+    if (!base) continue;
+    const group = groups.get(base) || { code: base, regular: [], special: [] };
+    const bucket = special ? group.special : group.regular;
+    if (!bucket.some((d) => d.code === code && d.finish === (c.finish || null)))
+      bucket.push({ code, finish: c.finish || null });
+    groups.set(base, group);
+  }
+  return [...groups.values()].filter((g) => g.regular.length && g.special.length).sort(byCode);
+}
 
 /**
  * kits: [{ id, title, shop, variant, colours: [{ code, name, hex, finish }] }]
@@ -214,6 +236,8 @@ export function colourStats(kits, { top = 8, sample = 6 } = {}) {
     kits: list.length,
     distinct: all.length,
     common, oneOffs,
+    regularSpecial: list.map((k) => ({ ...kitRef(k), pairs: regularSpecialPairs(k.colours) }))
+      .filter((k) => k.pairs.length).sort((a, b) => a.title.localeCompare(b.title) || a.id - b.id),
     mostColours: pick(size, (a, b) => a > b),
     fewestColours: pick(size, (a, b) => a < b),
     mostSpecial: pick(special, (a, b) => a > b),

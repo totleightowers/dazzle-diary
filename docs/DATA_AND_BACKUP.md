@@ -444,3 +444,10 @@ A photo is exported only when the user explicitly shares it.
 4. Restore should be repeatable without multiplying content.
 5. Local work should win over older backup progress/notes.
 6. External sharing must be explicit.
+
+
+DAC colour legends optionally include a per-colour `count` and a legend-level
+`totalDrills` design total. JSON backups retain these fields and the `from: page`
+source marker. Old backups without counts remain supported; absent counts are
+unknown, not zero. Counts are non-negative safe integers. They enrich legends
+without replacing project specification or progress history.

@@ -2694,8 +2694,8 @@ test('a kit shows its whole drill list, with DAC\'s colours and what your other 
             'the kinds of drill are not named');
   assert.ok(text.includes('in 1 more'), 'it does not say which drills your other kits share');
   assert.equal(m.all('.drillshared').length, 1, 'a drill no other kit holds is labelled anyway');
-  assert.ok(/does not say how many drills of each colour/.test(text),
-            'the screen does not say that per-colour amounts are not published');
+  assert.ok(/Missing counts mean DAC has not published them or this list needs refreshing/.test(text),
+            'the screen does not explain missing counts on old lists');
 
   await m.tap('.drillrow[data-k="310"]');
   assert.equal(globalThis.location.hash, '#/colours');
@@ -3035,4 +3035,70 @@ test('a trial ended by an earlier build does not count', async () => {
   await add('Moon Eater', 'moon-eater', 'received');
   await idbDirect.put('meta', { done: true, at: '2026-09-19' }, 'dacTrial');   // how 3.29 left it
   assert.equal((await m.api('/dac/kits')).piloted, false, 'an old, untrustworthy trial was honoured');
+});
+
+
+for (const width of [390, 1028]) test(`updated drill counts and regular/special Summary at ${width}px`, async () => {
+  const page = PAGE('DAC-101S', 'square', [
+    ['211', 'Light Lavender · 1,234 drills', '#E3CBE3'],
+    ['Z211', 'Light Lavender · Fairy Dust · 37 drills', '#E3CBE3'],
+    ['216', 'Lavender · 22 drills', '#ABCDEF'],
+    ['AB216', 'Lavender · Aurora Borealis · 9 drills', '#ABCDEF']
+  ]).replace('<div class="palette-body">', '<div class="palette-body"><strong>1,302 drills in this design</strong>');
+  const m = await mount({ width, products: [
+    { ...DAC_KIT(1, 101, 'Moon Eater'), specHtml: page },
+    { ...DAC_KIT(2, 202, 'Missing List'), specHtml: '<html>No palette</html>' }
+  ] });
+  await m.sync();
+  await emptyLogbook(m);
+  await idbDirect.del('meta', 'drills');
+  const moon = await m.seed({ title: 'Moon Eater', shop: 'dac', dac_handle: 'moon-eater',
+    status: 'received', date_ordered: '2026-01-01', drills: 9999 });
+  await m.seed({ title: 'Missing List', shop: 'dac', dac_handle: 'missing-list', status: 'received' });
+  const wish = await m.seed({ title: 'Wish copy', shop: 'dac', dac_handle: 'moon-eater', status: 'wishlist' });
+  await idbDirect.put('meta', { 101: { from: 'page', codes: [{ code: '211', name: 'Old name' }], at: '2026-01-01' } }, 'legends');
+  assert.equal((await m.api('/dac/palettes')).candidates, 1);
+  await m.go('#/settings');
+  await m.tap('[data-act="refreshpalettes"]');
+  await m.until(async () => (await m.api('/legends'))['101'].codes[0].count === 1234, 8000);
+  await m.until(async () => !(await m.api('/dac/palettes')).running, 8000);
+  const legend = await m.api(`/projects/${moon.id}/legend`);
+  assert.equal(legend.totalDrills, 1302);
+  assert.deepEqual(legend.colours.map((c) => c.count), [1234, 22, 9, 37]);
+  assert.equal((await m.api(`/projects/${moon.id}`)).drills, 9999, 'refresh overwrote kit details');
+  await m.go(`#/p/${moon.id}/colours`);
+  assert.match(m.text(), /1,234 drills/);
+  assert.match(m.text(), /1,302 drills/);
+  assert.match(m.text(), /approximate and exclude extra drills/);
+  const summary = (await m.api('/summary')).colours.regularSpecial;
+  assert.deepEqual(summary.map((k) => k.id), [moon.id]);
+  assert.ok(!summary.some((k) => k.id === wish.id));
+  assert.deepEqual(summary[0].pairs.map((p) => p.code), ['211', '216']);
+  assert.equal((await m.api('/summary?year=2025')).colours, null);
+  await m.go('#/summary');
+  assert.equal(m.all('.regularspecial').length, 1);
+  assert.match(m.text(), /211 \+ Z211/);
+  assert.match(m.text(), /216 \+ AB216/);
+  await m.tap('.regularspecial');
+  assert.equal(globalThis.location.hash, `#/p/${moon.id}/colours`);
+
+  // A removed product must not erase a saved list or its counts.
+  await idbDirect.put('meta', { ...(await m.api('/legends')), 202: { from: 'page', codes: [{ code: '310', count: 42 }] } }, 'legends');
+  const { job } = await m.api('/dac/palettes?all=1', { method: 'POST' });
+  await m.until(async () => (await m.api('/jobs/' + job)).state === 'done', 8000);
+  assert.equal((await m.api('/legends'))['202'].codes[0].count, 42);
+
+  // Actual backup UI output, restored through the same route as an old backup.
+  await m.go('#/settings');
+  await m.tap('[data-act="backup"]');
+  await m.until(() => m.downloads.some((d) => d.name === 'dazzle-diary-backup.json'));
+  const file = JSON.parse(m.downloads.find((d) => d.name === 'dazzle-diary-backup.json').text);
+  assert.equal(file.legends['101'].codes[0].count, 1234);
+  await idbDirect.del('meta', 'legends');
+  await m.api('/restore', { method: 'POST', body: JSON.stringify(file) });
+  const back = (await m.api('/legends'))['101'];
+  assert.equal(back.codes[0].count, 1234);
+  assert.equal(back.totalDrills, 1302);
+  assert.equal(back.from, 'page');
+  await colourSummaryDone();
 });

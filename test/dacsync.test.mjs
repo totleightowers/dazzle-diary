@@ -336,3 +336,10 @@ test('a sync carries the drill list and each kit\'s shape back to the app', asyn
   assert.deepEqual(r.shapes, { 111: 'round' });
   assert.deepEqual(r.drills['310'], { code: '310', name: 'Black', hex: '#000000', finish: null });
 });
+
+
+test('per-kit drill counts survive cleaning while invalid backup quantities are ignored', () => {
+  for (const count of [0, 1234]) assert.equal(cleanColour({ code: '211', count }).count, count);
+  for (const count of [-1, 1.5, '1234', null, Infinity, Number.MAX_SAFE_INTEGER + 1])
+    assert.equal(cleanColour({ code: '211', count }).count, undefined);
+});

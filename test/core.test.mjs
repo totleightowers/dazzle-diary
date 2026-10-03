@@ -877,3 +877,37 @@ test('a spreadsheet line is matched by its drill count when titles collide', asy
   assert.equal(alice.status, 'notReceived');
   assert.equal(p.skipped.length, 1, 'the multiplacer was not left out');
 });
+
+
+test('DAC counts are quantities, not names or finishes, and duplicate lists retain both finishes', () => {
+  const rows = `<li title="211 · Light Lavender · 1,234 drills"><span style="--shade:#E3CBE3"></span></li>
+    <li title="AB216 · Lavender · Aurora Borealis · 37 drills"><span style="--shade:#ABCDEF"></span></li>
+    <li title="211 · Light Lavender · Fairy Dust · 0 drills"><span style="--shade:#E3CBE3"></span></li>`;
+  const html = `<details class="palette" data-shape="square" data-palette-sku="DAC-X">
+    <div class="palette-body"><strong>1,271 drills in this design</strong>${rows}<div class="palette-foot"></div></div>
+    <div class="palette-body">${rows}<div class="palette-foot"></div></div></details>`;
+  const r = readPalette(html);
+  assert.equal(r.totalDrills, 1271);
+  assert.deepEqual(r.colours, [
+    { code: '211', name: 'Light Lavender', hex: '#e3cbe3', finish: null, count: 1234 },
+    { code: 'AB216', name: 'Lavender', hex: '#abcdef', finish: 'Aurora Borealis', count: 37 },
+    { code: '211', name: 'Light Lavender', hex: '#e3cbe3', finish: 'Fairy Dust', count: 0 }
+  ]);
+  const bad = readPalette(html.replaceAll('1,234', '12,34').replaceAll('37 drills', '999999999999999999999 drills'));
+  assert.equal(bad.colours[0].count, undefined);
+  assert.equal(bad.colours[0].finish, null);
+  assert.equal(bad.colours[1].count, undefined);
+  assert.equal(bad.colours[1].finish, 'Aurora Borealis');
+});
+
+test('regular and special pairs match base codes within every kit, never swatch colours', () => {
+  const colours = [D('211', '#000000'), D('z211', '#ffffff'), D('AB216'), D('216'),
+    D('211', null, 'Fairy Dust'), D('Z211'), D('B5200'), D('5200'),
+    D('126', '#e3cbe3', 'Aurora Borealis'), D('999', '#e3cbe3')];
+  const kits = Array.from({ length: 12 }, (_, i) => KIT(i + 1, 'Kit ' + i, colours));
+  kits.push(KIT(20, 'Regular only', [D('211')]), KIT(21, 'Special only', [D('Z211')]));
+  const matches = colourStats(kits).regularSpecial;
+  assert.equal(matches.length, 12, 'all matching kits must be listed, without a top-ten limit');
+  assert.deepEqual(matches[0].pairs.map((p) => p.code), ['211', '216']);
+  assert.deepEqual(matches[0].pairs[0].special.map((c) => c.code), ['Z211', '211']);
+});

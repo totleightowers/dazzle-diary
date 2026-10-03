@@ -15,7 +15,7 @@ export function drillKind(code, finish) {
   const c = String(code || '').trim().toUpperCase();
   if (!c) return 'plain';
   if (/^AB/.test(c)) return 'ab';
-  return /^[A-Z]/.test(c) && c !== 'ECRU' && c !== 'BLANC' && c !== 'NOIR' ? 'special' : 'plain';
+  return /^[A-Z]/.test(c) && !['ECRU', 'BLANC', 'NOIR', 'B5200'].includes(c) ? 'special' : 'plain';
 }
 
 export const KIND_LABEL = { plain: 'Standard', ab: 'Aurora borealis', special: 'Special finish' };

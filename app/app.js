@@ -2034,6 +2034,7 @@ route(/^#\/p\/(\d+)\/colours$/, async (id) => {
       <p style="margin:16px 2px 0;font-size:13px;color:var(--ink-mute)">
         ${h(p.title)} — <span class="tnum">${num(legend.colours.length)}</span> drill colours${
         legend.shape ? `, ${h(legend.shape)}` : ''}${p.drills ? `, ${p.drills_estimated ? '≈' : ''}${num(p.drills)} diamonds` : ''}.
+        ${legend.totalDrills != null ? ` DAC design total: ${num(legend.totalDrills)} drills.` : ''}
         ${legend.named ? '' : 'Diamond Art Club has not given this app its drill list yet, so the codes have no colours — the next sync fetches it.'}</p>
       ${p.colors && p.colors !== legend.colours.length ? `
       <p style="margin:8px 2px 0;font-size:12px;color:var(--ink-mute)">The listing says ${
@@ -2047,13 +2048,15 @@ route(/^#\/p\/(\d+)\/colours$/, async (id) => {
             <span style="flex:1 1 auto;min-width:0;text-align:left">
               <span class="drillcodeline tnum">${h(c.code)}</span>
               ${c.name ? `<span class="drillsub">${h(c.name)}</span>` : ''}
+              ${c.count != null ? `<span class="drillsub tnum">≈${num(c.count)} drills</span>` : ''}
             </span>
             ${c.others ? `<span class="drillshared tnum">in ${num(c.others)} more</span>` : ''}
           </button>`).join('')}</div>`).join('')}
       <p style="margin:18px 2px 0;font-size:11px;line-height:1.5;color:var(--ink-mute)">
         Tap a colour to find your other kits that use it.${legend.at ? ` From Diamond Art Club, ${
           dateText(legend.at.slice(0, 10))}.` : ''}
-        Diamond Art Club does not say how many drills of each colour a kit holds, so neither does this.</p>
+        Per-colour counts are approximate and exclude extra drills supplied with the kit.
+        Missing counts mean DAC has not published them or this list needs refreshing in Settings.</p>
     </div>
   </div>`;
 });
@@ -2807,6 +2810,17 @@ route(/^#\/summary$/, async () => {
           <span class="v tnum" style="white-space:nowrap;font-weight:700">${num(C.twins.shared)} shared</span>
         </button>` : ''}
       </div>
+      <p class="sumsub">Regular and special versions of the same colour</p>
+      ${C.regularSpecial.length ? `<div class="panel pad-in">${C.regularSpecial.map((k) => `
+        <button class="row regularspecial" data-go="#/p/${k.id}/colours" style="width:100%;text-align:left">
+          <span style="min-width:0;overflow-wrap:anywhere">
+            <b>${h(k.title)}</b>
+            <span style="display:block;margin-top:4px;font-size:12px;color:var(--ink-mute)">${
+              k.pairs.map((pair) => `${h(pair.code)} + ${pair.special.map((c) => h(c.code)
+                + (c.finish ? ` (${h(c.finish)})` : '')).join(', ')}`).join(' · ')}</span>
+          </span>
+        </button>`).join('')}</div>` : '<p style="font-size:12px;color:var(--ink-mute)">No matching pairs in the colour lists for this period.</p>'}
+      <p style="margin:8px 2px 0;font-size:12px;color:var(--ink-mute)">All kits with both a regular code and its special version, such as 211 and Z211 or 216 and AB216. Tap a kit to open its drill list.</p>
       ${C.finishes.length ? `
       <p class="sumsub">Specialty diamonds</p>
       <div class="finchips">${C.finishes.map((f) => `<span class="finchip">${h(f.finish)}
@@ -3129,7 +3143,7 @@ route(/^#\/settings$/, async () => {
                   pal.total ? Math.round(pal.have / pal.total * 100) : 0}%;background:var(--st-started-dot)"></span></span>
               <span style="display:block;margin-top:6px;font-size:12px;line-height:1.5;color:var(--ink-mute)" id="palwhy">
                 Diamond Art Club prints every kit’s colour list on its own page, with DMC’s name and
-                the colour itself. This reads those pages — no account, nothing signed into, and
+                the colour itself, plus drill counts where published. This reads those pages — no account, nothing signed into, and
                 kits you have only wished for count too.</span>
             </span>
           </div>
@@ -3140,6 +3154,9 @@ route(/^#\/settings$/, async () => {
                     data-act="getpalettes">${pal.candidates ? (pal.have ? 'Fetch the rest' : 'Get drill colours')
                                                             : 'Check for changes'}</button>
           </div>
+          ${pal.have ? `<button class="btn ghost" style="width:100%;min-height:40px;font-size:13px;margin-bottom:8px"
+            data-act="refreshpalettes">Update drill info for all kits</button>
+            <p style="margin:0 2px 8px;font-size:12px;color:var(--ink-mute)">Refresh existing lists too, including new drill counts. Your kit details stay as entered.</p>` : ''}
           <div id="palbox"></div>
           ${pal.missing ? `<p style="margin:2px 2px 8px;font-size:11px;color:var(--ink-mute)">${
             num(pal.missing)} kit${pal.missing === 1 ? ' could' : 's could'} not be matched to a DAC listing —
@@ -3521,11 +3538,11 @@ async function handleClick(e) {
               buildTickScript(kits, { limit, probe: '/products/' + encodeURIComponent(kits[0].handle) }),
               buildLegendScript(kits.map((k) => k.variant)));
   }
-  else if (act === 'getpalettes') {
+  else if (act === 'getpalettes' || act === 'refreshpalettes') {
     const box = document.getElementById('palbox');
     if (box) box.innerHTML = `<p style="margin:2px 2px 8px;font-size:12px;color:var(--ink-mute)">Reading kit pages…</p>`;
     try {
-      const { job } = await api('/dac/palettes', { method: 'POST' });
+      const { job } = await api('/dac/palettes' + (act === 'refreshpalettes' ? '?all=1' : ''), { method: 'POST' });
       if (job) watchPalettes(job);
     } catch (e) { toast(e.message); }
   }
