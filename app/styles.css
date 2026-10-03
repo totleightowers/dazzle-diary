@@ -645,16 +645,16 @@ select.fld {
 .lb-strip::-webkit-scrollbar { display: none; }
 .lb-slide {
   flex: 0 0 100%; scroll-snap-align: center; scroll-snap-stop: always;
+  min-width: 0; min-height: 0;
   display: flex; align-items: center; justify-content: center; padding: 0 4px;
 }
 .lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 10px; display: block; }
 
-/* A zoomed slide scrolls in both directions and holds an image bigger than it:
-   panning is then the platform's own scrolling, with its own momentum. */
-/* Scaled by transform rather than by growing the element: it is smooth, it
-   pivots about the middle, and a drag can move it without the layout changing. */
+/* Zoom changes the image's rendered size so small text uses original pixels.
+   Translation pans it. Never pin a screen-sized texture with will-change. */
 .lb-slide.zoomed { touch-action: none; scroll-snap-align: none; }
-.lb-slide img { transform-origin: center center; will-change: transform; }
+.lb-slide img { flex: none; }
+.lb-slide.zoomed img { max-width: none; max-height: none; }
 .lightbox.has-zoom .lb-strip { scroll-snap-type: none; overflow-x: hidden; }
 .lb-count {
   position: absolute; top: calc(env(safe-area-inset-top, 0px) + 20px); left: 50%;

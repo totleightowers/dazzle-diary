@@ -244,6 +244,14 @@ Explain:
 
 The repository expects changes through pull requests.
 
+For completed fixes and features, carry the work through release without waiting
+for a separate prompt: prepare the version/build increment, open the pull request,
+watch all checks on its final commit, merge once they pass, and publish the tagged
+release. Verify the released APK's version and signing certificate, then provide
+its download link. This is the owner's standing workflow; an explicit instruction
+to stop at a draft or review overrides it.
+
+
 To enable the repository's local hooks:
 
 ```bash

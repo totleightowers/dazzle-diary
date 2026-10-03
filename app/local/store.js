@@ -17,6 +17,7 @@ import { parseHolds, applyStatus } from '../core/status.js';
 import { estimateDrills } from '../core/estimate.js';
 import { drillKind, byDrill, drillQuery, drillMatches } from '../core/drills.js';
 import { readPalette, paletteSection } from '../core/palette.js';
+import { originalImage } from '../core/images.js';
 import { colourStats, distinctDrills, leanings } from '../core/colourstats.js';
 import { DAC_STATUS, readSyncResult, cleanColour } from '../core/dacsync.js';
 
@@ -139,17 +140,15 @@ async function listingImages(shopId, handle) {
   return live;
 }
 
-/* Shopify serves a picture at whatever width you ask for, and asking for one at
-   all was the only thing making these soft. These are canvases you zoom into to
-   count drills, so the answer is the original: null means send no width and take
-   the picture as published. A whole logbook of them is about 0.4 GB, which is
-   less than a phone spends on a weekend of photographs.
+/* These canvases need enough detail to read drill codes when zoomed. Request
+   the published original, removing any preview dimensions already in its URL.
 
    COVER_FIDELITY is the level a project's pictures were fetched at, not a flag,
    so that raising it catches up everything fetched under the old one. 1 was the
-   1600px pass; 2 is the original. */
+   1600px pass; 2 requested no extra width but reused thumbnail URLs/files;
+   3 removes existing resize parameters and uses new cache filenames. */
 const COVER_WIDTH = null;
-const COVER_FIDELITY = 2;
+const COVER_FIDELITY = 3;
 
 async function listingCovers(row, force = false) {
   if (!row.dac_handle) return [];
@@ -158,9 +157,9 @@ async function listingCovers(row, force = false) {
   return cacheGallery(`${row.shop || 'dac'}-${row.dac_handle}`, urls, COVER_WIDTH, force);
 }
 
-/* Re-fetch one project's listing pictures at full width, over the top of
-   whatever is already there. Filenames do not change, so nothing that points at
-   them has to be rewritten. Returns true if the pictures were replaced. */
+/* Re-fetch at full width under this fidelity's filenames. Android caches media
+   URLs as immutable, so overwriting an old filename can keep showing its old
+   thumbnail. Keep the previous gallery until every replacement is saved. */
 async function hifiCovers(row) {
   if (!needsHifi(row)) return false;
   const g = await listingCovers(row, true);
@@ -601,24 +600,25 @@ async function cacheGallery(key, urls, width = COVER_WIDTH, force = false) {
   const out = [];
   for (let i = 0; i < (urls || []).length; i++) {
     const f = await cacheCover(i === 0 ? key : `${key}-${i}`, urls[i], width, force);
-    if (f) out.push(f);
+    if (!f) return []; // never mark an incomplete gallery as full fidelity
+    out.push(f);
   }
   return out;
 }
 
 async function cacheCover(key, url, width = COVER_WIDTH, force = false) {
   if (!url) return null;
-  let src = url;
+  let src = width ? url : originalImage(url);
   try {
     const u = new URL(url);
     // no width at all means the original, which is the point
     if (width && u.hostname.includes('shopify')) { u.searchParams.set('width', String(width)); src = u.toString(); }
   } catch {}
   const ext = (String(url).match(/\.(png|webp|gif|jpe?g)/i) || ['.jpg'])[0].toLowerCase();
-  const name = key + (ext === '.jpeg' ? '.jpg' : ext);
+  const name = key + '-full' + COVER_FIDELITY + (ext === '.jpeg' ? '.jpg' : ext);
   const n = Native();
-  /* The filename carries no width, so a picture already on disk is indistinguishable
-     from a sharp one. Without this, upgrading an old kit silently kept the blur. */
+  /* Reuse only files from this fidelity. An explicit upgrade still refetches
+     them, including any leftovers from an interrupted gallery download. */
   if (!force && n && n.exists('covers/' + name)) return name;
   try {
     const res = await fetch(via(src));

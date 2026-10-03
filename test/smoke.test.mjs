@@ -334,11 +334,16 @@ test('a picture can be pinched, panned and pinched back', async () => {
   await m.go('#/p/' + p.id);
   await m.tap('.shots img');
   const box = m.find('.lightbox'), slide = m.find('.lb-slide');
+  const fullImage = slide.querySelector('img');
+  fullImage.naturalWidth = 3000; fullImage.naturalHeight = 3000;
   const two = (d) => [{ clientX: 200 - d / 2, clientY: 400 }, { clientX: 200 + d / 2, clientY: 400 }];
 
   box.dispatchEvent({ type: 'touchstart', touches: two(100) });
   box.dispatchEvent({ type: 'touchmove', touches: two(300), preventDefault() {} });
   assert.ok(Number(slide.dataset.scale) > 2, 'pinching out did not enlarge it');
+  assert.equal(Math.round(parseFloat(fullImage.style.width)), 1176, 'zoom must render more pixels than the fitted image');
+  assert.equal(Math.round(parseFloat(fullImage.style.height)), 1176);
+  assert.ok(!/scale\(/.test(fullImage.style.transform), 'zoom only magnified a small compositor texture');
   box.dispatchEvent({ type: 'touchend', touches: [] });
 
   box.dispatchEvent({ type: 'touchstart', touches: [{ clientX: 200, clientY: 400 }] });
@@ -351,6 +356,8 @@ test('a picture can be pinched, panned and pinched back', async () => {
   box.dispatchEvent({ type: 'touchend', touches: [] });
   assert.equal(slide.dataset.scale, '1', 'pinching back in did not restore it');
   assert.ok(!slide.classList.contains('zoomed'));
+  assert.equal(fullImage.style.width, '', 'zoom reset left the enlarged width behind');
+  assert.equal(fullImage.style.height, '');
 });
 
 test('the dots follow the strip, and tapping one moves it', async () => {
@@ -2026,19 +2033,19 @@ test('kits still on thumbnails are caught up on launch, without being asked', as
 /* Covers were fetched at 1600 before they were fetched at full size, and those
    kits were marked done. A mark that only says "done" cannot tell the two
    apart, so they would have kept the smaller picture for ever. */
-test('kits upgraded to the old 1600px size are caught up again on launch', async () => {
+for (const fidelity of [1, 2]) test(`kits at old picture fidelity ${fidelity} are caught up again on launch`, async () => {
   const first = await mount();
   await first.sync();
   await emptyLogbook(first);
   const cat = await first.api('/catalogue/search?q=moon');
   const made = await first.api('/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ title: cat[0].title, shop: cat[0].shop, dac_handle: cat[0].handle }) });
-  // exactly how a version that fetched 1600px left it
+  // Both the 1600px pass and the old original pass need fresh cache URLs.
   await first.api('/projects/' + made.id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ cover_hifi: 1 }) });
+    body: JSON.stringify({ cover_hifi: fidelity }) });
 
   assert.equal((await first.api('/projects/upgrade-covers')).candidates, 1,
-               'a kit stuck at 1600px was treated as already done');
+               'a kit at an old fidelity was treated as already done');
 
   const next = await mount();
   await next.settle(); await next.settle();
@@ -3101,4 +3108,60 @@ for (const width of [390, 1028]) test(`updated drill counts and regular/special 
   assert.equal(back.totalDrills, 1302);
   assert.equal(back.from, 'page');
   await colourSummaryDone();
+});
+
+for (const width of [390, 1028]) test(`catalogue previews open the original image when zoomed at ${width}px`, async () => {
+  const m = await mount({ width });
+  await m.sync();
+  await emptyLogbook(m);
+  await m.go('#/browse');
+  await m.tap('[data-act="pickcat"]');
+  await m.until(() => globalThis.location.hash !== '#/browse');
+  const preview = m.find('#formshots img').getAttribute('src');
+  assert.equal(new URL(preview).searchParams.get('width'), '900');
+  await m.tap('#formshots img');
+  const original = m.find('.lb-slide img').getAttribute('src');
+  assert.equal(new URL(original).searchParams.get('width'), null);
+  assert.equal(new URL(original).pathname, new URL(preview).pathname);
+});
+
+test('level-two cached covers are replaced through the original fetch path without reusing immutable URLs', async () => {
+  const urls = ['https://cdn.shopify.com/kit_900x.jpg?v=7&width=900',
+    'https://www.diamondartclub.com/cdn/shop/files/detail.jpg?v=8&height=600'];
+  const m = await mount({ products: [{ ...DAC_KIT(1, 101, 'Moon Eater'), images: urls.map(src => ({ src })) }] });
+  await m.sync();
+  await emptyLogbook(m);
+  const p = await m.seed({ title: 'Moon Eater', shop: 'dac', dac_handle: 'moon-eater' });
+  const old = ['dac-moon-eater.jpg', 'dac-moon-eater-1.jpg'];
+  const row = await idbDirect.get('projects', p.id);
+  Object.assign(row, { cover: 'own-kept.jpg', covers: JSON.stringify(['own-kept.jpg', ...old]), cover_hifi: 2 });
+  await idbDirect.put('projects', row);
+  m.files.set('covers/own-kept.jpg', Buffer.from('personal photo'));
+  for (const name of old) m.files.set('covers/' + name, Buffer.from('old thumbnail'));
+  assert.equal((await m.api('/projects/upgrade-covers')).candidates, 1);
+
+  // One failed download must leave the whole saved gallery usable and retryable.
+  const fetchImage = globalThis.fetch;
+  globalThis.fetch = async (u, opts) => String(u).includes('detail.jpg')
+    ? { ok: false, status: 503 } : fetchImage(u, opts);
+  try {
+    assert.equal((await m.api('/projects/upgrade-covers', { method: 'POST' })).upgraded, 0);
+    assert.deepEqual((await idbDirect.get('projects', p.id)).covers, row.covers);
+    assert.equal((await m.api('/projects/upgrade-covers')).candidates, 1);
+  } finally { globalThis.fetch = fetchImage; }
+
+  m.net.length = 0;
+  assert.equal((await m.api('/projects/upgrade-covers', { method: 'POST' })).upgraded, 1);
+  const updated = await idbDirect.get('projects', p.id);
+  const names = JSON.parse(updated.covers);
+  assert.equal(updated.cover, 'own-kept.jpg');
+  assert.equal(m.files.get('covers/own-kept.jpg').toString(), 'personal photo');
+  assert.deepEqual(names, ['own-kept.jpg', 'dac-moon-eater-full3.jpg', 'dac-moon-eater-1-full3.jpg']);
+  assert.ok(names.slice(1).every(name => m.files.has('covers/' + name) && !old.includes(name)));
+  assert.ok(m.net.includes('https://cdn.shopify.com/kit.jpg?v=7'));
+  assert.ok(m.net.includes('https://www.diamondartclub.com/cdn/shop/files/detail.jpg?v=8'));
+  assert.equal((await m.api('/projects/upgrade-covers')).candidates, 0);
+  await m.go('#/p/' + p.id);
+  await m.tap('.shots img[data-i="1"]');
+  assert.equal(m.all('.lb-slide img')[1].getAttribute('src'), '/covers/dac-moon-eater-full3.jpg');
 });
