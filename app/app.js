@@ -4,6 +4,7 @@ import { statusFromDates, applyStatus, parseHolds, openHold, heldDays,
          ALL_STATUSES } from './core/status.js';
 import { productUrl, shopById, displayCurrency, SHOPS, CURRENCIES } from './core/shops.js';
 import { buildTickScript, buildLegendScript } from './core/dacsync.js';
+import { originalImage } from './core/images.js';
 const SHOP_BY_NAME = Object.fromEntries(SHOPS.map((s) => [s.name, s]));
 /* Dazzle Diary — the whole client. Vanilla; no build step. */
 
@@ -167,7 +168,8 @@ const svg = (name, size = 20, sw = 1.7) => {
    already knows how to fling a strip of images with momentum, and every
    hand-written version of that is worse. */
 function lightbox(items, startIndex = 0) {
-  const list = (Array.isArray(items) ? items : [{ src: items }]).filter((x) => x && x.src);
+  const list = (Array.isArray(items) ? items : [{ src: items }]).filter((x) => x && x.src)
+    .map((x) => ({ ...x, src: originalImage(x.src) }));
   if (!list.length) return;
   let index = Math.min(Math.max(0, startIndex), list.length - 1);
 
@@ -189,6 +191,7 @@ function lightbox(items, startIndex = 0) {
     el.remove();
     document.removeEventListener('keydown', onKey);
     window.removeEventListener('popstate', onPop);
+    window.removeEventListener('resize', resizeZoom);
     if (history.state && history.state.lightbox) history.back();
   };
   const onKey = (e) => {
@@ -196,7 +199,11 @@ function lightbox(items, startIndex = 0) {
     if (e.key === 'ArrowRight') return goTo(index + 1);
     if (e.key === 'ArrowLeft') return goTo(index - 1);
   };
-  const onPop = () => { open = false; el.remove(); document.removeEventListener('keydown', onKey); };
+  const onPop = () => {
+    open = false; el.remove(); document.removeEventListener('keydown', onKey);
+    window.removeEventListener('popstate', onPop);
+    window.removeEventListener('resize', resizeZoom);
+  };
 
   const strip = () => el.querySelector('#lbstrip');
   const goTo = (i) => {
@@ -234,9 +241,8 @@ function lightbox(items, startIndex = 0) {
   history.pushState({ lightbox: true }, '');
   document.body.appendChild(el);
 
-  /* Double tap zooms, which is the gesture everyone already has. The zoomed
-     slide simply becomes scrollable and the image larger than it, so panning is
-     the platform's own scrolling rather than arithmetic on touch points. */
+  /* Render at the zoomed dimensions instead of magnifying a screen-sized
+     compositor texture. This makes WebView decode the source's fine detail. */
   /* Pinch. The WebView's own page zoom is off — the app is a fixed layout, not
      a document — so two fingers on a picture have to be handled here: track the
      distance between them, scale the image by how much it changes, and let a
@@ -249,14 +255,32 @@ function lightbox(items, startIndex = 0) {
     const img = slide.querySelector('img');
     if (!img) return;
     const clamped = Math.min(6, Math.max(1, scale));
+    const previousScale = scaleOf(slide);
+    let width, height;
+    if (img.naturalWidth && img.naturalHeight) {
+      const fit = Math.min(1, Math.max(1, slide.clientWidth - 8) / img.naturalWidth,
+        slide.clientHeight / img.naturalHeight);
+      width = img.naturalWidth * fit; height = img.naturalHeight * fit;
+    } else {
+      const rect = img.getBoundingClientRect();
+      width = rect.width / previousScale; height = rect.height / previousScale;
+    }
     slide.dataset.scale = String(clamped);
     const x = clamped === 1 ? 0 : (ox ?? Number(slide.dataset.ox || 0));
     const y = clamped === 1 ? 0 : (oy ?? Number(slide.dataset.oy || 0));
     slide.dataset.ox = String(x); slide.dataset.oy = String(y);
-    img.style.transform = `translate(${x}px, ${y}px) scale(${clamped})`;
+    img.style.width = clamped > 1 ? `${width * clamped}px` : '';
+    img.style.height = clamped > 1 ? `${height * clamped}px` : '';
+    img.style.transform = `translate(${x}px, ${y}px)`;
     if (clamped > 1) { slide.classList.add('zoomed'); el.classList.add('has-zoom'); }
     else { slide.classList.remove('zoomed'); if (!el.querySelector('.lb-slide.zoomed')) el.classList.remove('has-zoom'); }
   };
+  const resizeZoom = () => {
+    for (const slide of el.querySelectorAll('.lb-slide'))
+      if (scaleOf(slide) > 1) applyScale(slide, scaleOf(slide));
+  };
+  window.addEventListener('resize', resizeZoom);
+  for (const img of el.querySelectorAll('.lb-slide img')) img.addEventListener('load', resizeZoom);
   const gap = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
 
   el.addEventListener('touchstart', (e) => {

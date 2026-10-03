@@ -323,6 +323,17 @@ A project can have:
 
 Dazzle presents both in one full-screen gallery.
 
+Shopify/DAC pictures open at their original resolution in the full-screen
+viewer, including previews opened before adding a kit. Zoom renders the image
+at the enlarged size so the source's small details remain visible.
+
+After updating, linked kits with older cached pictures are fetched again
+automatically. **Settings → Your data → Full-size pictures** shows progress and
+lets you retry anything left. The fetch removes thumbnail dimensions and saves
+new files so an old cached preview cannot hide the downloaded original. A kit
+is marked done only after its whole gallery downloads; failures keep its
+previous gallery and your own photos.
+
 ### Open and navigate
 
 Tap a project image.
