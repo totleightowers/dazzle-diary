@@ -3258,3 +3258,49 @@ test('DAC scan keeps the purchase amount and currency together when filling or c
   row = await m.api('/projects/' + p.id);
   assert.deepEqual([row.price, row.currency], [44, 'GBP']);
 });
+
+for (const width of [390, 1028]) test(`DAC scan recovers encoded kit titles and accounts for every order at ${width}px`, async () => {
+  const { dacOrder, orderLine, scanResult } = await import('./dacordersfixture.mjs');
+  const title = "Painter's Garden & Sky";
+  const m = await mount({ width, products: [DAC_KIT(1, 101, title), DAC_KIT(2, 202, 'Moon Eater'),
+    { ...DAC_KIT(3, 303, 'Wax'), product_type: 'Wax', variants: [{ id: 303, title: 'Default Title', price: '5' }] }] });
+  await m.sync();
+  await emptyLogbook(m);
+  const logged = await m.seed({ title: 'Moon Eater', shop: 'dac', price: 17, currency: 'USD', price_source: 'order' });
+  const data = JSON.stringify(scanResult([
+    dacOrder({ lines: [orderLine('Painter&#39;s Garden &amp; Sky - 41&quot; x 20&quot; / Square / 84,904')] }),
+    dacOrder({ name: '#124', formatted_total: '$44.00' }),
+    dacOrder({ name: '#125', cancelled: true }),
+    dacOrder({ name: '#126', line_count: 2, lines: [orderLine('&lt;img src=x onerror=alert(1)&gt;'), orderLine('Wax')] })
+  ]));
+  const preview = await m.api('/import/dac-preview', { method: 'POST', body: data });
+  assert.equal(preview.summary.orders, 4);
+  assert.equal(preview.summary.cancelledOrders, 1);
+  assert.equal(preview.summary.newKits, 1);
+  assert.equal(preview.summary.skipped, 2);
+  const recovered = preview.kits.find(k => k.title === title);
+  assert.equal(recovered.price, 44);
+  const moon = preview.kits.find(k => k.title === 'Moon Eater');
+  assert.equal(moon.duplicateId, logged.id);
+  assert.equal(moon.price, null, 'unknown currency must not fall back to catalogue pricing');
+  assert.equal(moon.priceUpdate, undefined);
+  await m.api('/import/fill', { method: 'POST', body: { kits: preview.kits } });
+  const filled = await m.api('/projects/' + logged.id);
+  assert.equal(filled.date_ordered, '2026-09-24');
+  assert.deepEqual([filled.price, filled.currency], [17, 'USD']);
+  await m.go('#/import');
+  await m.window.__dacOrdersDone(data);
+  assert.match(m.text(), /cancelled order was read/);
+  assert.match(m.text(), /items and dates are included/);
+  await m.tap('[data-act="itab"][data-k="skipped"]');
+  assert.match(m.text(), /Not matched to the catalogue/);
+  assert.match(m.text(), /Tools and supplies/);
+  assert.doesNotMatch(m.text(), /Not canvas kits/);
+  assert.equal(m.find('img[onerror]'), null, 'decoded merchant text became executable markup');
+  await m.tap('[data-act="itab"][data-k="new"]');
+  await m.tap('[data-act="commit"]');
+  await m.until(() => location.hash === '#/');
+  const added = (await m.api('/projects')).find(p => p.title === title);
+  assert.ok(added, 'the recovered kit could not be imported');
+  assert.equal(added.price, 44);
+});

@@ -277,13 +277,19 @@ module: `/pages/orders?view=logbook-export-orders&page=N`. Its contract was chec
 against DAC's public `dac-orders-export.js` in October 2026. It reads 50 orders per
 page with the signed-in WebView's cookies and checks authentication, account
 identity, page totals, counts and repeated order IDs. It rejects partial scans,
-truncated lines/discounts and invalid monetary values. Cancelled orders are omitted;
-orders with unknown currency are skipped with a review warning.
+truncated lines/discounts and invalid monetary values. Cancelled orders count as
+read but are excluded from importing, with their count shown in review. Orders
+with unknown currency retain their items and dates; prices and totals are left
+blank with a warning, without falling back to a catalogue price.
 
 `core/dacorders.js` keeps only order/item fields needed for importing. Integer
 minor-unit prices are reduced by line discount allocations, then shipping, tax
 and duties are shared proportionally across all items, as with the spreadsheet
 importer. A quantity is priced per copy. Fulfilled means sent, not delivered.
+Item titles are decoded from HTML entities before separating their size/variant
+and matching them. This applies to direct scans and spreadsheets; decoded text
+is still escaped when rendered. Unmatched items are shown separately from known
+tools and supplies under **Skipped**, with a notice on the initial review.
 
 `/import/dac-preview` validates the result locally and uses the existing preview,
 fill and commit routes. Matching existing projects stays within the selected

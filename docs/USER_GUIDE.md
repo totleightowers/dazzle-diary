@@ -396,10 +396,16 @@ file import and direct scanning use the same matching and review process.
 Download the catalogue first if the app asks; matching needs its product details.
 
 Scans stop if pages are missing, the account changes, or DAC truncates item or
-discount details. An order without a known currency is skipped with a warning.
-Cancelled orders are left out; refund/payment flags remain visible for review.
-Retired products that cannot be matched remain under **Skipped**; matches to
-existing logbook titles can still fill their missing order details.
+discount details. An order without a known currency still supplies its items
+and dates, but its prices are left blank with a warning. Cancelled orders count
+as read and are explicitly excluded from importing; refund/payment flags remain
+visible for review. Titles containing encoded apostrophes or quotation marks
+are decoded before matching.
+
+**Skipped** separates **Not matched to the catalogue** from **Tools and supplies**.
+Unmatched items may be retired or renamed kits, rather than accessories; the
+initial review highlights their count. Matches to existing logbook titles can
+still fill their missing order details.
 
 The importer:
 

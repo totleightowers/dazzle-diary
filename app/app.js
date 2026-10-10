@@ -2250,7 +2250,7 @@ function paintImportPick(state) {
       </label>
       <div class="panel pad-in">
         ${[['Kits become projects', 'Each canvas is matched to the catalogue, so it arrives with its cover, artist, size, colours, drill count and special diamonds.'],
-           ['Tools and accessories are skipped', 'Multiplacers, tweezers, wax, trays and coasters are recognised by product type and left out.'],
+           ['Review unmatched items', 'Tools and supplies are skipped. Items whose titles could not be matched are listed separately under Skipped, so you can check for missing kits.'],
            ['Only delivered kits arrive as received', 'Fulfilled means it was sent, not that it came. Kits arrive as Not received until an order says delivered \u2014 and a kit already in your logbook keeps whatever status you gave it.'],
            ['Prices are worked out where they can be', 'DAC scans and spreadsheets include item prices after discounts. Shipping, tax and duties are shared across the items. From a CSV, a kit ordered on its own takes the order total; several kits with no accessories split it; otherwise the catalogue list price is used. Every project says which it got.'],
            ['Kits you already have are merged, not doubled', 'They are listed under Logged. Anything they are missing \u2014 order date, order number, size \u2014 can be filled in, and a price that differs can be corrected, each only if you say so. A price you typed yourself is never changed.']]
@@ -2316,13 +2316,18 @@ function paintImportReview() {
       ${tab === 'new' ? `
         <div class="tiles" style="margin-top:16px">
           <div class="tile"><div class="big tnum">${sum.orders}</div><div class="cap">orders read</div></div>
-          <div class="tile"><div class="big tnum">${sum.kits}</div><div class="cap">canvases found</div></div>
+          <div class="tile"><div class="big tnum">${sum.kits}</div><div class="cap">kits matched</div></div>
           <div class="tile" style="background:var(--st-received)"><div class="big tnum">${sum.received}</div><div class="cap">received, not started</div></div>
           <div class="tile" style="background:var(--st-notReceived)"><div class="big tnum">${sum.notReceived}</div><div class="cap">not received yet</div></div>
         </div>
+        ${sum.cancelledOrders ? `<div class="notice" style="margin-top:12px">${svg('info', 18)}
+          <span>${sum.cancelledOrders} cancelled order${sum.cancelledOrders === 1 ? ' was' : 's were'} read and excluded from importing.</span></div>` : ''}
+        ${P.skipped.some(s => s.kind === 'unknown') ? `<div class="notice warn" style="margin-top:12px">${svg('info', 18)}
+          <span>${P.skipped.filter(s => s.kind === 'unknown').length} item(s) could not be matched to the catalogue. Check <strong>Skipped</strong> for kits that may be missing.</span></div>` : ''}
         ${sum.pricing ? `<div class="notice" style="margin-top:12px">${svg('info', 18)}
           <span><strong>${sum.pricing.exact + sum.pricing.allocated}</strong> of these get a price worked out from what you actually paid${
-            sum.pricing.list ? `; the other <strong>${sum.pricing.list}</strong> fall back to today's list price because their order also held accessories` : ''}.</span></div>` : ''}
+            sum.pricing.list ? `; <strong>${sum.pricing.list}</strong> use today's catalogue price` : ''}${
+            sum.pricing.none ? `; <strong>${sum.pricing.none}</strong> have no price available` : ''}.</span></div>` : ''}
         ${sum.flagged.map((f) => `<div class="notice warn" style="margin-top:12px">${svg('info', 18)}
           <span>Order ${h(f.ref)} is marked <strong>${h(f.status.replace(/_/g, ' '))}</strong>, so its ${money(f.total)} total may not be what you paid.</span></div>`).join('')}
         ${P.warnings.map((w) => `<div class="notice warn" style="margin-top:12px">${svg('info', 18)}<span>${h(w)}</span></div>`).join('')}
@@ -2353,17 +2358,20 @@ function paintImportReview() {
           Update ${sum.priceChanges} price${sum.priceChanges === 1 ? '' : 's'}</button>` : ''}
       ` : ''}
 
-      ${tab === 'skipped' ? `
+      ${tab === 'skipped' ? [['unknown', 'Not matched to the catalogue'], ['notKit', 'Tools and supplies']].map(([kind, label]) => {
+        const items = P.skipped.filter(s => s.kind === kind);
+        return items.length ? `
         <section class="group" data-status="none" style="margin-top:16px">
           <header><span class="dot" style="background:var(--ink-faint)"></span>
-            <h2>Not canvas kits</h2><span class="n tnum">${P.skipped.length}</span></header>
-          <div class="group-body">${P.skipped.map((s) => `
+            <h2>${label}</h2><span class="n tnum">${items.length}</span></header>
+          <div class="group-body">${items.map((s) => `
             <div class="checkrow" data-locked="true">
               <span style="flex:1 1 auto;min-width:0">
                 <span style="display:block;font-family:var(--serif);font-weight:600;font-size:15px">${h(s.title)}</span>
                 <span style="display:block;margin-top:2px;font-size:11px;color:var(--ink-mute)" class="tnum">${h(s.orderRef)} · ${h(s.reason)}</span>
               </span></div>`).join('')}</div>
-        </section>` : ''}
+        </section>` : '';
+      }).join('') : ''}
 
       ${groups.map((g) => `
         <section class="group${g.items.length ? '' : ' empty-sect'}" data-status="${g.k}">

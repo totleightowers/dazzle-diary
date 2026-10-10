@@ -57,7 +57,7 @@ function resolveLine(cat, line) {
  */
 export function buildPreview(cat, existing, input, shopName = 'Diamond Art Club', known = new Map(), prefCurrency = 'GBP') {
   // a CSV's text, or orders already read out of a spreadsheet
-  const { orders, warnings } = typeof input === 'string' ? parseOrders(input) : input;
+  const { orders, warnings, orderCount = orders.length, cancelledCount = 0 } = typeof input === 'string' ? parseOrders(input) : input;
   const kits = [], skipped = [];
   let lineCount = 0;
 
@@ -107,6 +107,7 @@ export function buildPreview(cat, existing, input, shopName = 'Diamond Art Club'
      * quotes — Diamond Art Club quotes USD, Mystical Dream Diamonds CAD. Each
      * price carries its own, so nothing gets a £ sign it has not earned. */
     const priceFor = (k) => {
+      if (order.priceUnavailable) return { price: null, source: null, currency: null };
       // the spreadsheet says what each item cost, discounts and all
       if (k.r.line && k.r.line.paid != null)
         return { price: k.r.line.paid, source: 'order', currency: order.currency };
@@ -177,7 +178,7 @@ export function buildPreview(cat, existing, input, shopName = 'Diamond Art Club'
   return {
     warnings,
     summary: {
-      orders: orders.length, lines: lineCount, kits: kits.length,
+      orders: orderCount, cancelledOrders: cancelledCount, lines: lineCount, kits: kits.length,
       newKits: newKits.length, duplicates: kits.length - newKits.length,
       skipped: skipped.length,
       received: newKits.filter(k => k.status === 'received').length,

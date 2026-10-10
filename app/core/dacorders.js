@@ -92,21 +92,20 @@ export function parseDacOrders(raw) {
   const cents = v => Number.isSafeInteger(v) && v >= 0 ? v : fail();
   const count = v => Number.isSafeInteger(v) && v >= 0 && v <= 50 ? v : fail();
   const orders = [], warnings = [], refs = new Set();
+  let cancelledCount = 0;
   for (const o of raw.orders) {
     if (!o || typeof o.cancelled !== 'boolean' || !Array.isArray(o.lines) || count(o.line_count) !== o.lines.length) fail();
-    if (o.cancelled) continue;
+    if (o.cancelled) { cancelledCount++; continue; }
     const ref = text(o.name, 100);
     if (!ref || refs.has(ref)) fail();
     refs.add(ref);
     const date = text(o.created_at, 40);
     if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:?\d{2})$/.test(date) || !Number.isFinite(Date.parse(date))) fail();
     const currencies = [...new Set(text(o.formatted_total, 200).match(/\b[A-Z]{3}\b/g) || [])];
-    // A missing currency must never turn a dollar amount into a pound amount.
-    if (currencies.length !== 1) {
-      warnings.push(`Order ${ref} was skipped because DAC did not identify its currency.`);
-      continue;
-    }
-    const currency = currencies[0];
+    // Keep the kit and date even when the amount cannot safely be imported.
+    const currency = currencies.length === 1 ? currencies[0] : null;
+    if (!currency)
+      warnings.push(`Order ${ref}: DAC did not identify its currency. Its items and dates are included, but prices are left blank.`);
     const total = cents(o.total_price), refunds = cents(o.total_refunded_amount);
     const extras = cents(o.shipping_price) + cents(o.tax_price) + (o.total_duties == null ? 0 : cents(o.total_duties));
     if (!Number.isSafeInteger(extras)) fail();
@@ -125,13 +124,14 @@ export function parseDacOrders(raw) {
     // Same allocation as the spreadsheet importer: item discounts first, then
     // shipping/tax/duties proportionally across all items (including supplies).
     for (const l of lines) {
-      l.paid = Math.round((l.paidCents + (itemTotal ? extras * l.paidCents / itemTotal : 0)) / l.qty) / 100;
+      l.paid = currency ? Math.round((l.paidCents + (itemTotal ? extras * l.paidCents / itemTotal : 0)) / l.qty) / 100 : null;
       delete l.paidCents;
     }
     orders.push({ ref, date: date.slice(0, 10), paymentStatus: text(o.financial_status, 80).toLowerCase(),
       fulfillmentStatus: text(o.fulfillment_status ?? '', 80).toLowerCase(), currency,
-      total: total / 100, refunds: refunds / 100, fragments: lines.map(l => l.title), lines });
+      total: currency ? total / 100 : null, refunds: currency ? refunds / 100 : null,
+      priceUnavailable: !currency, fragments: lines.map(l => l.title), lines });
   }
   if (!orders.length && !warnings.length) warnings.push('No active orders were found in this DAC account.');
-  return { orders, warnings };
+  return { orders, warnings, orderCount: raw.orders.length, cancelledCount };
 }
