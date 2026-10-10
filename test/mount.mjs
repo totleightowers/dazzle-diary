@@ -102,6 +102,11 @@ export async function mount({ width = 390, products = null, catalogue = true, sh
   globalThis.history = {
     state: {}, _stack: [],
     pushState(s) { this._stack.push(s); this.state = s; },
+    replaceState(s, _title, url) {
+      this.state = s;
+      if (this._stack.length) this._stack[this._stack.length - 1] = s;
+      if (url != null) _hash = String(url).slice(String(url).indexOf('#'));
+    },
     back() { this._stack.pop(); this.state = this._stack[this._stack.length - 1] || {}; fire('popstate', {}); }
   };
   Object.defineProperty(globalThis, 'navigator', { value: { vibrate() {} }, configurable: true });

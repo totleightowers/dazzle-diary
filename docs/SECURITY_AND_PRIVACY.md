@@ -15,6 +15,29 @@ The main exceptions are explicit/user-understandable actions:
 - creating backup/CSV writes a copy into Downloads;
 - sharing a progress photo copies it into Android shared media and gives another app permission to read it.
 
+## DAC order scanning
+
+**Import orders → Scan DAC orders** opens a separate, non-exported Android
+activity. Its WebView has no JavaScript bridge and no file/content access. DAC
+and its sign-in provider handle authentication; Dazzle's logbook does not receive
+passwords, sign-in codes or session tokens. Cookies stay in Android WebView and
+can be cleared with **Sign out of DAC in this app**.
+
+The packaged reader runs only on HTTPS `diamondartclub.com` or
+`www.diamondartclub.com` pages and performs same-origin GET requests to DAC's
+order export data endpoint. Result callbacks are checked against the current
+navigation and origin. Cancelling, changing pages or timing out prevents an old
+result from being accepted. There are no changes to the native proxy allowlist
+or Android permissions.
+
+The reader returns selected order/item fields only, without customer identity,
+addresses or payment transactions. A size-limited temporary result in private
+storage is consumed and deleted by the main activity (also cleared at the start
+of a subsequent scan). The local store validates it again and builds an in-memory
+review. Only confirmed additions/fills become durable project data and enter the
+usual backup. There is no Gmail connection and no order data is sent to a Dazzle
+Diary backend.
+
 ## Android permissions
 
 The manifest requests:

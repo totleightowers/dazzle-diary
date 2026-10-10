@@ -525,6 +525,19 @@ Restore:
 - recalculates hours;
 - attempts to backfill covers.
 
+## Direct DAC order scan
+
+`DacOrdersActivity` is an isolated merchant WebView, separate from both the
+privileged app and the older drill-legend activity. `LogbookNative.dacOrders`
+opens it with the packaged `core/dacorders.js` reader. Sign-in is performed on
+DAC; the reader fetches all pages of DAC's order-export JSON using that session.
+
+A bounded private result file returns through `window.__dacOrdersDone`, then
+`/import/dac-preview` validates and normalises the records for `buildPreview`.
+The existing review/fill/price/commit routes handle user decisions. No database
+migration or new backup fields are required. Scanning has its own callback and
+request code and never invokes the drill sync's purchased-marker toggles.
+
 ## Build architecture
 
 `android/build.sh` performs seven stages:

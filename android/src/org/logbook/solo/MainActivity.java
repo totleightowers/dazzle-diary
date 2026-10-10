@@ -50,12 +50,15 @@ public class MainActivity extends Activity {
     private static final String ORIGIN = "https://" + HOST;
     private static final int FILE_CHOOSER = 1;
     private static final int DAC_SYNC = 2;
+    private static final int DAC_ORDERS = 3;
     private static final int MAX_DOWNLOAD = 12 * 1024 * 1024;
 
     private WebView web;
     private ValueCallback<Uri[]> pendingFiles;
     private Uri cameraOut;              // where a capture in progress will land
     private File store;
+    private boolean appPageReady, ordersResultPending;
+    private String pendingOrdersResult;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -92,6 +95,11 @@ public class MainActivity extends Activity {
                the second lock, in case a future change opens the first. */
             @Override public void onPageStarted(WebView v, String url, android.graphics.Bitmap f) {
                 pageTrusted = HOST.equals(Uri.parse(url).getHost());
+                appPageReady = false;
+            }
+            @Override public void onPageFinished(WebView v, String url) {
+                appPageReady = pageTrusted && HOST.equals(Uri.parse(url).getHost());
+                if (appPageReady && ordersResultPending) handOrders(pendingOrdersResult);
             }
             @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
                 Uri u = r.getUrl();
@@ -278,6 +286,20 @@ public class MainActivity extends Activity {
                 .putExtra(DacActivity.EXTRA_LEGENDS, legends);
             runOnUiThread(new Runnable() { @Override public void run() {
                 try { startActivityForResult(go, DAC_SYNC); } catch (Exception e) { hand(null); }
+            } });
+            return true;
+        }
+
+        /** Read order history in an isolated DAC screen; return only a preview. */
+        @JavascriptInterface
+        public boolean dacOrders(String script) {
+            mustBeOurPage();
+            if (script == null || script.length() > 64 * 1024) return false;
+            final Intent go = new Intent(MainActivity.this, DacOrdersActivity.class)
+                .putExtra(DacOrdersActivity.EXTRA_SCRIPT, script);
+            runOnUiThread(new Runnable() { @Override public void run() {
+                try { startActivityForResult(go, DAC_ORDERS); }
+                catch (Exception e) { handOrders(null); }
             } });
             return true;
         }
@@ -497,11 +519,25 @@ public class MainActivity extends Activity {
         web.evaluateJavascript("window.__dacSyncDone && window.__dacSyncDone(" + arg + ")", null);
     }
 
+    private void handOrders(String text) {
+        // Android can recreate the main activity while the DAC screen is open.
+        // Wait for the packaged page before delivering its result callback.
+        if (!appPageReady) {
+            pendingOrdersResult = text;
+            ordersResultPending = true;
+            return;
+        }
+        ordersResultPending = false;
+        pendingOrdersResult = null;
+        String arg = text == null ? "null" : org.json.JSONObject.quote(text);
+        web.evaluateJavascript("window.__dacOrdersDone && window.__dacOrdersDone(" + arg + ")", null);
+    }
+
     @Override protected void onActivityResult(int req, int result, Intent data) {
-        if (req == DAC_SYNC) {
-            File f = new File(store, DacActivity.RESULT_FILE);
+        if (req == DAC_SYNC || req == DAC_ORDERS) {
+            File f = new File(store, req == DAC_ORDERS ? DacOrdersActivity.RESULT_FILE : DacActivity.RESULT_FILE);
             String text = null;
-            if (result == RESULT_OK && f.exists() && f.length() < 4 * 1024 * 1024) {
+            if (result == RESULT_OK && f.exists() && f.length() < (req == DAC_ORDERS ? 12 : 4) * 1024 * 1024) {
                 try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
                     byte[] b = new byte[(int) f.length()];
                     int n = 0;
@@ -511,7 +547,7 @@ public class MainActivity extends Activity {
             }
             //noinspection ResultOfMethodCallIgnored
             f.delete();
-            hand(text);
+            if (req == DAC_ORDERS) handOrders(text); else hand(text);
             return;
         }
         if (req == FILE_CHOOSER) {

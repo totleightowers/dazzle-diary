@@ -3165,3 +3165,96 @@ test('level-two cached covers are replaced through the original fetch path witho
   await m.tap('.shots img[data-i="1"]');
   assert.equal(m.all('.lb-slide img')[1].getAttribute('src'), '/covers/dac-moon-eater-full3.jpg');
 });
+
+for (const width of [390, 1028]) test(`DAC scan reviews new kits and fills existing projects at ${width}px`, async () => {
+  const { dacOrder, orderLine, scanResult } = await import('./dacordersfixture.mjs');
+  const m = await mount({ width, products: [DAC_KIT(1, 101, 'Moon Eater'), DAC_KIT(2, 202, 'Wild Bloom')] });
+  await m.sync();
+  await emptyLogbook(m);
+  const logged = await m.seed({ title: 'Wild Bloom', status: 'started', shop: 'dac', dac_handle: 'wild-bloom',
+    artist: 'My correction', date_ordered: '2026-01-02', progress: 42, price: 30, price_source: 'you', notes: 'Keep this' });
+  // A matching title at another merchant must not consume the DAC purchase.
+  const other = await m.seed({ title: 'Moon Eater', status: 'received', shop: 'mdd', notes: 'Other shop' });
+  let script = null;
+  m.window.LogbookNative.dacOrders = value => { script = value; return true; };
+  await m.go('#/import');
+  assert.ok(m.find('[data-act="dacorders"]'));
+  await m.tap('[data-act="dacorders"]');
+  assert.match(script, /logbook-export-orders/);
+  assert.doesNotMatch(script, /navigator\.share|update_purchased/);
+  const data = JSON.stringify(scanResult([dacOrder(), dacOrder({ id: '124', name: '#124', lines: [orderLine('Wild Bloom')] })]));
+  const before = await m.api('/projects');
+  await m.window.__dacOrdersDone(data);
+  assert.match(m.text(), /Review import/);
+  assert.deepEqual(await m.api('/projects'), before, 'reading a scan changed projects before review');
+  const preview = await m.api('/import/dac-preview', { method: 'POST', body: data });
+  const moon = preview.kits.find(k => k.title === 'Moon Eater');
+  const wild = preview.kits.find(k => k.title === 'Wild Bloom');
+  assert.equal(moon.duplicate, false);
+  assert.equal(moon.price, 44);
+  assert.equal(moon.status, 'notReceived');
+  assert.equal(wild.duplicateId, logged.id);
+  assert.equal(wild.priceUpdate.yours, true);
+  assert.equal(wild.fills.date_ordered, undefined);
+  assert.equal(wild.fills.order_ref, '#124');
+
+  await m.tap('[data-act="commit"]');
+  await m.until(() => location.hash === '#/');
+  assert.equal((await m.api('/projects')).length, 3);
+  // A second scan recognises the newly added kit and offers the remaining gaps.
+  await m.go('#/import');
+  await m.window.__dacOrdersDone(data);
+  await m.tap('[data-act="itab"][data-k="dupe"]');
+  await m.tap('[data-act="importfill"]');
+  const after = await m.api('/projects/' + logged.id);
+  assert.equal(after.order_ref, '#124');
+  assert.deepEqual([after.status, after.progress, after.price, after.artist, after.notes, after.date_ordered],
+    ['started', 42, 30, 'My correction', 'Keep this', '2026-01-02']);
+  assert.equal((await m.api('/projects/' + other.id)).order_ref, other.order_ref);
+  const again = await m.api('/import/dac-preview', { method: 'POST', body: data });
+  assert.equal(again.summary.newKits, 0, 'repeated scanning offered a duplicate');
+  assert.equal(again.summary.fillable, 0);
+});
+
+test('DAC scan cancellation, errors, empty accounts and old hosts leave the logbook alone', async () => {
+  const m = await mount();
+  await m.sync();
+  await m.go('#/import');
+  assert.equal(m.find('[data-act="dacorders"]'), null, 'unsupported hosts show an unusable scan button');
+  m.window.LogbookNative.dacOrders = () => false;
+  await m.go('#/import');
+  await m.tap('[data-act="dacorders"]');
+  assert.ok(!m.find('[data-act="dacorders"]').disabled);
+  const before = await m.api('/projects');
+  for (const data of [null, 'not json', JSON.stringify({ error: 'Network unavailable' }), JSON.stringify({ done: false })]) {
+    await m.window.__dacOrdersDone(data);
+    await m.settle();
+    assert.ok(!broke(m));
+    assert.ok(m.find('[data-act="dacorders"]'), 'cannot retry a failed scan');
+    assert.deepEqual(await m.api('/projects'), before);
+  }
+  await m.window.__dacOrdersDone(JSON.stringify({ done: true, version: 1, orders: [] }));
+  assert.match(m.text(), /No active orders/);
+  assert.deepEqual(await m.api('/projects'), before);
+});
+
+test('DAC scan keeps the purchase amount and currency together when filling or correcting a price', async () => {
+  const { dacOrder, scanResult } = await import('./dacordersfixture.mjs');
+  const m = await mount();
+  await m.sync();
+  await emptyLogbook(m);
+  const p = await m.seed({ title: 'Moon Eater', shop: 'dac', currency: 'USD', price: null });
+  const data = JSON.stringify(scanResult([dacOrder()]));
+  let preview = await m.api('/import/dac-preview', { method: 'POST', body: data });
+  assert.equal(preview.kits[0].fills.currency, 'GBP');
+  await m.api('/import/fill', { method: 'POST', body: { kits: preview.kits } });
+  let row = await m.api('/projects/' + p.id);
+  assert.deepEqual([row.price, row.currency], [44, 'GBP']);
+  // Equal numerals in different currencies are still a price correction.
+  await idbDirect.put('projects', { ...row, currency: 'USD', price_source: 'catalogue' });
+  preview = await m.api('/import/dac-preview', { method: 'POST', body: data });
+  assert.equal(preview.summary.priceChanges, 1);
+  await m.api('/import/prices', { method: 'POST', body: { kits: preview.kits } });
+  row = await m.api('/projects/' + p.id);
+  assert.deepEqual([row.price, row.currency], [44, 'GBP']);
+});
