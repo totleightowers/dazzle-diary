@@ -99,11 +99,34 @@ test('normalises discounts, quantities, shipping and dates without treating ship
 test('cancellation, refunds and unknown currency are handled conservatively', () => {
   assert.equal(parseDacOrders(scanResult([dacOrder({ cancelled: true })])).orders.length, 0);
   const unknown = parseDacOrders(scanResult([dacOrder({ formatted_total: '$44.00' })]));
-  assert.equal(unknown.orders.length, 0);
+  assert.equal(unknown.orders.length, 1);
+  assert.equal(unknown.orders[0].lines[0].title, 'Moon Eater');
+  assert.equal(unknown.orders[0].date, '2026-09-24');
+  assert.equal(unknown.orders[0].currency, null);
+  assert.equal(unknown.orders[0].total, null);
+  assert.equal(unknown.orders[0].lines[0].paid, null);
+  assert.equal(unknown.orders[0].priceUnavailable, true);
   assert.match(unknown.warnings[0], /currency/);
   const refunded = parseDacOrders(scanResult([dacOrder({ financial_status: 'partially_refunded', total_refunded_amount: 1200 })]));
   assert.equal(refunded.orders[0].paymentStatus, 'partially_refunded');
   assert.equal(refunded.orders[0].refunds, 12);
+});
+
+test('decodes DAC item entities before separating the title from its variant', () => {
+  const { orders } = parseDacOrders(scanResult([dacOrder({ lines: [orderLine(
+    'Painter&#39;s Garden &amp; Sky - 41&quot; &times; 20&quot; (104cm x 51cm) / Square with 58 Colors / 84,904'
+  )] })]));
+  const line = orders[0].lines[0];
+  assert.equal(line.title, "Painter's Garden & Sky");
+  assert.equal(line.drills, 84904);
+  assert.match(line.variant, /^41" × 20"/);
+});
+
+test('counts cancelled orders as read while excluding them from import', () => {
+  const result = parseDacOrders(scanResult([dacOrder(), dacOrder({ name: '#124', cancelled: true })]));
+  assert.equal(result.orderCount, 2);
+  assert.equal(result.cancelledCount, 1);
+  assert.equal(result.orders.length, 1);
 });
 
 test('malformed and truncated order details cannot be silently imported', () => {

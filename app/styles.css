@@ -213,7 +213,7 @@ img { max-width: 100%; display: block; }
 .group[data-status="wishlist"]    { background: var(--st-wishlist); }
 .group[data-status="onHold"]      { background: var(--st-onHold); }
 .group[data-status="abandoned"]   { background: var(--st-abandoned); }
-.group[data-status="none"]        { background: oklch(0.955 0.006 85); }
+.group[data-status="none"]        { background: var(--sunken); }
 
 /* -------------------------------------------------------------------- card */
 .card {
@@ -512,7 +512,7 @@ pre.licence {
 }
 .badge.chooser svg { opacity: .6; }
 .checkrow[aria-checked="true"] { border-color: var(--accent); }
-.checkrow[data-locked="true"] { opacity: .55; }
+.checkrow[data-locked="true"] .box { opacity: .55; }
 .box {
   flex: 0 0 auto; width: 24px; height: 24px; border-radius: 7px; display: flex;
   align-items: center; justify-content: center; background: var(--surface);

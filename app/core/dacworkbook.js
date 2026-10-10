@@ -10,6 +10,7 @@
  * or moved in a later export does not shift everything after it.
  */
 import { excelDate } from './xlsx.js';
+import { decodeHtml } from './text.js';
 
 const clean = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 const num = (v) => {
@@ -37,9 +38,9 @@ function table(rows, need) {
    itself hold " - " ("Coasters - Blooms", "Old Masters - MEGA Dazzles™"), so
    the split is at the " - " that the canvas size follows, not the first one.
    A pen or a tray has no variant, and its whole name is the title. */
-const SIZE = /\s[-–]\s(?=[\d.]+\s*["″”]\s*x\s*[\d.]+)/g;
+const SIZE = /\s[-–]\s(?=[\d.]+\s*["″”]\s*[x×]\s*[\d.]+)/g;
 export function splitItem(name) {
-  const s = clean(name);
+  const s = clean(decodeHtml(name));
   let cut = -1;
   for (const m of s.matchAll(SIZE)) cut = m.index;
   if (cut < 0) return { title: s, variant: null, drills: null };
