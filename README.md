@@ -47,7 +47,7 @@ There is no Dazzle Diary account, cloud service, analytics backend or central co
 - Search and filter by shop, shape, size, price and stock
 - Pull down in Browse to refresh enabled catalogues
 - Fill project metadata from catalogue listings
-- Import a Diamond Art Club order-history CSV
+- Scan Diamond Art Club orders directly, or import its CSV/spreadsheet
 - Match order lines conservatively and ask when a title is ambiguous
 - Keep the price source so a catalogue fallback is not presented as an exact receipt value
 - Estimate missing diamond counts from canvas size and mark estimates with `≈`

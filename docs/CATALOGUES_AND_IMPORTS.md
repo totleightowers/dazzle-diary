@@ -269,7 +269,30 @@ Relinking checks for clashes and asks before replacing existing values.
 
 ## Order import
 
-The current parser is specifically designed for the **Diamond Art Club order-history CSV format**.
+The importer supports **DAC CSV**, **DAC order spreadsheets (.xlsx)** and a direct
+**Scan DAC orders** flow in the Android app.
+
+The direct reader uses the version-1 JSON endpoint consumed by DAC's own export
+module: `/pages/orders?view=logbook-export-orders&page=N`. Its contract was checked
+against DAC's public `dac-orders-export.js` in October 2026. It reads 50 orders per
+page with the signed-in WebView's cookies and checks authentication, account
+identity, page totals, counts and repeated order IDs. It rejects partial scans,
+truncated lines/discounts and invalid monetary values. Cancelled orders are omitted;
+orders with unknown currency are skipped with a review warning.
+
+`core/dacorders.js` keeps only order/item fields needed for importing. Integer
+minor-unit prices are reduced by line discount allocations, then shipping, tax
+and duties are shared proportionally across all items, as with the spreadsheet
+importer. A quantity is priced per copy. Fulfilled means sent, not delivered.
+
+`/import/dac-preview` validates the result locally and uses the existing preview,
+fill and commit routes. Matching existing projects stays within the selected
+shop. The scan never saves projects automatically, executes DAC's export module,
+generates a spreadsheet, invokes phone sharing or changes the DAC account.
+
+The endpoint is a storefront implementation detail, so a DAC format change can
+require an app update. Automated tests use synthetic responses; authenticated
+sign-in and an actual user's complete history need verification on their phone.
 
 The UI wording should not imply that arbitrary merchant CSV exports are supported unless another parser is added.
 

@@ -375,9 +375,31 @@ Removing a progress photo gives you an **Undo** action for a few seconds before 
 
 ## Importing order history
 
-The current importer is built around the **Diamond Art Club order-history CSV format**.
+Open **Import orders → Diamond Art Club → Scan DAC orders** in the Android app.
+Sign in on DAC's own page. Dazzle reads your full order history and opens **Review import**:
 
-Open **Import**, select the CSV and review the preview before committing it.
+- **New** lets you add selected missing kits.
+- **Logged → Fill in … projects** fills missing order details and specifications.
+- Price corrections are offered separately; prices you entered yourself are kept.
+
+The scan reads order records directly. It does not use DAC's spreadsheet download
+or phone sharing controls, so a “sharing unavailable” error on DAC does not block
+this route. It does not change orders or purchased markers on your DAC account.
+Cancel or press Android Back to leave without changing your logbook.
+
+If sign-in finishes without starting the scan, tap **Read orders** at the top of
+the DAC screen. Use **Sign out of DAC in this app** on the import screen to switch
+accounts. Sign-in is remembered in this app's WebView cookies until you sign out.
+
+You can also choose a DAC CSV or spreadsheet (.xlsx) on **Import orders**. Both
+file import and direct scanning use the same matching and review process.
+Download the catalogue first if the app asks; matching needs its product details.
+
+Scans stop if pages are missing, the account changes, or DAC truncates item or
+discount details. An order without a known currency is skipped with a warning.
+Cancelled orders are left out; refund/payment flags remain visible for review.
+Retired products that cannot be matched remain under **Skipped**; matches to
+existing logbook titles can still fill their missing order details.
 
 The importer:
 
@@ -389,7 +411,7 @@ The importer:
 - works out the best available price source
 - asks you to choose when a title is ambiguous
 
-Nothing in the CSV is uploaded to a Dazzle Diary service.
+Order records and imported files stay on your device. There is no Dazzle Diary service receiving them.
 
 ### Ambiguous titles
 

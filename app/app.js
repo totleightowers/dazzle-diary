@@ -4,6 +4,7 @@ import { statusFromDates, applyStatus, parseHolds, openHold, heldDays,
          ALL_STATUSES } from './core/status.js';
 import { productUrl, shopById, displayCurrency, SHOPS, CURRENCIES } from './core/shops.js';
 import { buildTickScript, buildLegendScript } from './core/dacsync.js';
+import { buildOrdersScript } from './core/dacorders.js';
 import { originalImage } from './core/images.js';
 const SHOP_BY_NAME = Object.fromEntries(SHOPS.map((s) => [s.name, s]));
 /* Dazzle Diary — the whole client. Vanilla; no build step. */
@@ -2231,6 +2232,15 @@ function paintImportPick(state) {
             aria-pressed="${S.importShop === sh.id}">${h(sh.name)}</button>`).join('')}
         </div>
       </div>` : ''}
+      ${S.importShop === 'dac' && typeof window.LogbookNative?.dacOrders === 'function' ? `
+      <div class="panel pad-in">
+        <h3 style="margin:0 0 8px">Read orders from Diamond Art Club</h3>
+        <p style="font-size:13px;line-height:1.5;color:var(--ink-mute);margin:0 0 12px">
+          Sign in to DAC to find missing kits and order details. Review the results before adding kits
+          or filling blanks. No spreadsheet download needed.</p>
+        <button class="btn primary wide" data-act="dacorders">Scan DAC orders</button>
+        <button class="btn ghost wide" style="margin-top:8px" data-act="dacforget">Sign out of DAC in this app</button>
+      </div>` : ''}
       <label class="dropzone" id="drop">
         ${svg('imp', 34, 1.6)}
         <span style="font-family:var(--serif);font-size:19px;font-weight:600">Choose your order history</span>
@@ -2242,7 +2252,7 @@ function paintImportPick(state) {
         ${[['Kits become projects', 'Each canvas is matched to the catalogue, so it arrives with its cover, artist, size, colours, drill count and special diamonds.'],
            ['Tools and accessories are skipped', 'Multiplacers, tweezers, wax, trays and coasters are recognised by product type and left out.'],
            ['Only delivered kits arrive as received', 'Fulfilled means it was sent, not that it came. Kits arrive as Not received until an order says delivered \u2014 and a kit already in your logbook keeps whatever status you gave it.'],
-           ['Prices are worked out where they can be', 'Diamond Art Club\u2019s spreadsheet says what each item cost after discounts, so those prices are exact. From a CSV, a kit ordered on its own takes the order total; several kits with no accessories split it; otherwise the catalogue list price is used. Every project says which it got.'],
+           ['Prices are worked out where they can be', 'DAC scans and spreadsheets include item prices after discounts. Shipping, tax and duties are shared across the items. From a CSV, a kit ordered on its own takes the order total; several kits with no accessories split it; otherwise the catalogue list price is used. Every project says which it got.'],
            ['Kits you already have are merged, not doubled', 'They are listed under Logged. Anything they are missing \u2014 order date, order number, size \u2014 can be filled in, and a price that differs can be corrected, each only if you say so. A price you typed yourself is never changed.']]
           .map(([t, b], i, a) => `<div class="row" style="align-items:flex-start;${i === a.length - 1 ? 'border-bottom:0' : ''}">
             <span style="flex:1 1 auto"><span style="display:block;font-size:14px;font-weight:700">${h(t)}</span>
@@ -3572,7 +3582,7 @@ async function handleClick(e) {
   }
   else if (act === 'dacforget') {
     try { window.LogbookNative?.dacForget?.(); } catch { /* nothing to forget */ }
-    toast('Signed out of Diamond Art Club here. The colours you have are kept.');
+    toast('Signed out of Diamond Art Club in this app. Your saved kits and colours are kept.');
   }
   else if (act === 'findcolour') {
     S.colourQ = el.dataset.k || '';
@@ -3805,6 +3815,13 @@ async function handleClick(e) {
     go('#/new');
   }
   else if (act === 'importshop') { S.importShop = el.dataset.k; render(); }
+  else if (act === 'dacorders') {
+    el.disabled = true;
+    try {
+      if (!window.LogbookNative?.dacOrders?.(buildOrdersScript()))
+        throw new Error('Could not open the DAC order scan. Please try again.');
+    } catch (e) { toast(e.message); el.disabled = false; }
+  }
   else if (act === 'importback') { forgetImport(); render(); }
   else if (act === 'importprices') {
     const kits = (S.importPreview.kits || []).filter((k) => k.priceUpdate && !k.priceUpdate.yours);
@@ -4079,6 +4096,24 @@ window.addEventListener('hashchange', (e) => {
    is waste. So it happens once, by itself, on the first launch after updating.
    It needs a connection; anything it cannot reach keeps its mark and is simply
    tried again next time. */
+/* A scan only builds a review; the existing import actions save user choices. */
+window.__dacOrdersDone = async (text) => {
+  if (text == null) { toast('Order scan cancelled. Your logbook is unchanged.'); render(); return; }
+  try {
+    if (typeof text !== 'string' || text.length > 12 * 1024 * 1024)
+      throw new Error('The DAC order scan was too large or unreadable.');
+    const result = JSON.parse(text);
+    if (result?.error) throw new Error(String(result.error).slice(0, 300));
+    const preview = await api('/import/dac-preview', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: text });
+    S.importShop = 'dac';
+    S.importPreview = preview;
+    S.importSel = new Set(preview.kits.filter(k => !k.duplicate).map(k => k.key));
+    S.importTab = 'new';
+    if (location.hash === '#/import') paintImportReview(); else go('#/import');
+  } catch (e) { toast(e.message || 'Could not read DAC orders'); render(); }
+};
+
 /* What the Diamond Art Club screen brought back. It was written by a script on
    someone else's page, so it goes straight to the store, which keeps only the
    colours and validates every one. Nothing on a project changes. */

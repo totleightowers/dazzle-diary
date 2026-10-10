@@ -13,6 +13,7 @@ import { norm } from '../core/match.js';
 import { buildPreview } from '../core/import.js';
 import { readXlsx, looksLikeXlsx } from '../core/xlsx.js';
 import { parseDacWorkbook, isDacWorkbook } from '../core/dacworkbook.js';
+import { parseDacOrders } from '../core/dacorders.js';
 import { parseHolds, applyStatus } from '../core/status.js';
 import { estimateDrills } from '../core/estimate.js';
 import { drillKind, byDrill, drillQuery, drillMatches } from '../core/drills.js';
@@ -474,7 +475,10 @@ function importFills(row, k) {
   // a counted number replaces a guess; an estimate does not replace a guess
   if (k.drills != null && blank(row, 'drills') && !k.drillsEstimated) out.drills = k.drills;
   if (out.drills != null) out.drills_estimated = 0;
-  if (row.price == null && k.price != null) { out.price = k.price; out.price_source = k.priceSource || 'order'; }
+  if (row.price == null && k.price != null) {
+    out.price = k.price; out.price_source = k.priceSource || 'order';
+    if (k.currency) out.currency = k.currency;
+  }
   if (!row.dac_handle && k.handle) { out.dac_handle = k.handle; out.shop = k.shop || 'dac'; }
   return out;
 }
@@ -816,11 +820,12 @@ export async function localApi(path, opts = {}) {
     return rows.slice(offset, offset + limit);
   }
 
-  if (p === '/import/preview' && m === 'POST') {
-    const shop = q(url, 'shop') || 'dac';
+  if ((p === '/import/preview' || p === '/import/dac-preview') && m === 'POST') {
+    const scan = p === '/import/dac-preview';
+    const shop = scan ? 'dac' : q(url, 'shop') || 'dac';
     if (!cache.rows.some(r => r.shop === shop))
       throw Object.assign(new Error('Sync the catalogue first so orders can be matched.'), { status: 409 });
-    const rows = await projects();
+    const rows = (await projects()).filter(r => (r.shop || 'dac') === shop);
     const existing = new Map(rows.map(r => [norm(r.title), r.id]));
     const known = new Map();
     for (const r of rows) if (r.dac_handle) known.set(norm(r.title), r.dac_handle);
@@ -831,8 +836,10 @@ export async function localApi(path, opts = {}) {
     const body = opts.body;
     const bytes = body instanceof ArrayBuffer ? new Uint8Array(body)
       : (body instanceof Uint8Array ? body : null);
-    let input = bytes ? null : String(body);
-    if (bytes) {
+    if (scan && typeof body === 'string' && body.length > 12 * 1024 * 1024)
+      throw new Error('The DAC order scan was too large.');
+    let input = scan ? parseDacOrders(json()) : bytes ? null : String(body);
+    if (bytes && !scan) {
       if (!looksLikeXlsx(bytes))
         throw Object.assign(new Error('That file is neither a CSV nor a spreadsheet.'), { status: 400 });
       const book = await readXlsx(bytes);
@@ -858,7 +865,8 @@ export async function localApi(path, opts = {}) {
          figure wrong. Say so separately, and say whose figure it is: one you
          typed yourself is never replaced without being asked. */
       if (have && k.price != null && have.price != null
-          && Math.abs(Number(have.price) - Number(k.price)) >= 0.005) {
+          && (Math.abs(Number(have.price) - Number(k.price)) >= 0.005
+              || (k.currency && have.currency !== k.currency))) {
         k.priceUpdate = { from: Number(have.price), to: Number(k.price),
                           yours: have.price_source === 'you' };
       }
@@ -896,9 +904,11 @@ export async function localApi(path, opts = {}) {
       const row = await idb.get('projects', Number(k.duplicateId));
       if (!row) continue;
       if (row.price_source === 'you') { kept++; continue; }
-      if (k.price == null || Math.abs(Number(row.price) - Number(k.price)) < 0.005) continue;
+      if (k.price == null || (Math.abs(Number(row.price) - Number(k.price)) < 0.005
+          && (!k.currency || row.currency === k.currency))) continue;
       row.price = Number(k.price);
       row.price_source = k.priceSource || 'order';
+      if (k.currency) row.currency = k.currency;
       row.updated_at = nowIso();
       await idb.put('projects', row);
       updated++;
