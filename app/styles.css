@@ -339,6 +339,14 @@ img { max-width: 100%; display: block; }
 .row:last-child { border-bottom: 0; }
 .row .k { font-size: 13px; color: var(--ink-mute); }
 .row .v { font-size: 14px; font-weight: 600; text-align: right; }
+.artist-row { width: 100%; min-height: 48px; text-align: left; }
+.artist-row .k { color: var(--ink); overflow-wrap: anywhere; }
+.artist-row .v { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.artist-row .v svg { color: var(--ink-mute); }
+.artist-row:hover, .artist-row:active { background: var(--sunken); }
+.artist-filter { max-width: 100%; height: auto; min-height: 36px; margin-top: 8px; white-space: normal; }
+.artist-filter span { min-width: 0; overflow-wrap: anywhere; text-align: left; }
+.artist-filter svg { flex: 0 0 auto; }
 /* The whole row opens the picker. A bare date input shows dd/mm/yyyy when it is
    empty and cannot say "Tap to set", so the text stays ours and the real input
    lies over the row, invisible and full size. */

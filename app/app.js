@@ -404,14 +404,16 @@ function deleteLater(key, seconds, commit) {
 }
 
 /* ------------------------------------------------------------------ state */
+const freshLogbookFilters = () => ({
+  artist: null, shop: null, shape: null, size: null, rating: 0, sort: 'recent', open: false, gaps: null,
+  drills: [], family: null, finish: null, ncol: null
+});
 const S = {
   view: localStorage.getItem('view') || 'grid',
   filter: 'all',
   q: '',
   // the logbook's own filters, beside the status chips and the search box
-  lb: { shop: null, shape: null, size: null, rating: 0, sort: 'recent', open: false, gaps: null,
-        // and the colour ones: drills a kit must hold, a family, a finish, a count
-        drills: [], family: null, finish: null, ncol: null },
+  lb: freshLogbookFilters(),
   projects: [],
   meta: null,
   importPreview: null,
@@ -859,7 +861,7 @@ const lbNeedsList = () => {
 /** How many of the extra filters are on — for the badge, and for "Clear all". */
 const lbActive = () => {
   const f = S.lb;
-  return (f.shop ? 1 : 0) + (f.shape ? 1 : 0) + (f.size ? 1 : 0)
+  return (f.artist ? 1 : 0) + (f.shop ? 1 : 0) + (f.shape ? 1 : 0) + (f.size ? 1 : 0)
        + (f.rating ? 1 : 0) + (f.gaps ? 1 : 0) + (f.sort !== 'recent' ? 1 : 0)
        + (f.drills.length ? 1 : 0) + (f.family ? 1 : 0) + (f.finish ? 1 : 0) + (f.ncol ? 1 : 0);
 };
@@ -879,6 +881,16 @@ const GAPS = [
 /** The shops she actually owns kits from — not every shop the app knows. */
 const lbShops = () => [...new Set(S.projects.map((p) => p.shop).filter(Boolean))]
   .map((id) => shopById(id)).filter(Boolean);
+
+const artistKey = (name) => (name || '').trim().toLowerCase();
+const lbArtists = () => {
+  const names = new Map();
+  for (const p of S.projects) {
+    const key = artistKey(p.artist);
+    if (key && !names.has(key)) names.set(key, p.artist.trim());
+  }
+  return [...names].sort((a, b) => a[1].localeCompare(b[1]));
+};
 
 function logbookGroups() {
   const q = S.q.trim().toLowerCase();
@@ -906,6 +918,7 @@ function logbookGroups() {
     colourOk(p) &&
     (S.filter === 'all' || p.status === S.filter) &&
     (!q || p.title.toLowerCase().includes(q) || (p.artist || '').toLowerCase().includes(q)) &&
+    (!f.artist || artistKey(p.artist) === artistKey(f.artist)) &&
     (!f.shop || p.shop === f.shop) &&
     (!f.shape || p.shape === f.shape) &&
     (!f.rating || Number(p.rating || 0) >= f.rating) &&
@@ -945,6 +958,14 @@ function logbookFilters() {
       <span class="label" style="margin:0">Filters${lbActive() ? ` \u00b7 ${lbActive()} on` : ''}</span>
       <button class="btn ghost" style="height:32px;font-size:12px;font-weight:700;padding:0 12px"
               data-act="lbclear" ${lbActive() ? '' : 'disabled'}>Clear all</button>
+    </div>
+    <div style="margin-top:12px">
+      <label class="label" for="lbartist">Artist</label>
+      <select class="fld" id="lbartist" data-act="lbartist">
+        <option value="">All artists</option>
+        ${lbArtists().map(([key, name]) => `<option value="${h(name)}"${
+          key === artistKey(f.artist) ? ' selected' : ''}>${h(name)}</option>`).join('')}
+      </select>
     </div>
     ${row('Shop', shops.length > 1
       ? shops.map((sh) => chip('lbshop', sh.id, sh.name, f.shop === sh.id, sh.id)).join('') : '')}
@@ -1085,6 +1106,9 @@ function paintLogbook() {
           <button data-act="view" data-k="list" aria-pressed="${S.view === 'list'}" aria-label="List view">${svg('list', 16)}</button>
         </div>
       </div>
+      ${S.lb.artist ? `<button class="chip artist-filter" data-act="lbartistoff"
+        aria-label="Clear artist filter: ${h(S.lb.artist)}" aria-pressed="true">
+        <span>Artist: ${h(S.lb.artist)}</span>${svg('close', 12, 2.4)}</button>` : ''}
       ${S.lb.open ? logbookFilters() : ''}
     </div>
 
@@ -3095,7 +3119,9 @@ route(/^#\/settings$/, async () => {
       ${stats.topArtists.length ? `<div>
         <h3 class="label">Most collected artists</h3>
         <div class="panel pad-in">${stats.topArtists.map((a) =>
-          `<div class="row"><span class="k" style="color:var(--ink)">${h(a.artist)}</span><span class="v tnum">${a.n}</span></div>`).join('')}</div>
+          `<button class="row artist-row" data-act="artistinlogbook" data-artist="${h(a.artist)}"
+            aria-label="Show kits by ${h(a.artist)}"><span class="k">${h(a.artist)}</span>
+            <span class="v tnum">${a.n}${svg('chev', 16)}</span></button>`).join('')}</div>
       </div>` : ''}
 
       ${(stats.topShops || []).length ? `<div>
@@ -3485,7 +3511,7 @@ document.addEventListener('pointercancel', dragCleanup);
    opened it happens long before there is an answer. Routed through the same
    handler so a date row behaves like every other control. */
 document.addEventListener('change', (e) => {
-  const el = e.target && e.target.closest && e.target.closest('[data-act="setdate"]');
+  const el = e.target && e.target.closest && e.target.closest('[data-act="setdate"], [data-act="lbartist"]');
   if (!el) return;
   handleClick({ target: el, type: 'change' }).catch((err) => {
     console.error(err);
@@ -3523,7 +3549,7 @@ async function handleClick(e) {
      which re-renders the page and takes the input — and the picker with it —
      out from under the finger. That is what "it pops up and immediately
      disappears" was, and removing the label around the row did not touch it. */
-  if (act === 'setdate' && e.type !== 'change') return;
+  if ((act === 'setdate' || act === 'lbartist') && e.type !== 'change') return;
 
   if (act === 'filter') { S.filter = el.dataset.k; repaintLogbook(); }
   else if (act === 'lbfilters') { S.lb.open = !S.lb.open; paintLogbook(); }
@@ -3609,9 +3635,19 @@ async function handleClick(e) {
     go('#/');
   }
   else if (act === 'lbclear') {
-    S.lb = { ...S.lb, shop: null, shape: null, size: null, rating: 0, gaps: null, sort: 'recent',
-             drills: [], family: null, finish: null, ncol: null };
+    S.lb = { ...freshLogbookFilters(), open: S.lb.open };
     repaintLogbook();
+  }
+  else if (act === 'lbartist' || act === 'lbartistoff') {
+    S.lb.artist = act === 'lbartist' ? el.value || null : null;
+    repaintLogbook();
+    if (act === 'lbartist') document.getElementById('lbartist')?.focus();
+  }
+  else if (act === 'artistinlogbook') {
+    S.lb = { ...freshLogbookFilters(), artist: el.dataset.artist.trim() };
+    S.filter = 'all'; S.q = '';
+    forgetScroll('#/');
+    go('#/');
   }
   else if (act === 'lbdrill') {
     const code = el.dataset.k;

@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync as readdirSyncFs } from 'node:fs';
 import { mount } from './mount.mjs';
 import { dacExport } from './xlsxfixture.mjs';
+import { decodeHtml } from '../app/core/text.js';
 import * as idbDirect from '../app/local/idb.js';
 
 /* The IndexedDB shim outlives a single mount, so a test that means "I do not
@@ -537,6 +538,69 @@ test('the logbook can be filtered and sorted, not just searched', async () => {
   await m.tap('[data-act="lbsort"][data-k="rating"]');
   assert.deepEqual(titles(), ['Big Round DAC', 'Mystical Round', 'Small Square DAC']);
 });
+
+for (const width of [390, 1028]) {
+  test(`artist filtering and collected-artist links work at ${width}px`, async () => {
+    const m = await mount({ width });
+    await emptyLogbook(m);
+    const waiting = await m.seed({ title: 'Dragon Library', artist: 'Randal Spangler', status: 'received', shape: 'Square' });
+    await m.seed({ title: 'Finished Dragon', artist: ' randal spangler ', status: 'completed', shape: 'Round' });
+    await m.seed({ title: 'Spangler in the title only', artist: 'Someone Else', status: 'received' });
+    await m.seed({ title: 'Unknown Artist', status: 'received' });
+    const special = `O'Brien & "Friends" <Studio>`;
+    await m.seed({ title: 'Special Artist', artist: special, status: 'received' });
+    const titles = () => m.all('.card .name').map((n) => n.textContent).sort();
+    const pick = async (value) => {
+      const select = m.find('#lbartist');
+      select.value = value;
+      select.dispatchEvent({ type: 'change' });
+      await m.settle();
+    };
+    await m.go('#/');
+    await m.tap('[data-act="lbfilters"]');
+    const options = m.all('#lbartist option').map((n) => decodeHtml(n.textContent).toLowerCase());
+    assert.deepEqual(options, ['All artists', special, 'Randal Spangler', 'Someone Else'].map((s) => s.toLowerCase()));
+    // Opening the native picker must not repaint it before a choice is made.
+    const original = m.find('#lbartist');
+    await m.tap('#lbartist');
+    assert.equal(m.find('#lbartist'), original);
+    await pick('Randal Spangler');
+    assert.deepEqual(titles(), ['Dragon Library', 'Finished Dragon']);
+    assert.equal(m.find('[data-act="lbfilters"] .n').textContent, '1');
+    await m.tap('[data-act="lbshape"][data-k="Square"]');
+    assert.deepEqual(titles(), ['Dragon Library']);
+    await m.tap('[data-act="lbclear"]');
+    assert.equal(titles().length, 5);
+    assert.equal(m.find('[data-act="lbartistoff"]'), null);
+    await pick(special);
+    assert.deepEqual(titles(), ['Special Artist']);
+    assert.match(decodeHtml(m.find('[data-act="lbartistoff"]').textContent), /O'Brien & "Friends" <Studio>/);
+    await pick('');
+    assert.equal(titles().length, 5);
+    // The shortcut clears an unrelated artist, shape, status and text search.
+    await pick(special);
+    await m.tap('[data-act="lbshape"][data-k="Square"]');
+    await m.tap('[data-act="lbfilters"]');
+    await m.tap('[data-act="filter"][data-k="wishlist"]');
+    m.find('#q').value = 'no such kit';
+    m.find('#q').oninput({ target: m.find('#q') });
+    await m.go('#/settings');
+    await m.tap('[data-act="artistinlogbook"][data-artist="Randal Spangler"]');
+    assert.equal(globalThis.location.hash, '#/');
+    assert.deepEqual(titles(), ['Dragon Library', 'Finished Dragon']);
+    assert.equal(m.find('#q').value, '');
+    assert.equal(m.find('[data-act="lbfilters"] .n').textContent, '1');
+    assert.equal(m.find('.lbpanel'), null);
+    await m.tap('[data-act="filter"][data-k="received"]');
+    assert.deepEqual(titles(), ['Dragon Library']);
+    await m.tap(`.card[data-id="${waiting.id}"]`);
+    await m.go('#/');
+    assert.deepEqual(titles(), ['Dragon Library'], 'returning from a kit lost its artist/status filters');
+    await m.tap('[data-act="lbartistoff"]');
+    assert.equal(titles().length, 4);
+    assert.equal(m.find('[data-act="lbfilters"] .n'), null);
+  });
+}
 
 /* The filters are a panel you dip into: a tap outside puts them away, and
    only that — a stray tap on a card must not also open it. */

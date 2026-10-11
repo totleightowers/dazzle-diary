@@ -217,6 +217,7 @@ These are separate.
 
 The logbook filters **projects you own/track** by:
 
+- artist
 - shop
 - shape
 - size

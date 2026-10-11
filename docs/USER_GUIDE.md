@@ -53,6 +53,7 @@ The chips under Search restrict the logbook to one lifecycle state.
 
 Open **Filters** to filter by:
 
+- artist (an alphabetical list of the artists in your logbook)
 - shop
 - drill shape
 - canvas size
@@ -68,6 +69,13 @@ You can also sort the contents of each status section by:
 - Most drills
 
 **Clear all** removes the additional filters and returns sorting to Recently added.
+
+In Settings, tap a name under **Most collected artists** to open that artist’s
+kits in My Logbook. This clears previous filters and searches. To pick your next
+canvas, choose an artist such as **Randal Spangler**, then tap **Received** to
+see their kits that have arrived but have not been started. The artist stays
+selected when you open a kit and return. Tap the artist chip’s ×, choose
+**All artists**, or use **Clear all** to remove it.
 
 ### Grid and list
 
