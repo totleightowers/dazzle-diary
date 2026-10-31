@@ -2924,6 +2924,8 @@ route(/^#\/summary$/, async () => {
       </div>
 
       ${tiles(
+        tile(!SUMMARY.year && stats.projects, num(stats.projects), 'projects in your logbook'),
+        tile(!SUMMARY.year && stats.wishlist, num(stats.wishlist), 'on your wishlist'),
         tile(t.done, num(t.done), 'paintings finished', 'var(--st-completed)'),
         tile(t.bought, num(t.bought), SUMMARY.year ? 'paintings bought' : 'paintings owned'),
         tile(t.placed, bigNum(t.placed), t.partial
@@ -2942,6 +2944,15 @@ route(/^#\/summary$/, async () => {
         // the other half of the diamond picture, and only ever a whole-stash one
         tile(!SUMMARY.year && t.remaining, bigNum(t.remaining), 'still to place across the rest of the stash')
       )}
+      ${!SUMMARY.year && stats.drills ? `<div>
+        <h3 class="label">Diamond progress</h3>
+        <div class="progressline" style="margin-top:10px"><i style="width:${
+          stats.drills ? Math.round(stats.placed / stats.drills * 100) : 0}%"></i></div>
+        <p style="margin:8px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)" class="tnum">
+          ${stats.drills ? Math.round(stats.placed / stats.drills * 100) : 0}% of ${bigNum(stats.drills)} diamonds${
+            stats.estimatedCounts ? ` · ${stats.estimatedCounts} project${stats.estimatedCounts === 1 ? '' : 's'} use a count estimated from canvas size` : ''}</p>
+      </div>` : ''}
+
       ${SUMMARY.year && t.historyFrom ? `<p style="margin:-4px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
         Diamonds placed is counted from the progress you have recorded since ${h(dateText(t.historyFrom))}. Work done before that is in the totals but not in any month.</p>` : ''}
       ${SUMMARY.year && !t.historyFrom ? `<p style="margin:-4px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)">
@@ -2974,6 +2985,33 @@ route(/^#\/summary$/, async () => {
           : `<p style="margin:8px 2px 12px;font-size:12px;line-height:1.5;color:var(--ink-mute)">${stats.artistsOwned ? 'You’ve completed a kit by every artist you own.'
             : 'Add artists to your owned kits to build your checklist.'}</p>`}
       </section>
+
+      ${!SUMMARY.year && stats.topArtists.length ? `<div>
+        <h3 class="label">Most collected artists</h3>
+        <div class="panel pad-in">${stats.topArtists.map((a) =>
+          `<button class="row artist-row" data-act="artistinlogbook" data-artist="${h(a.artist)}"
+            aria-label="Show kits by ${h(a.artist)}"><span class="k">${h(a.artist)}</span>
+            <span class="v tnum">${a.n}${svg('chev', 16)}</span></button>`).join('')}</div>
+      </div>` : ''}
+
+      ${!SUMMARY.year && (stats.topShops || []).length ? `<div>
+        <h3 class="label">Most bought from</h3>
+        <div class="panel pad-in">${stats.topShops.map((sh) => {
+          const share = stats.projects ? Math.round(sh.n / stats.projects * 100) : 0;
+          const sid = (SHOP_BY_NAME[sh.shop] || {}).id;
+          return `<div class="row">
+            <span class="k" style="color:var(--ink);flex:1 1 auto;min-width:0;display:block">
+              <span style="display:flex;align-items:center;gap:7px">${
+                sid ? `<span class="pip" data-shop="${h(sid)}"></span>` : ''}${h(sh.shop)}</span>
+              <span style="display:block;margin-top:5px;height:4px;border-radius:999px;background:var(--sunken);overflow:hidden">
+                <span style="display:block;height:100%;width:${share}%;background:${
+                  sid ? `var(--shop-${sid})` : 'var(--accent)'}"></span></span>
+            </span>
+            <span class="v tnum" style="white-space:nowrap">${sh.n}
+              <span style="color:var(--ink-mute);font-weight:400">${sh.spend ? ' · ' + money(sh.spend) : ''}</span></span>
+          </div>`;
+        }).join('')}</div>
+      </div>` : ''}
 
       ${section('10 oldest kits', s.oldestKits.map((x, i) =>
         rec(`${i + 1} · ${x.dateType}`, x, () => h(dateText(x.date)))),
@@ -3052,8 +3090,8 @@ route(/^#\/summary$/, async () => {
 
 /* ========================================================== #/settings */
 route(/^#\/settings$/, async () => {
-  const [state, stats, gaps, soft, drills, pal] = await Promise.all([
-    api('/state'), api('/stats'), api('/projects/backfill-dates').catch(() => ({ candidates: 0 })),
+  const [state, gaps, soft, drills, pal] = await Promise.all([
+    api('/state'), api('/projects/backfill-dates').catch(() => ({ candidates: 0 })),
     api('/projects/upgrade-covers').catch(() => ({ candidates: 0 })),
     api('/colours').catch(() => ({ legends: 0 })),
     api('/dac/palettes').catch(() => ({ total: 0, have: 0, candidates: 0, running: null }))]);
@@ -3098,64 +3136,6 @@ route(/^#\/settings$/, async () => {
         <span class="t"><b>Summary and records</b>
           <span>Totals and records, for all time or one month</span></span>
         ${svg('chev', 16, 2.2)}</button>
-
-      <div class="tiles">
-        <div class="tile"><div class="big tnum">${num(stats.projects)}</div>
-          <div class="cap">projects${stats.wishlist ? ` · ${num(stats.wishlist)} wished for` : ''}</div></div>
-        <div class="tile"><div class="big tnum">${num(stats.completed)}</div><div class="cap">completed</div></div>
-        <div class="tile"><div class="big tnum">${num(Math.round(stats.hours))}</div><div class="cap">hours logged</div></div>
-        <div class="tile"><div class="big tnum">${(stats.spendBy && stats.spendBy[0])
-          ? money(stats.spendBy[0].total, stats.spendBy[0].currency) : money(stats.spend)}</div>
-          <div class="cap">spent${(stats.spendBy || []).length > 1
-            ? ' · plus ' + stats.spendBy.slice(1).map(x => money(x.total, x.currency)).join(', ')
-            : ''}</div></div>
-      </div>
-
-      <div>
-        <h3 class="label">Diamonds</h3>
-        <div class="tiles">
-          <div class="tile" style="background:var(--st-completed)">
-            <div class="big tnum">${bigNum(stats.placed)}</div>
-            <div class="cap">placed so far — every finished canvas plus how far you are through the ones on the go</div>
-          </div>
-          <div class="tile" style="background:var(--st-notReceived)">
-            <div class="big tnum">${bigNum(stats.remaining)}</div>
-            <div class="cap">still to place across the rest of the stash</div>
-          </div>
-        </div>
-        <div class="progressline" style="margin-top:10px"><i style="width:${
-          stats.drills ? Math.round(stats.placed / stats.drills * 100) : 0}%"></i></div>
-        <p style="margin:8px 2px 0;font-size:12px;line-height:1.5;color:var(--ink-mute)" class="tnum">
-          ${stats.drills ? Math.round(stats.placed / stats.drills * 100) : 0}% of ${bigNum(stats.drills)} diamonds${
-            stats.estimatedCounts ? ` · ${stats.estimatedCounts} project${stats.estimatedCounts === 1 ? '' : 's'} use a count estimated from canvas size` : ''}</p>
-      </div>
-
-      ${stats.topArtists.length ? `<div>
-        <h3 class="label">Most collected artists</h3>
-        <div class="panel pad-in">${stats.topArtists.map((a) =>
-          `<button class="row artist-row" data-act="artistinlogbook" data-artist="${h(a.artist)}"
-            aria-label="Show kits by ${h(a.artist)}"><span class="k">${h(a.artist)}</span>
-            <span class="v tnum">${a.n}${svg('chev', 16)}</span></button>`).join('')}</div>
-      </div>` : ''}
-
-      ${(stats.topShops || []).length ? `<div>
-        <h3 class="label">Most bought from</h3>
-        <div class="panel pad-in">${stats.topShops.map((sh) => {
-          const share = stats.projects ? Math.round(sh.n / stats.projects * 100) : 0;
-          const sid = (SHOP_BY_NAME[sh.shop] || {}).id;
-          return `<div class="row">
-            <span class="k" style="color:var(--ink);flex:1 1 auto;min-width:0;display:block">
-              <span style="display:flex;align-items:center;gap:7px">${
-                sid ? `<span class="pip" data-shop="${h(sid)}"></span>` : ''}${h(sh.shop)}</span>
-              <span style="display:block;margin-top:5px;height:4px;border-radius:999px;background:var(--sunken);overflow:hidden">
-                <span style="display:block;height:100%;width:${share}%;background:${
-                  sid ? `var(--shop-${sid})` : 'var(--accent)'}"></span></span>
-            </span>
-            <span class="v tnum" style="white-space:nowrap">${sh.n}
-              <span style="color:var(--ink-mute);font-weight:400">${sh.spend ? ' · ' + money(sh.spend) : ''}</span></span>
-          </div>`;
-        }).join('')}</div>
-      </div>` : ''}
 
       <div>
         <h3 class="label">Shop catalogues</h3>

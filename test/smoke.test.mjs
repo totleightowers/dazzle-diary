@@ -543,7 +543,7 @@ for (const width of [390, 1028]) {
   test(`artist filtering and collected-artist links work at ${width}px`, async () => {
     const m = await mount({ width });
     await emptyLogbook(m);
-    const waiting = await m.seed({ title: 'Dragon Library', artist: 'Randal Spangler', status: 'received', shape: 'Square' });
+    const waiting = await m.seed({ title: 'Dragon Library', artist: 'Randal Spangler', status: 'received', shape: 'Square', drills: 1000, shop: 'dac', date_ordered: '2026-01-01' });
     await m.seed({ title: 'Finished Dragon', artist: ' randal spangler ', status: 'completed', shape: 'Round' });
     await m.seed({ title: 'Spangler in the title only', artist: 'Someone Else', status: 'received' });
     await m.seed({ title: 'Unknown Artist', status: 'received' });
@@ -585,6 +585,18 @@ for (const width of [390, 1028]) {
     m.find('#q').value = 'no such kit';
     m.find('#q').oninput({ target: m.find('#q') });
     await m.go('#/settings');
+    assert.equal(m.all('.tile').length, 0, 'collection totals no longer belong in Settings');
+    assert.doesNotMatch(m.screen(), /Most collected artists|Most bought from|Diamond progress/);
+    for (const act of ['cur', 'theme', 'backup', 'getpalettes', 'shoptoggle'])
+      assert.ok(m.find(`[data-act="${act}"]`), `${act} must stay in Settings`);
+    await m.go('#/summary');
+    for (const heading of ['Most collected artists', 'Most bought from', 'Diamond progress'])
+      assert.ok(m.screen().includes(heading), `${heading} belongs in statistics`);
+    assert.match(m.screen(), /projects in your logbook/);
+    await m.tap('[data-act="sumyear"][data-k="2026"]');
+    assert.doesNotMatch(m.screen(), /Most collected artists|Most bought from|Diamond progress|projects in your logbook/,
+      'collection-wide figures must not appear to describe the selected year');
+    await m.tap('[data-act="sumyear"][data-k=""]');
     await m.tap('[data-act="artistinlogbook"][data-artist="Randal Spangler"]');
     assert.equal(globalThis.location.hash, '#/');
     assert.deepEqual(titles(), ['Dragon Library', 'Finished Dragon']);
@@ -1141,10 +1153,10 @@ test('money is never added across currencies', async () => {
   assert.ok(rows.some((x) => /Dearest .*£80\.00/.test(x)), rows.join(' | '));
 });
 
-/* Settings and the summary answer the same questions from the same rows. They
+/* Collection stats and the summary answer the same questions from the same rows. They
    were written months apart and drifted once already over currency, so they are
    held together here rather than by hoping. */
-test('Settings and the summary agree on the same collection', async () => {
+test('Collection stats and the summary agree on the same collection', async () => {
   const m = await mount();
   for (const p of await m.api('/projects')) await m.api('/projects/' + p.id, { method: 'DELETE' });
   await m.seed({ title: 'Wished', status: 'wishlist', price: 999, drills: 500000 });
