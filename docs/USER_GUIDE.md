@@ -70,7 +70,7 @@ You can also sort the contents of each status section by:
 
 **Clear all** removes the additional filters and returns sorting to Recently added.
 
-In Settings, tap a name under **Most collected artists** to open that artist’s
+In **Summary and records → All time**, tap a name under **Most collected artists** to open that artist’s
 kits in My Logbook. This clears previous filters and searches. To pick your next
 canvas, choose an artist such as **Randal Spangler**, then tap **Received** to
 see their kits that have arrived but have not been started. The artist stays
@@ -554,6 +554,14 @@ They include:
 - best value per thousand diamonds
 - most frequent artist/shop
 
+### Collection statistics
+
+Choose **All time** in Summary and records for your total project and wishlist
+counts, owned and completed kits, hours, spending, and diamond progress.
+**Most collected artists** opens each artist’s kits; **Most bought from** shows
+your shop rankings. These collection-wide figures live here alongside the
+records. Selecting a year or month shows that period’s totals instead.
+
 ### Artists still to try
 
 Use **Summary and records → Artists still to try** when planning to finish at least one kit
@@ -574,10 +582,6 @@ a count of artists completed specifically during 2027.
 Settings currently contains:
 
 - Summary and records entry
-- headline collection statistics
-- diamond totals
-- most collected artists
-- most bought from
 - shop catalogue controls
 - shopping/catalogue currency preference
 - appearance
