@@ -561,6 +561,7 @@ Settings currently contains:
 - Summary and records entry
 - headline collection statistics
 - diamond totals
+- artists still to try, ordered by owned kit count
 - most collected artists
 - most bought from
 - shop catalogue controls
@@ -571,6 +572,21 @@ Settings currently contains:
 - build version/date
 
 Most settings apply immediately.
+
+### Artists still to try
+
+Use **Settings → Artists still to try** when planning to finish at least one kit
+by every artist you own. It lists every artist with no completed kit in your
+logbook, with the number of kits you own, most first (alphabetically for ties).
+Tap a name to open that artist’s kits in the logbook, then use the status chips
+to choose a kit. The logbook link shows all records for that artist.
+
+The checklist includes kits on order, received, started or on hold. Wishlist
+and abandoned kits do not count, and kits without an artist are skipped. Artist
+names with different capitalisation or spaces at either end count together.
+Completing a kit removes its artist from the list automatically. This uses
+all-time completions, so it is a reference for your 2027 planning rather than
+a count of artists completed specifically during 2027.
 
 ## Back up your logbook
 

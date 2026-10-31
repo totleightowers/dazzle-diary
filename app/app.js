@@ -3116,6 +3116,19 @@ route(/^#\/settings$/, async () => {
             stats.estimatedCounts ? ` · ${stats.estimatedCounts} project${stats.estimatedCounts === 1 ? '' : 's'} use a count estimated from canvas size` : ''}</p>
       </div>
 
+      <section aria-labelledby="artists-to-try-title" id="artists-to-try">
+        <h3 class="label" id="artists-to-try-title">Artists still to try</h3>
+        <p style="margin:8px 2px 12px;font-size:12px;line-height:1.5;color:var(--ink-mute)">${num(stats.artistsToTry.length)} of ${num(stats.artistsOwned)} artists still to try.
+          No completed kit in your logbook, across all years. Most owned kits first;
+          includes kits on order, excludes wishlist and abandoned kits. Tap an artist to see their kits.</p>
+        ${stats.artistsToTry.length ? `<div class="panel pad-in">${stats.artistsToTry.map(a =>
+          `<button class="row artist-row" data-act="artistinlogbook" data-artist="${h(a.artist)}"
+            aria-label="Show kits by ${h(a.artist)}"><span class="k">${h(a.artist)}</span>
+            <span class="v tnum">${num(a.n)} ${a.n === 1 ? 'kit' : 'kits'}${svg('chev', 16)}</span></button>`).join('')}</div>`
+          : `<p style="margin:8px 2px 12px;font-size:12px;line-height:1.5;color:var(--ink-mute)">${stats.artistsOwned ? 'You’ve completed a kit by every artist you own.'
+            : 'Add artists to your owned kits to build your checklist.'}</p>`}
+      </section>
+
       ${stats.topArtists.length ? `<div>
         <h3 class="label">Most collected artists</h3>
         <div class="panel pad-in">${stats.topArtists.map((a) =>

@@ -2050,6 +2050,20 @@ export async function localApi(path, opts = {}) {
        what you have spent, and only out of what is left to place. */
     const bought = rows.filter(r => r.status !== 'wishlist');
     const owned = bought.filter(r => r.status !== 'abandoned');
+    // Match the logbook's artist filter: casing and outer whitespace do not
+    // make a second artist. Keep the whole checklist, not just the top eight.
+    const artistProgress = new Map();
+    for (const r of owned) {
+      const artist = (r.artist || '').trim(), key = artist.toLowerCase();
+      if (!key) continue;
+      if (!artistProgress.has(key)) artistProgress.set(key, { artist, n: 0, completed: false });
+      const a = artistProgress.get(key);
+      a.n++;
+      if (r.status === 'completed') a.completed = true;
+    }
+    const artistsToTry = [...artistProgress.values()].filter(a => !a.completed)
+      .sort((a, b) => b.n - a.n || a.artist.localeCompare(b.artist))
+      .map(({ artist, n }) => ({ artist, n }));
     const placed = Math.round(owned.reduce((n, r) => n + (r.status === 'completed'
       ? (Number(r.drills) || 0)
       : (Number(r.drills) || 0) * (Number(r.progress) || 0) / 100), 0));
@@ -2059,6 +2073,8 @@ export async function localApi(path, opts = {}) {
       projects: rows.length, wishlist: rows.length - bought.length,
       drills: sum('drills'), hours: sum('hours'), spend: sum('price'),
       completed: rows.filter(r => r.status === 'completed').length,
+      artistsToTry,
+      artistsOwned: artistProgress.size,
       placed,
       remaining: Math.max(0, owned.reduce((n, r) => n + (Number(r.drills) || 0), 0) - placed),
       estimatedCounts: rows.filter(r => r.drills_estimated).length,

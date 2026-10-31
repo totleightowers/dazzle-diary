@@ -602,6 +602,55 @@ for (const width of [390, 1028]) {
   });
 }
 
+for (const width of [390, 1028]) {
+  test(`artists still to try counts the owned stash and opens kits at ${width}px`, async () => {
+    const m = await mount({ width });
+    await emptyLogbook(m);
+    await m.go('#/settings');
+    assert.match(m.find('#artists-to-try').textContent, /Add artists to your owned kits/);
+    const special = `O'Brien & "Friends" <Studio>`;
+    const first = await m.seed({ title: 'First choice', artist: special, status: 'received' });
+    await m.seed({ title: 'On the way', artist: ' ' + special.toLowerCase() + ' ', status: 'notReceived' });
+    await m.seed({ title: 'Paused', artist: special, status: 'onHold' });
+    await m.seed({ title: 'Wish', artist: special, status: 'wishlist' });
+    await m.seed({ title: 'Abandoned', artist: special, status: 'abandoned' });
+    for (const artist of ['Zulu', 'Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon', 'Eta', 'Theta', '__proto__'])
+      await m.seed({ title: artist, artist, status: 'received' });
+    await m.seed({ title: 'Already tried', artist: 'Finished Artist', status: 'completed', date_completed: '2025-02-01' });
+    await m.seed({ title: 'Another by them', artist: ' finished artist ', status: 'started' });
+    await m.seed({ title: 'Wish only', artist: 'Wish Artist', status: 'wishlist' });
+    await m.seed({ title: 'Abandoned only', artist: 'Abandoned Artist', status: 'abandoned' });
+    await m.seed({ title: 'Unknown', artist: '  ', status: 'received' });
+    const stats = await m.api('/stats');
+    assert.equal(stats.artistsOwned, 11);
+    assert.equal(stats.artistsToTry.length, 10, 'the checklist must not be capped at eight');
+    assert.deepEqual(stats.artistsToTry[0], { artist: special, n: 3 });
+    assert.deepEqual(stats.artistsToTry.slice(1).map(a => a.artist),
+      ['Zulu', 'Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon', 'Eta', 'Theta', '__proto__'].sort((a, b) => a.localeCompare(b)));
+    await m.go('#/settings');
+    const rows = m.all('#artists-to-try .artist-row');
+    assert.equal(rows.length, 10);
+    assert.match(decodeHtml(rows[0].textContent), /O'Brien & "Friends" <Studio>/);
+    assert.match(rows[0].textContent, /3 kits/);
+    // The minimal DOM leaves HTML entities in attributes; browsers decode them.
+    assert.equal(decodeHtml(rows[0].dataset.artist), special);
+    rows[0].dataset.artist = decodeHtml(rows[0].dataset.artist);
+    await m.tap('#artists-to-try .artist-row');
+    assert.equal(globalThis.location.hash, '#/');
+    assert.equal(m.all('.card').length, 5, 'opens all records for that artist');
+    await m.tap('[data-act="filter"][data-k="received"]');
+    assert.deepEqual(m.all('.card .name').map(n => n.textContent), ['First choice']);
+    await m.api('/projects/' + first.id, { method: 'PATCH', body: { status: 'completed' } });
+    await m.go('#/settings');
+    assert.equal(m.all('#artists-to-try .artist-row').length, 9);
+    assert.ok(!(await m.api('/stats')).artistsToTry.some(a => a.artist === special));
+    await emptyLogbook(m);
+    await m.seed({ title: 'Only finish', artist: 'One Artist', status: 'completed' });
+    await m.go('#/settings');
+    assert.match(m.find('#artists-to-try').textContent, /completed a kit by every artist you own/);
+  });
+}
+
 /* The filters are a panel you dip into: a tap outside puts them away, and
    only that — a stray tap on a card must not also open it. */
 test('a tap outside the filters closes them, without doing anything else', async () => {
