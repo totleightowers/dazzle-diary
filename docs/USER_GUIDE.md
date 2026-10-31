@@ -554,28 +554,9 @@ They include:
 - best value per thousand diamonds
 - most frequent artist/shop
 
-## Settings
-
-Settings currently contains:
-
-- Summary and records entry
-- headline collection statistics
-- diamond totals
-- artists still to try, ordered by owned kit count
-- most collected artists
-- most bought from
-- shop catalogue controls
-- shopping/catalogue currency preference
-- appearance
-- backup/restore/export
-- open-source licences
-- build version/date
-
-Most settings apply immediately.
-
 ### Artists still to try
 
-Use **Settings → Artists still to try** when planning to finish at least one kit
+Use **Summary and records → Artists still to try** when planning to finish at least one kit
 by every artist you own. It lists every artist with no completed kit in your
 logbook, with the number of kits you own, most first (alphabetically for ties).
 Tap a name to open that artist’s kits in the logbook, then use the status chips
@@ -587,6 +568,24 @@ names with different capitalisation or spaces at either end count together.
 Completing a kit removes its artist from the list automatically. This uses
 all-time completions, so it is a reference for your 2027 planning rather than
 a count of artists completed specifically during 2027.
+
+## Settings
+
+Settings currently contains:
+
+- Summary and records entry
+- headline collection statistics
+- diamond totals
+- most collected artists
+- most bought from
+- shop catalogue controls
+- shopping/catalogue currency preference
+- appearance
+- backup/restore/export
+- open-source licences
+- build version/date
+
+Most settings apply immediately.
 
 ## Back up your logbook
 
