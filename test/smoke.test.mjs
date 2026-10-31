@@ -607,6 +607,8 @@ for (const width of [390, 1028]) {
     const m = await mount({ width });
     await emptyLogbook(m);
     await m.go('#/settings');
+    assert.equal(m.find('#artists-to-try'), null, 'the checklist belongs in statistics');
+    await m.go('#/summary');
     assert.match(m.find('#artists-to-try').textContent, /Add artists to your owned kits/);
     const special = `O'Brien & "Friends" <Studio>`;
     const first = await m.seed({ title: 'First choice', artist: special, status: 'received' });
@@ -627,7 +629,7 @@ for (const width of [390, 1028]) {
     assert.deepEqual(stats.artistsToTry[0], { artist: special, n: 3 });
     assert.deepEqual(stats.artistsToTry.slice(1).map(a => a.artist),
       ['Zulu', 'Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon', 'Eta', 'Theta', '__proto__'].sort((a, b) => a.localeCompare(b)));
-    await m.go('#/settings');
+    await m.go('#/summary');
     const rows = m.all('#artists-to-try .artist-row');
     assert.equal(rows.length, 10);
     assert.match(decodeHtml(rows[0].textContent), /O'Brien & "Friends" <Studio>/);
@@ -641,12 +643,12 @@ for (const width of [390, 1028]) {
     await m.tap('[data-act="filter"][data-k="received"]');
     assert.deepEqual(m.all('.card .name').map(n => n.textContent), ['First choice']);
     await m.api('/projects/' + first.id, { method: 'PATCH', body: { status: 'completed' } });
-    await m.go('#/settings');
+    await m.go('#/summary');
     assert.equal(m.all('#artists-to-try .artist-row').length, 9);
     assert.ok(!(await m.api('/stats')).artistsToTry.some(a => a.artist === special));
     await emptyLogbook(m);
     await m.seed({ title: 'Only finish', artist: 'One Artist', status: 'completed' });
-    await m.go('#/settings');
+    await m.go('#/summary');
     assert.match(m.find('#artists-to-try').textContent, /completed a kit by every artist you own/);
   });
 }
