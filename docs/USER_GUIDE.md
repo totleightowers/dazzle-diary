@@ -562,6 +562,24 @@ counts, owned and completed kits, hours, spending, and diamond progress.
 your shop rankings. These collection-wide figures live here alongside the
 records. Selecting a year or month shows that period’s totals instead.
 
+### Time to finish your stash
+
+The **All time** summary has an **estimated to finish your stash** tile beside
+the drill totals, shown in years and months. It divides the drills still left
+to place by your average drills placed per calendar month, from the month of
+your earliest recorded start (including kits already completed) through the
+end of the previous month. The start month counts as one month, and months
+with no work count too. The current month is excluded from the average, while
+its progress still reduces the work left. Fractions of the final month round up.
+
+Wishlist and abandoned kits are excluded. Dated completed kits count in full,
+even if imported later. Dated progress snapshots supply the position at last
+month’s end; partial work with no usable date is left out of the average and
+flagged. The tile shows the rate and months used. Missing drill counts and
+estimated counts are flagged too. Without a start date, a past month or a
+positive pace, it explains what is missing instead of showing an estimate.
+This assumes your pace stays the same and you do not add more kits.
+
 ### Artists still to try
 
 Use **Summary and records → Artists still to try** when planning to finish at least one kit
