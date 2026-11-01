@@ -16,6 +16,7 @@ import { parseDacWorkbook, isDacWorkbook } from '../core/dacworkbook.js';
 import { parseDacOrders } from '../core/dacorders.js';
 import { parseHolds, applyStatus } from '../core/status.js';
 import { estimateDrills } from '../core/estimate.js';
+import { stashForecast } from '../core/forecast.js';
 import { drillKind, byDrill, drillQuery, drillMatches } from '../core/drills.js';
 import { readPalette, paletteSection } from '../core/palette.js';
 import { originalImage } from '../core/images.js';
@@ -1731,6 +1732,7 @@ export async function localApi(path, opts = {}) {
 
     return {
       period: period || null, years, months, mainCurrency,
+      forecast: stashForecast(rows, history),
       oldestKits: rankKits(1), newestKits: rankKits(-1),
       oldestUnfinishedKits: rankKits(1, unfinishedKits), newestUnfinishedKits: rankKits(-1, unfinishedKits),
       currencies: Object.keys(spentPer).length,

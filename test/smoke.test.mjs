@@ -3431,3 +3431,33 @@ for (const width of [390, 1028]) test(`DAC scan recovers encoded kit titles and 
   assert.ok(added, 'the recovered kit could not be imported');
   assert.equal(added.price, 44);
 });
+
+for (const width of [390, 1028]) {
+  test(`stash forecast is a Summary headline tile at ${width}px`, async () => {
+    const m = await mount({ width });
+    await emptyLogbook(m);
+    await m.seed({ title: 'First finished', status: 'completed', drills: 1000,
+      date_started: '2020-01-15', date_completed: '2020-02-01' });
+    await m.seed({ title: 'Next', status: 'received', drills: 13000 });
+    const forecast = (await m.api('/summary')).forecast;
+    assert.ok(forecast.totalMonths > 12);
+    await m.go('#/summary');
+    const box = m.find('.tiles #stash-forecast');
+    assert.ok(box, 'the estimate must be one of the large top tiles');
+    assert.equal(box.querySelector('.big').textContent,
+      Math.floor(forecast.totalMonths / 12).toLocaleString('en-GB') + 'y ' + forecast.totalMonths % 12 + 'm');
+    assert.match(box.textContent, /estimated to finish your stash/);
+    assert.match(box.textContent, /drills\/month/);
+    await m.tap('[data-act="sumyear"][data-k="2020"]');
+    assert.equal(m.find('#stash-forecast'), null, 'a whole-stash forecast is only in All time');
+    await m.tap('[data-act="sumyear"][data-k=""]');
+    assert.ok(m.find('#stash-forecast'));
+    await m.go('#/settings');
+    assert.equal(m.find('#stash-forecast'), null);
+    await emptyLogbook(m);
+    await m.seed({ title: 'No start', status: 'received', drills: 1000 });
+    await m.go('#/summary');
+    assert.equal(m.find('#stash-forecast .big').textContent, '—');
+    assert.match(m.find('#stash-forecast').textContent, /start date/);
+  });
+}

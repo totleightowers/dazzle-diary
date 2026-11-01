@@ -2901,6 +2901,35 @@ route(/^#\/summary$/, async () => {
   const WEEKDAYS = ['Sundays', 'Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays'];
   const F = s.favourites;
 
+  const forecast = s.forecast;
+  const forecastMonths = forecast.totalMonths;
+  const forecastYears = forecastMonths == null ? 0 : Math.floor(forecastMonths / 12);
+  const forecastRemainder = forecastMonths == null ? 0 : forecastMonths % 12;
+  const forecastValue = forecastMonths == null ? '—'
+    : `${forecastYears ? num(forecastYears) + 'y ' : ''}${forecastRemainder}m`;
+  const forecastLabel = forecastMonths == null ? 'Estimate unavailable'
+    : `${forecastYears} years and ${forecastRemainder} months`;
+  const forecastReason = {
+    empty: 'Add an owned kit to estimate.',
+    'no-start': 'Add your first painting’s start date.',
+    'no-months': 'Available after your first month ends.',
+    'no-pace': 'No drill progress can be dated before this month.',
+    'missing-counts': 'Add drill counts to your unfinished kits.'
+  }[forecast.reason];
+  const forecastMonth = (d) => `${MONTHS[Number(d.slice(5, 7)) - 1].slice(0, 3)} ${d.slice(0, 4)}`;
+  const forecastNotes = [
+    forecastReason || (forecastMonths === 0 ? 'Your counted stash is finished.'
+      : `${num(Math.round(forecast.monthlyAverage))} drills/month · ${forecastMonth(forecast.firstStarted)}–${forecastMonth(forecast.through)}`),
+    forecast.missingCounts ? `${num(forecast.missingCounts)} unfinished kits missing drill counts; estimate covers known counts only.` : '',
+    forecast.undatedProgress ? 'Some past progress could not be dated and is excluded from the average.' : '',
+    forecast.estimatedCounts ? 'Includes estimated drill counts.' : ''
+  ].filter(Boolean).join(' ');
+  const forecastTile = !SUMMARY.year ? `<div class="tile" id="stash-forecast">
+    <div class="big tnum" aria-label="${h(forecastLabel)}">${forecastValue}</div>
+    <div class="cap">estimated to finish your stash
+      <span style="display:block;margin-top:5px">${h(forecastNotes)}</span></div>
+  </div>` : '';
+
   const chip = (label, on, act, k) =>
     `<button class="chip" style="height:36px;padding:0 12px" data-act="${act}"${
       k == null ? '' : ` data-k="${h(k)}"`} aria-pressed="${on}">${h(label)}</button>`;
@@ -2942,7 +2971,8 @@ route(/^#\/summary$/, async () => {
         tile(t.days && t.hours, hoursText(t.hours / (t.days || 1)), 'on an average day at it'),
         tile(t.everHeld, num(t.everHeld), 'put down and picked back up'),
         // the other half of the diamond picture, and only ever a whole-stash one
-        tile(!SUMMARY.year && t.remaining, bigNum(t.remaining), 'still to place across the rest of the stash')
+        tile(!SUMMARY.year && t.remaining, bigNum(t.remaining), 'still to place across the rest of the stash'),
+        forecastTile
       )}
       ${!SUMMARY.year && stats.drills ? `<div>
         <h3 class="label">Diamond progress</h3>
