@@ -1332,7 +1332,7 @@ test('everything the app keeps is either in the backup or rebuilt by a sync', ()
     blobs: 'nothing is kept here; covers and photos are files'
   };
   const IN_BACKUP = { projects: /projects/, photos: /photos/, sessions: /sessions/,
-                      progress: /progress/, meta: /prefs|legends|drills/ };
+                      progress: /progress/, meta: /prefs|legends|drills|challenges/ };
   for (const s of stores)
     assert.ok(REBUILT[s] || IN_BACKUP[s].test(backup), `the ${s} store is not in the backup`);
 
@@ -1346,7 +1346,7 @@ test('everything the app keeps is either in the backup or rebuilt by a sync', ()
     sessionsMigrated: 'a one-off migration flag',
     dacSection: 'the name of the bit of a DAC page that holds the colours; learnt again on the next fetch'
   };
-  const CARRIED = { prefs: /prefs/, legends: /legends/, drills: /drills/ };
+  const CARRIED = { prefs: /prefs/, legends: /legends/, drills: /drills/, challenges: /challenges/ };
   for (const k of new Set(keys))
     assert.ok(REBUILT_META[k] || CARRIED[k].test(backup),
               `meta.${k} is neither backed up nor listed as something a sync rebuilds`);

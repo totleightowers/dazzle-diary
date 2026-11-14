@@ -1032,3 +1032,60 @@ select.fld {
   border: 1px solid var(--line); border-radius: 999px; background: var(--surface);
   font-size: 12px; font-weight: 600; color: var(--ink-mid); }
 .finchip b { color: var(--ink); }
+
+/* -------------------------------------------------------------- challenges
+   The switch at the top of the logbook, the strip that says what the chosen
+   challenge is, and the builder: groups of conditions, each one a row that
+   opens into the chips or the stepper that set it. */
+.modeswitch { margin: -2px 0; }
+.chinfo { display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; }
+.chmeta { font-size: 12px; font-weight: 700; color: var(--ink-mid); }
+.chsum { margin: 4px 0 0; font-size: 13px; line-height: 1.45; color: var(--ink-mute); }
+.btn.chedit { height: 36px; padding: 0 14px; font-size: 13px; flex: 0 0 auto; }
+.btn.chsmall { height: 42px; font-size: 13px; }
+
+.chh { font-size: 18px; margin: 4px 2px 0; }
+.chgroup { padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.seg.chseg { flex: 0 0 auto; align-self: flex-start; }
+.seg.chseg button { flex: 0 0 auto; padding: 0 14px; height: 34px; font-size: 12px; white-space: nowrap; }
+.seg.chjoin { align-self: center; }
+.chcond { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%;
+  min-height: var(--tap); padding: 10px 12px; border-radius: var(--r-field); text-align: left;
+  background: var(--paper); border: 1px solid var(--line); font-size: 14px; font-weight: 600; line-height: 1.35; }
+.chcond.open { border-color: var(--accent); }
+.chcond.plain { background: transparent; border-color: transparent; padding-left: 2px; padding-right: 2px; }
+.cheditor { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: var(--r-field);
+  background: var(--sunken); }
+.chvals { display: flex; flex-wrap: wrap; gap: 6px; }
+.chvals .chip { height: 36px; padding: 0 12px; white-space: normal; text-align: left; max-width: 100%; }
+.chhint, .chmore { margin: 0; font-size: 12px; line-height: 1.5; color: var(--ink-mute); }
+.chmore { align-self: center; padding: 4px 2px; }
+.chstep { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.chstep button { width: var(--tap); height: var(--tap); border-radius: 50%; background: var(--chip-bg);
+  border: 1px solid var(--line); font-size: 20px; font-weight: 700; color: var(--ink-mid); }
+.chstep .n { min-width: 3ch; text-align: center; font-family: var(--serif); font-size: 26px; font-weight: 600; }
+.chpicks { display: flex; flex-direction: column; gap: 4px; max-height: 300px; overflow-y: auto; }
+.chpick { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; align-items: center;
+  width: 100%; min-height: var(--tap); padding: 8px 10px; border-radius: var(--r-thumb); text-align: left;
+  background: var(--surface); border: 1px solid var(--line); }
+.chpick .box { grid-row: span 2; width: 18px; height: 18px; border-radius: 5px; border: 1.5px solid var(--ink-faint); }
+.chpick .t { font-family: var(--serif); font-size: 15px; font-weight: 500; }
+.chpick .a { font-size: 12px; color: var(--ink-mute); }
+.chpick[aria-pressed="true"] { border-color: var(--accent); }
+.chpick[aria-pressed="true"] .box { background: var(--accent); border-color: var(--accent); }
+.chread { margin: 2px 0 0; padding: 2px 0 2px 12px; border-left: 3px solid var(--accent);
+  font-size: 13px; line-height: 1.5; color: var(--ink-mid); }
+.chsec { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: var(--r-card); }
+.chsechead { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; }
+.chsechead .dot { width: 9px; height: 9px; border-radius: 50%; }
+.chsechead .n { margin-left: auto; color: var(--ink-mid); }
+.chkit { display: flex; flex-direction: column; padding: 8px 10px; border-radius: var(--r-thumb); background: var(--surface); }
+.chkit .t { font-family: var(--serif); font-size: 15px; font-weight: 500; }
+.chkit .a { font-size: 12px; color: var(--ink-mute); }
+.chdone { display: inline-block; margin-right: 8px; padding: 2px 8px; border-radius: 999px;
+  background: var(--st-completed); color: var(--ink); font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; }
+.chnotes { margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: var(--ink-mid); white-space: pre-line; }
+.chlink { display: inline-flex; align-items: center; gap: 4px; margin-top: 8px; min-height: 32px;
+  font-size: 13px; font-weight: 700; color: var(--ink); text-decoration: underline; }
+.chip.chongoing { height: auto; min-height: 38px; padding: 8px 14px; white-space: normal; text-align: left; align-self: flex-start; }
+.chstep .seg.chseg { margin-left: auto; align-self: center; }

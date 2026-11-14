@@ -6,6 +6,9 @@ import { productUrl, shopById, displayCurrency, SHOPS, CURRENCIES } from './core
 import { buildTickScript, buildLegendScript } from './core/dacsync.js';
 import { buildOrdersScript } from './core/dacorders.js';
 import { originalImage } from './core/images.js';
+import { FIELDS as CHALLENGE_FIELDS, REQUIREMENTS, SECTIONS as CH_SECTIONS, blank as blankChallenge,
+         normalise as normaliseChallenge, freshCondition, conditionText,
+         PRESETS as CHALLENGE_PRESETS } from './core/challenges.js';
 const SHOP_BY_NAME = Object.fromEntries(SHOPS.map((s) => [s.name, s]));
 /* Dazzle Diary — the whole client. Vanilla; no build step. */
 
@@ -412,6 +415,10 @@ const S = {
   view: localStorage.getItem('view') || 'grid',
   filter: 'all',
   q: '',
+  // what the logbook shows: every kit by status, or one challenge's kits
+  mode: localStorage.getItem('mode') === 'challenges' ? 'challenges' : 'stash',
+  challenges: [],
+  chId: Number(localStorage.getItem('challenge')) || null,
   // the logbook's own filters, beside the status chips and the search box
   lb: freshLogbookFilters(),
   projects: [],
@@ -613,8 +620,10 @@ async function render() {
 
 /* ==================================================================== #/ */
 async function loadLogbook() {
-  const [projects, meta] = await Promise.all([api('/projects'), api('/state')]);
+  const [projects, meta, challenges] = await Promise.all([api('/projects'), api('/state'),
+    S.mode === 'challenges' ? api('/challenges') : null]);
   S.projects = projects; S.meta = meta;
+  if (challenges) S.challenges = challenges;
   paintLogbook();
 }
 route(/^#\/$/, loadLogbook);
@@ -1070,6 +1079,7 @@ function wireDrillSearch() {
 }
 
 function paintLogbook() {
+  if (S.mode === 'challenges') { paintChallenges(); return; }
   const groups = logbookGroups();
   const showEmpty = S.filter === 'all' && !S.q.trim() && !lbActive();
   const shown = groups.reduce((n, g) => n + g.items.length, 0);
@@ -1086,6 +1096,7 @@ function paintLogbook() {
       ${topbar('My Logbook', { right: `
         <button class="iconbtn" data-go="#/settings" aria-label="Settings">${svg('cog')}</button>
         <span class="avatar">JL</span>` })}
+      ${modeSwitch()}
       <div class="search">
         ${svg('search', 18)}
         <input id="q" value="${h(S.q)}" placeholder="Search by title or artist" autocomplete="off">
@@ -1227,6 +1238,489 @@ const emptyLogbook = () => `
     <button class="btn primary wide" style="margin-top:8px" data-go="#/import">${svg('imp', 18)} Import order history</button>
     <button class="btn ghost wide" data-go="#/new">Add one by hand instead</button>
   </div>`;
+
+/* ============================================================ challenges
+   The logbook has two ways of being looked at. The stash is every kit, by
+   where it is up to. A challenge is some of those kits, by where they stand in
+   something you have signed up to. Same screen, same cards, one switch at the
+   top — a challenge is a way of reading the stash, not somewhere else to go. */
+const modeSwitch = () => `
+  <div class="seg tight modeswitch" role="group" aria-label="What the logbook shows">
+    <button data-act="mode" data-k="stash" aria-pressed="${S.mode !== 'challenges'}">Stash</button>
+    <button data-act="mode" data-k="challenges" aria-pressed="${S.mode === 'challenges'}">Challenges</button>
+  </div>`;
+
+// the sections borrow the stash's own tints: waiting, under way, finished
+const CH_TINT = { eligible: 'received', going: 'started', done: 'completed' };
+const chDates = (c) => c.from && c.to ? `${dateText(c.from)} – ${dateText(c.to)}`
+  : c.from ? `From ${dateText(c.from)}, ongoing` : c.to ? `Until ${dateText(c.to)}` : 'Ongoing';
+const chReq = (c) => (REQUIREMENTS.find((r) => r.k === c.req) || REQUIREMENTS[0]).label;
+const chTotal = (c) => CH_SECTIONS.reduce((n, s) => n + ((c.sections || {})[s.k] || []).length, 0);
+
+function paintChallenges() {
+  const list = S.challenges || [];
+  const c = list.find((x) => x.id === S.chId) || list[0] || null;
+  S.chId = c ? c.id : null;
+  const byId = new Map(S.projects.map((p) => [p.id, p]));
+  const groups = c ? CH_SECTIONS.map((s) => ({ ...s,
+    items: (c.sections[s.k] || []).map((id) => byId.get(id)).filter(Boolean).sort(LB_SORT.name) })) : [];
+  const total = groups.reduce((n, g) => n + g.items.length, 0);
+  const done = (groups.find((g) => g.k === 'done') || { items: [] }).items.length;
+
+  $list.innerHTML = `
+  <div class="screen wide ${S.view}-view">
+    <div class="topbar plain">
+      ${topbar('My Logbook', { right: `
+        <button class="iconbtn" data-go="#/settings" aria-label="Settings">${svg('cog')}</button>
+        <span class="avatar">JL</span>` })}
+      ${modeSwitch()}
+      ${list.length ? `<div class="chiprow statusrow">${list.map((x) => `
+        <button class="chip" data-act="chpick" data-k="${x.id}" aria-pressed="${x.id === S.chId}">
+          <span>${h(x.name)}</span><span class="n tnum">${x.complete ? 'done' : chTotal(x)}</span></button>`).join('')}
+        <button class="chip" data-go="#/challenge/new" aria-label="New challenge">${svg('add', 15, 2)}<span>New</span></button>
+      </div>` : ''}
+      ${c ? `<div class="panel chinfo">
+        <div style="min-width:0;flex:1 1 auto">
+          <div class="chmeta">${c.complete ? `<span class="chdone">Complete</span>` : ''}${h(chDates(c))} · ${h(chReq(c))}</div>
+          <p class="chsum">${h(c.summary)}</p>
+          ${c.notes ? `<p class="chnotes">${h(c.notes)}</p>` : ''}
+          ${c.link ? `<a class="chlink" href="${h(c.link)}" target="_blank" rel="noopener noreferrer">Rules and details ${svg('chev', 14)}</a>` : ''}
+        </div>
+        <button class="btn ghost chedit" data-go="#/challenge/${c.id}">Edit</button>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <span id="chcount" style="font-size:13px;font-weight:600;color:var(--ink-mid)">
+          ${done} of ${total} completed</span>
+        <div class="seg tight compact">
+          <button data-act="view" data-k="grid" aria-pressed="${S.view === 'grid'}" aria-label="Grid view">${svg('grid', 16)}</button>
+          <button data-act="view" data-k="list" aria-pressed="${S.view === 'list'}" aria-label="List view">${svg('list', 16)}</button>
+        </div>
+      </div>` : ''}
+    </div>
+
+    <div class="scroll pad" style="padding-bottom:24px">
+      ${!c ? `<div class="empty">${svg('gem', 44, 1.2)}
+        <h2>No challenges yet</h2>
+        <p>A challenge picks kits out of your stash by a rule — an artist, a size, one particular painting —
+          and shows which are waiting, which are under way and which are finished.</p>
+        <button class="btn primary wide" style="margin-top:8px" data-go="#/challenge/new">${svg('add', 18, 2)} New challenge</button>
+      </div>` : ''}
+      ${groups.filter((g) => g.items.length).map((g) => `
+        <section class="group" data-ch="${g.k}" style="background:${stVar(CH_TINT[g.k])}">
+          <header><span class="dot" style="background:${stDot(CH_TINT[g.k])}"></span>
+            <h2>${h(g.label)}</h2><span class="n tnum">${g.items.length}</span></header>
+          <div class="group-body">${g.items.map(card).join('')}</div>
+        </section>`).join('')}
+      ${c && !total ? `<div class="empty">${svg('gem', 40, 1.3)}
+        <h2>No kits in this one yet</h2><p>Nothing you own matches its rule. Edit the challenge, or add the kits to your logbook.</p></div>` : ''}
+    </div>
+  </div>`;
+  // with a row of challenges longer than the screen, the chosen one is not left off the end of it
+  $list.querySelector('.chip[data-act="chpick"][aria-pressed="true"]')?.scrollIntoView?.({ inline: 'nearest', block: 'nearest' });
+}
+
+/* ------------------------------------------------- #/challenge/new, /:id
+   Built by tapping, like the filters — typing a formula on a phone is nobody's
+   idea of fun. The draft lives here rather than in the page, so every tap can
+   repaint the screen without losing what has been put together. */
+const CH = { key: null, id: null, draft: null, edit: null, adding: null, preset: null,
+             picksOpen: false, find: '', pfind: '', preview: null };
+
+route(/^#\/challenge\/(new|\d+)$/, async (which) => {
+  S.projects = await api('/projects');
+  // arriving from somewhere else starts afresh; a repaint of this screen does not
+  if (CH.key !== which || painted !== location.hash) {
+    const saved = which === 'new' ? null : await api('/challenges/' + which);
+    Object.assign(CH, { key: which, id: saved ? saved.id : null, draft: normaliseChallenge(saved || blankChallenge()),
+                        edit: null, adding: null, preset: null, picksOpen: false, find: '', pfind: '', preview: null });
+  }
+  await chRefresh();
+  paintBuilder();
+});
+
+async function chRefresh() {
+  CH.preview = await api('/challenges/preview', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(CH.draft)
+  });
+}
+
+const chValName = (f, v) => (f === 'shop' ? (shopById(v) || {}).name || v : v);
+const ownedKits = () => S.projects.filter((p) => p.status !== 'wishlist');
+
+/** What can be tapped for a field: [stored value, what it is called]. */
+function chOptions(f) {
+  if (f === 'artist') return lbArtists().map(([, name]) => [name, name]);
+  if (f === 'shop') return lbShops().map((sh) => [sh.id, sh.name]);
+  if (f === 'shape') return [['Round', 'Round'], ['Square', 'Square']];
+  const titles = new Map();
+  for (const p of ownedKits()) {
+    const t = String(p.title || '').trim();
+    if (t && !titles.has(t.toLowerCase())) titles.set(t.toLowerCase(), t);
+  }
+  return [...titles.values()].sort((a, b) => a.localeCompare(b)).map((t) => [t, t]);
+}
+
+const CH_SHOWN = 30;
+/* What is chosen always shows, whatever is typed; the rest is narrowed by the
+   box above it. A logbook of a few hundred titles is not a wall of chips. */
+function chValueChips(cond) {
+  const opts = chOptions(cond.f);
+  const on = new Set(cond.vals.map((v) => v.toLowerCase()));
+  const known = new Set(opts.map(([v]) => String(v).toLowerCase()));
+  // a value chosen for a kit that has since left the logbook can still be taken off
+  const all = cond.vals.filter((v) => !known.has(v.toLowerCase())).map((v) => [v, chValName(cond.f, v)]).concat(opts);
+  const q = CH.find.trim().toLowerCase();
+  const picked = all.filter(([v]) => on.has(String(v).toLowerCase()));
+  const rest = all.filter(([v, n]) => !on.has(String(v).toLowerCase()) && (!q || n.toLowerCase().includes(q)));
+  const chip = ([v, n], pressed) =>
+    `<button class="chip" data-act="cbval" data-k="${h(v)}" aria-pressed="${pressed}">${h(n)}</button>`;
+  return picked.map((o) => chip(o, true)).join('') + rest.slice(0, CH_SHOWN).map((o) => chip(o, false)).join('')
+    + (rest.length > CH_SHOWN ? `<span class="chmore">${rest.length - CH_SHOWN} more — type to narrow them down</span>` : '')
+    + (!picked.length && !rest.length ? `<span class="chmore">Nothing in your logbook matches that.</span>` : '');
+}
+
+function chEditor(cond) {
+  const F = CHALLENGE_FIELDS[cond.f];
+  let body;
+  if (F.kind === 'list') {
+    body = `
+      <div class="seg tight chseg" role="group" aria-label="Is or is not">
+        <button data-act="cbnot" data-k="0" aria-pressed="${!cond.not}">is</button>
+        <button data-act="cbnot" data-k="1" aria-pressed="${!!cond.not}">is not</button>
+      </div>
+      ${chOptions(cond.f).length > 12 ? `<input class="fld" id="chfind" value="${h(CH.find)}"
+        placeholder="Find ${cond.f === 'title' ? 'a title' : 'an artist'}" autocomplete="off">` : ''}
+      <div class="chvals" id="chvals">${chValueChips(cond)}</div>
+      <p class="chhint">Tap more than one to mean any of them.</p>`;
+  } else if (F.kind === 'date') {
+    body = `
+      <div class="seg tight chseg" role="group" aria-label="Before or after">
+        <button data-act="cbop" data-k="before" aria-pressed="${cond.op === 'before'}">before</button>
+        <button data-act="cbop" data-k="after" aria-pressed="${cond.op === 'after'}">on or after</button>
+      </div>
+      <input class="fld" id="chdate" type="date" value="${h(cond.d)}" aria-label="Date">
+      <p class="chhint">Goes by the day a kit was ordered, or the day it arrived if there is no order date.
+        A kit with neither is left out.</p>`;
+  } else if (F.kind === 'rank') {
+    body = `
+      <div class="seg tight chseg" role="group" aria-label="Which end of the stash">
+        <button data-act="cbop" data-k="top" aria-pressed="${cond.op === 'top'}">${h(F.top)}</button>
+        <button data-act="cbop" data-k="bottom" aria-pressed="${cond.op === 'bottom'}">${h(F.bottom)}</button>
+      </div>
+      <div class="chstep">
+        <button data-act="cbstep" data-k="-1" aria-label="Less">−</button>
+        <span class="n tnum" id="chnum">${num(cond.n)}</span>
+        <button data-act="cbstep" data-k="1" aria-label="More">+</button>
+        <div class="seg tight chseg" role="group" aria-label="Share or number">
+          <button data-act="cbunit" data-k="pct" aria-pressed="${cond.unit === 'pct'}">% of stash</button>
+          <button data-act="cbunit" data-k="count" aria-pressed="${cond.unit === 'count'}">kits</button>
+        </div>
+      </div>
+      <p class="chhint">Ranked across the kits you own and have not finished, as they stand today, so it moves on as
+        you finish kits and buy more. ${cond.f === 'rankAge' ? 'Age goes by the day a kit was bought.' : 'Size is the canvas area.'}</p>`;
+  } else {
+    body = `
+      <div class="seg tight chseg" role="group" aria-label="At least or at most">
+        <button data-act="cbop" data-k="min" aria-pressed="${cond.op === 'min'}">at least</button>
+        <button data-act="cbop" data-k="max" aria-pressed="${cond.op === 'max'}">at most</button>
+      </div>
+      <div class="chstep">
+        <button data-act="cbstep" data-k="-1" aria-label="Less">−</button>
+        <span class="n tnum" id="chnum">${num(cond.n)}</span>${F.unit ? `<span class="chhint">${h(F.unit)}</span>` : ''}
+        <button data-act="cbstep" data-k="1" aria-label="More">+</button>
+      </div>
+      ${/^artist/.test(cond.f) ? `<p class="chhint">Counted as your stash stands today. Finish a kit by an artist with
+        “none finished” and their other kits leave the challenge; the one you finished stays, as completed.</p>` : ''}`;
+  }
+  return `<div class="cheditor">
+    <span class="label" style="margin:0">${h(F.label)}</span>${body}
+    <div style="display:flex;justify-content:space-between;gap:10px">
+      <button class="btn danger chsmall" data-act="cbdel">Remove</button>
+      <button class="btn primary chsmall" style="flex:0 0 auto" data-act="cbclose">Done</button>
+    </div></div>`;
+}
+
+function chPickRows() {
+  const on = new Set(CH.draft.picks);
+  const q = CH.pfind.trim().toLowerCase();
+  const kits = ownedKits().sort(LB_SORT.name);
+  const picked = kits.filter((p) => on.has(p.id));
+  const rest = kits.filter((p) => !on.has(p.id)
+    && (!q || p.title.toLowerCase().includes(q) || (p.artist || '').toLowerCase().includes(q)));
+  const row = (p, pressed) => `
+    <button class="chpick" data-act="cbpickkit" data-k="${p.id}" aria-pressed="${pressed}">
+      <span class="box"></span>
+      <span class="t">${h(p.title)}</span><span class="a">${h(p.artist || '')}</span></button>`;
+  return picked.map((p) => row(p, true)).join('') + rest.slice(0, CH_SHOWN).map((p) => row(p, false)).join('')
+    + (rest.length > CH_SHOWN ? `<span class="chmore">${rest.length - CH_SHOWN} more — type to narrow them down</span>` : '')
+    + (!kits.length ? `<span class="chmore">There are no kits in your logbook yet.</span>` : '');
+}
+
+function chPreview() {
+  const pv = CH.preview;
+  if (!pv) return '';
+  const byId = new Map(S.projects.map((p) => [p.id, p]));
+  const total = chTotal(pv);
+  const section = (s) => {
+    const items = (pv.sections[s.k] || []).map((id) => byId.get(id)).filter(Boolean).sort(LB_SORT.name);
+    if (!items.length) return '';
+    return `<div class="chsec" data-ch="${s.k}" style="background:${stVar(CH_TINT[s.k])}">
+      <div class="chsechead"><span class="dot" style="background:${stDot(CH_TINT[s.k])}"></span>
+        <span>${h(s.label)}</span><span class="n tnum">${items.length}</span></div>
+      ${items.slice(0, 6).map((p) => `<div class="chkit"><span class="t">${h(p.title)}</span>
+        <span class="a">${h(p.artist || '')}</span></div>`).join('')}
+      ${items.length > 6 ? `<div class="chmore">and ${items.length - 6} more</div>` : ''}</div>`;
+  };
+  return `
+    <h2 class="chh" id="chtotal">${total} ${total === 1 ? 'kit' : 'kits'} in this challenge</h2>
+    ${total ? CH_SECTIONS.map(section).join('')
+      : `<p class="chhint">Nothing you own matches yet. Kits you add later join on their own if they fit the rule.</p>`}`;
+}
+
+function paintBuilder() {
+  const d = CH.draft;
+  const scroller = scrollerOf($out);
+  const at = scroller ? scroller.scrollTop : 0;
+  const multi = d.groups.length > 1;
+
+  const groups = d.groups.map((g, gi) => `
+    ${gi ? `<div class="seg tight chseg chjoin" role="group" aria-label="How the groups combine">
+      <button data-act="cbjoin" data-k="all" aria-pressed="${d.join === 'all'}">AND</button>
+      <button data-act="cbjoin" data-k="any" aria-pressed="${d.join === 'any'}">OR</button></div>` : ''}
+    <div class="panel chgroup">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <div class="seg tight chseg" role="group" aria-label="Match all or any">
+          <button data-act="cbgmode" data-g="${gi}" data-k="all" aria-pressed="${g.mode === 'all'}">All of these</button>
+          <button data-act="cbgmode" data-g="${gi}" data-k="any" aria-pressed="${g.mode === 'any'}">Any of these</button>
+        </div>
+        ${multi ? `<button class="iconbtn" data-act="cbdelgroup" data-g="${gi}" aria-label="Remove this group">${svg('close', 14, 2.2)}</button>` : ''}
+      </div>
+      ${g.conds.map((cond, ci) => {
+        const open = CH.edit && CH.edit.g === gi && CH.edit.c === ci;
+        return `<button class="chcond${open ? ' open' : ''}" data-act="cbedit" data-g="${gi}" data-c="${ci}">${
+          h(conditionText(cond, chValName))}</button>${open ? chEditor(cond) : ''}`;
+      }).join('')}
+      ${CH.adding === gi ? `<div class="cheditor"><span class="label" style="margin:0">What about the kit?</span>
+          <div class="chvals">${Object.entries(CHALLENGE_FIELDS).map(([k, F]) =>
+            `<button class="chip" data-act="cbfield" data-g="${gi}" data-k="${k}">${h(F.label)}</button>`).join('')}</div></div>`
+        : `<button class="btn dashed wide chsmall" data-act="cbaddcond" data-g="${gi}">${svg('add', 16, 2)} Add a condition</button>`}
+    </div>`).join('');
+
+  $out.innerHTML = `
+  <div class="screen reading form">
+    <div class="topbar">${topbar(CH.id ? 'Edit challenge' : 'New challenge', { back: '#/', sub: true })}</div>
+    <div class="scroll pad" style="padding-bottom:24px">
+      <div class="stack" style="margin-top:16px">
+        ${CH.id ? '' : `<div><span class="label">Start from a preset</span>
+          <div class="chiprow">${CHALLENGE_PRESETS.map((p, i) =>
+            `<button class="chip" data-act="cbpreset" data-k="${i}" aria-pressed="${CH.preset === i}">${h(p.name)}</button>`).join('')}</div></div>`}
+        <div class="panel" style="padding:14px">
+          <div class="stack" style="gap:12px">
+            <div><label class="label" for="chname">Name</label>
+              <input class="fld" id="chname" value="${h(d.name)}" placeholder="Artists in Waiting 2027" autocomplete="off" maxlength="80"></div>
+            <div class="grid2">
+              <div><label class="label" for="chfrom">From</label><input class="fld" id="chfrom" type="date" value="${h(d.from)}"></div>
+              <div><label class="label" for="chto">To</label><input class="fld" id="chto" type="date" value="${h(d.to)}"></div>
+            </div>
+            <button class="chip chongoing" data-act="cbongoing" aria-pressed="${!d.to}">Ongoing: no end date, complete when no kits are left</button>
+            <div><span class="label">What counts</span>
+              <div class="chvals">${REQUIREMENTS.map((r) =>
+                `<button class="chip" data-act="cbreq" data-k="${r.k}" aria-pressed="${d.req === r.k}">${h(r.label)}</button>`).join('')}</div></div>
+          </div>
+        </div>
+
+        <div class="stack" style="gap:10px">
+          <h2 class="chh">Which kits</h2>
+          ${groups}
+          <button class="btn dashed wide chsmall" data-act="cbaddgroup">${svg('add', 16, 2)} Add another group</button>
+          <div class="panel chgroup">
+            <button class="chcond plain" data-act="cbpicks" aria-expanded="${CH.picksOpen}">
+              <span>Hand-picked kits · <span class="tnum" id="chpickn">${d.picks.length}</span></span>${svg(CH.picksOpen ? 'close' : 'add', 14, 2.2)}</button>
+            ${CH.picksOpen ? `<p class="chhint">For kits no rule can describe — a theme, a host’s list. They join the challenge
+                alongside whatever the rule finds.</p>
+              <input class="fld" id="chpfind" value="${h(CH.pfind)}" placeholder="Find a kit by title or artist" autocomplete="off">
+              <div class="chpicks" id="chpicks">${chPickRows()}</div>` : ''}
+          </div>
+          <p class="chread" id="chread">${h(CH.preview ? CH.preview.summary : '')}</p>
+        </div>
+
+        <div class="panel" style="padding:14px">
+          <div class="stack" style="gap:12px">
+            <div><label class="label" for="chnotes">Notes</label>
+              <textarea class="fld" id="chnotes" maxlength="2000" style="min-height:84px"
+                placeholder="Who hosts it, what the rules are">${h(d.notes)}</textarea></div>
+            <div><label class="label" for="chlink">Link to the rules</label>
+              <input class="fld" id="chlink" type="url" inputmode="url" value="${h(d.link)}"
+                placeholder="https://www.youtube.com/watch?v=…" autocomplete="off"></div>
+          </div>
+        </div>
+
+        <div class="stack" style="gap:10px">${chPreview()}</div>
+      </div>
+    </div>
+    <div class="actionbar">
+      ${CH.id ? `<button class="btn danger" data-act="cbdelete">Delete</button>` : ''}
+      <button class="btn primary" data-act="cbsave">${CH.id ? 'Save challenge' : 'Create challenge'}</button>
+    </div>
+  </div>`;
+
+  const now = scrollerOf($out);
+  if (now) now.scrollTop = at;
+  const name = document.getElementById('chname');
+  if (name) name.oninput = (e) => { d.name = e.target.value; };
+  for (const [id, k] of [['chnotes', 'notes'], ['chlink', 'link']]) {
+    const el = document.getElementById(id);
+    if (el) el.oninput = (e) => { d[k] = e.target.value; };
+  }
+  const when = document.getElementById('chdate');
+  if (when) when.onchange = async (e) => {
+    const cond = CH.edit && d.groups[CH.edit.g] && d.groups[CH.edit.g].conds[CH.edit.c];
+    if (cond) cond.d = e.target.value || '';
+    await chRefresh(); paintBuilder();
+  };
+  for (const [id, k] of [['chfrom', 'from'], ['chto', 'to']]) {
+    const el = document.getElementById(id);
+    if (el) el.onchange = async (e) => {
+      d[k] = e.target.value || '';
+      if (d.from && d.to && d.to < d.from) d[k === 'from' ? 'to' : 'from'] = d[k];
+      await chRefresh(); paintBuilder();
+    };
+  }
+  // typing narrows the chips underneath without repainting the box being typed in
+  const find = document.getElementById('chfind');
+  if (find) find.oninput = (e) => {
+    CH.find = e.target.value;
+    const cond = CH.edit && d.groups[CH.edit.g] && d.groups[CH.edit.g].conds[CH.edit.c];
+    const box = document.getElementById('chvals');
+    if (cond && box) box.innerHTML = chValueChips(cond);
+  };
+  const pfind = document.getElementById('chpfind');
+  if (pfind) pfind.oninput = (e) => {
+    CH.pfind = e.target.value;
+    const box = document.getElementById('chpicks');
+    if (box) box.innerHTML = chPickRows();
+  };
+}
+
+/** Everything tappable on the two challenge screens. Answers true if the tap was one of its own. */
+async function challengeTap(act, el) {
+  const k = el.dataset.k;
+  if (act === 'mode') {
+    S.mode = k === 'challenges' ? 'challenges' : 'stash';
+    localStorage.setItem('mode', S.mode);
+    S.lb.open = false;
+    if (S.mode === 'challenges') S.challenges = await api('/challenges');
+    repaintLogbook();
+    return true;
+  }
+  if (act === 'chpick') {
+    S.chId = Number(k);
+    localStorage.setItem('challenge', String(S.chId));
+    repaintLogbook();
+    return true;
+  }
+  if (!/^cb/.test(act) || !CH.draft) return false;
+
+  const d = CH.draft;
+  const g = Number(el.dataset.g);
+  const cur = CH.edit && d.groups[CH.edit.g] ? d.groups[CH.edit.g].conds[CH.edit.c] : null;
+
+  if (act === 'cbsave') {
+    const name = document.getElementById('chname');
+    if (name) d.name = name.value;
+    const link = d.link.trim();
+    if (link && !/^https?:\/\/\S+$/i.test(link)) {
+      toast('The link has to start with https://');
+      document.getElementById('chlink')?.focus();
+      return true;
+    }
+    if (!d.name.trim()) { toast('Give the challenge a name.'); if (name) name.focus(); return true; }
+    el.disabled = true;
+    const saved = await api(CH.id ? '/challenges/' + CH.id : '/challenges', {
+      method: CH.id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d)
+    });
+    S.mode = 'challenges'; S.chId = saved.id;
+    localStorage.setItem('mode', S.mode); localStorage.setItem('challenge', String(saved.id));
+    CH.key = null;
+    forgetScroll('#/');
+    toast(CH.id ? 'Challenge saved' : 'Challenge created');
+    back('#/');
+    return true;
+  }
+  if (act === 'cbdelete') {
+    if (!CH.id || !confirm('Delete this challenge? Your kits are not touched.')) return true;
+    await api('/challenges/' + CH.id, { method: 'DELETE' });
+    CH.key = null; S.chId = null;
+    forgetScroll('#/');
+    toast('Challenge deleted');
+    back('#/');
+    return true;
+  }
+
+  if (act === 'cbpreset') {
+    // a preset is a whole challenge: it replaces what was there, picks included
+    CH.draft = normaliseChallenge(CHALLENGE_PRESETS[Number(k)]);
+    Object.assign(CH, { preset: Number(k), edit: null, adding: null, picksOpen: false });
+    await chRefresh(); paintBuilder();
+    return true;
+  }
+  CH.preset = /^cb(edit|close|picks|addcond)$/.test(act) ? CH.preset : null;
+  if (act === 'cbreq') d.req = k;
+  else if (act === 'cbongoing') d.to = '';
+  else if (act === 'cbunit' && cur) { cur.unit = k === 'count' ? 'count' : 'pct'; cur.n = cur.unit === 'pct' ? 25 : 10; }
+  else if (act === 'cbjoin') d.join = k === 'all' ? 'all' : 'any';
+  else if (act === 'cbgmode') d.groups[g].mode = k === 'any' ? 'any' : 'all';
+  else if (act === 'cbaddgroup') { d.groups.push({ mode: 'all', conds: [] }); CH.adding = d.groups.length - 1; CH.edit = null; }
+  else if (act === 'cbdelgroup') {
+    d.groups.splice(g, 1);
+    if (!d.groups.length) d.groups.push({ mode: 'all', conds: [] });
+    CH.edit = null; CH.adding = null;
+  }
+  else if (act === 'cbaddcond') { CH.adding = g; CH.edit = null; }
+  else if (act === 'cbfield') {
+    const cond = freshCondition(k);
+    if (cond) { d.groups[g].conds.push(cond); CH.edit = { g, c: d.groups[g].conds.length - 1 }; }
+    CH.adding = null; CH.find = '';
+  }
+  else if (act === 'cbedit') {
+    const c = Number(el.dataset.c);
+    CH.edit = CH.edit && CH.edit.g === g && CH.edit.c === c ? null : { g, c };
+    CH.adding = null; CH.find = '';
+  }
+  else if (act === 'cbclose') CH.edit = null;
+  else if (act === 'cbdel' && cur) { d.groups[CH.edit.g].conds.splice(CH.edit.c, 1); CH.edit = null; }
+  else if (act === 'cbval' && cur) {
+    const has = cur.vals.some((v) => v.toLowerCase() === k.toLowerCase());
+    cur.vals = has ? cur.vals.filter((v) => v.toLowerCase() !== k.toLowerCase()) : [...cur.vals, k];
+  }
+  else if (act === 'cbnot' && cur) cur.not = k === '1';
+  else if (act === 'cbop' && cur) {
+    const kind = CHALLENGE_FIELDS[cur.f].kind;
+    const ends = kind === 'date' ? ['before', 'after'] : kind === 'rank' ? ['top', 'bottom'] : ['min', 'max'];
+    if (ends.includes(k)) cur.op = k;
+  }
+  else if (act === 'cbstep' && cur) {
+    const F = CHALLENGE_FIELDS[cur.f];
+    if (F.kind === 'rank') {
+      cur.n = Math.max(1, cur.n + Number(k) * (cur.unit === 'pct' ? 5 : 1));
+      if (cur.unit === 'pct') cur.n = Math.min(100, cur.n);
+    } else {
+      cur.n = Math.max(0, cur.n + Number(k) * F.step);
+      if (F.max != null) cur.n = Math.min(F.max, cur.n);
+    }
+  }
+  else if (act === 'cbpicks') { CH.picksOpen = !CH.picksOpen; CH.pfind = ''; }
+  else if (act === 'cbpickkit') {
+    const id = Number(k);
+    d.picks = d.picks.includes(id) ? d.picks.filter((x) => x !== id) : [...d.picks, id];
+  }
+  // the name is typed, not tapped: keep what is in the box through the repaint
+  const name = document.getElementById('chname');
+  if (name) d.name = name.value;
+  await chRefresh();
+  paintBuilder();
+  return true;
+}
 
 /* =============================================================== #/p/:id */
 route(/^#\/p\/(\d+)$/, async (id) => {
@@ -3148,6 +3642,7 @@ route(/^#\/settings$/, async () => {
         if (res.photosFailed) bits.push(`${res.photosFailed} photos could not be read`);
         if (res.ownCovers) bits.push(`${res.ownCovers} of your own covers`);
         if (res.legends) bits.push(`${res.legends} colour lists`);
+        if (res.challenges) bits.push(`${res.challenges} challenge${res.challenges === 1 ? '' : 's'}`);
         bits.push(`${res.covers} covers fetched`);
         if (res.catalogueEmpty) bits.push('covers need the catalogue synced first');
         else if (res.coversMissing) bits.push(`${res.coversMissing} without a cover`);
@@ -3440,12 +3935,13 @@ function dragCleanup() {
 
 function groupUnder(x, y) {
   const el = document.elementFromPoint(x, y);
-  return el ? el.closest('.group') : null;
+  return el ? el.closest('.group[data-status]') : null;
 }
 
 document.addEventListener('pointerdown', (e) => {
   const card = e.target.closest('.card[data-id]');
-  if (!card || e.button === 2) return;
+  // a challenge's sections are worked out, not chosen: there is nowhere to drag to
+  if (!card || e.button === 2 || !card.closest('.group[data-status]')) return;
   DRAG.startX = e.clientX; DRAG.startY = e.clientY;
   DRAG.pointerId = e.pointerId; DRAG.card = card;
   DRAG.timer = setTimeout(() => {
@@ -3575,6 +4071,8 @@ async function handleClick(e) {
      disappears" was, and removing the label around the row did not touch it. */
   if ((act === 'setdate' || act === 'lbartist') && e.type !== 'change') return;
 
+  if (await challengeTap(act, el)) return;
+
   if (act === 'filter') { S.filter = el.dataset.k; repaintLogbook(); }
   else if (act === 'lbfilters') { S.lb.open = !S.lb.open; paintLogbook(); }
   else if (act === 'sumyear') {
@@ -3648,13 +4146,13 @@ async function handleClick(e) {
   }
   else if (act === 'showsmallpics') {
     S.lb = { ...S.lb, gaps: 'pics', open: true };
-    S.filter = 'all'; S.q = '';
+    S.filter = 'all'; S.q = ''; S.mode = 'stash';
     forgetScroll('#/');
     go('#/');
   }
   else if (act === 'shownodates') {
     S.lb = { ...S.lb, gaps: 'dates', open: true };
-    S.filter = 'all'; S.q = '';
+    S.filter = 'all'; S.q = ''; S.mode = 'stash';
     forgetScroll('#/');
     go('#/');
   }
@@ -3669,7 +4167,7 @@ async function handleClick(e) {
   }
   else if (act === 'artistinlogbook') {
     S.lb = { ...freshLogbookFilters(), artist: el.dataset.artist.trim() };
-    S.filter = 'all'; S.q = '';
+    S.filter = 'all'; S.q = ''; S.mode = 'stash';
     forgetScroll('#/');
     go('#/');
   }
@@ -3693,7 +4191,7 @@ async function handleClick(e) {
   else if (act === 'drillinlogbook') {
     /* From the finder: the logbook, showing only the kits with this drill. */
     S.lb = { ...S.lb, open: true, drills: [{ code: el.dataset.k, name: el.dataset.name || null, hex: el.dataset.hex || null }] };
-    S.filter = 'all'; S.q = '';
+    S.filter = 'all'; S.q = ''; S.mode = 'stash';
     forgetScroll('#/');
     go('#/');
   }
@@ -3764,8 +4262,12 @@ async function handleClick(e) {
       const prefs = await api('/prefs').catch(() => null);
       const legends = await api('/legends').catch(() => ({}));
       const drills = await api('/drills').catch(() => ({}));
+      // the rules only: where each kit stands is worked out again from the projects
+      const challenges = (await api('/challenges').catch(() => []))
+        .map(({ sections, summary, ...c }) => c);
       const json = JSON.stringify({ version: 4, exportedAt: new Date().toISOString(),
-                                    projects, photos, sessions, progress, covers, prefs, legends, drills });
+                                    projects, photos, sessions, progress, covers, prefs, legends, drills,
+                                    challenges });
       const blob = new Blob([json], { type: 'application/json' });
       say('Writing the file…');
       const where = await saveToPhone('dazzle-diary-backup.json', blob);

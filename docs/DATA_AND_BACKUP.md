@@ -130,6 +130,29 @@ It is not the source of truth for the user's project history.
 - one-time UI hints
 - sync timestamps
 - migration markers
+- challenges
+
+## Challenges
+
+Challenges are kept as one list under the `challenges` key in `meta`.
+
+Each one holds only its definition:
+
+```text
+id
+name
+from, to        the dates, either of which may be empty
+req             both | finish | start | drills
+join            how the groups combine: all | any
+groups          [{ mode: all | any, conds: [...] }]
+picks           ids of projects added by hand
+notes           free text
+link            a web address for the rules, http or https only
+```
+
+Where a kit stands in a challenge is never stored. It is worked out on every read from the projects, the sessions and the progress history, so it cannot disagree with them.
+
+Deleting a project removes it from any challenge it was hand-picked into.
 
 ## Media files
 
@@ -223,9 +246,12 @@ The current payload is version 2 and contains:
   "projects": [],
   "photos": [],
   "sessions": [],
-  "progress": []
+  "progress": [],
+  "challenges": []
 }
 ```
+
+Challenges are carried as definitions only. On restore, a challenge whose name is already present is left alone, and hand-picked kits are matched to the restored projects' new ids.
 
 Hold history is contained in each project.
 

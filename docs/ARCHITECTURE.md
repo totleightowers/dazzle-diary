@@ -39,6 +39,7 @@ The architecture favours:
 ```text
 app/
   core/
+    challenges.js
     csv.js
     estimate.js
     import.js
@@ -105,6 +106,8 @@ Important client routes include:
 #/new                  new project
 #/browse               catalogue browser
 #/import               order import
+#/challenge/new        new challenge
+#/challenge/:id        edit a challenge
 #/summary              Summary and records
 #/settings             Settings
 #/licences             bundled font licences
@@ -155,6 +158,20 @@ Owns lifecycle rules such as:
 - held-day calculations
 
 Every UI route should use the same functions rather than reimplementing status semantics.
+
+### `challenges.js`
+
+Owns what a challenge means:
+
+- the fields a condition can ask about
+- how conditions, groups and hand-picked kits combine into a rule
+- the four requirements (start and finish, finish, start, drills down)
+- which section a kit falls in: eligible, in progress or completed
+- the plain-words reading of a rule
+- when a challenge is complete
+- the presets a new challenge can start from
+
+The store evaluates challenges through it and hands screens the project ids in each section. The logbook's challenge view and the builder draw from that; neither decides membership itself.
 
 ### `csv.js`, `match.js`, `import.js`
 
@@ -260,6 +277,7 @@ The catalogue is persisted in IndexedDB but also held in memory while the app is
 - preferences
 - one-time hint state
 - migration markers
+- challenges
 
 ## Media storage
 
