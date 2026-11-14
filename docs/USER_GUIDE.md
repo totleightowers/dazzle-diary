@@ -89,6 +89,80 @@ Dazzle remembers scroll position by screen.
 
 If you open a project from a long logbook and go back, the logbook should return to the place you left rather than starting at the top.
 
+## Challenges
+
+The switch at the top of the logbook changes what it shows:
+
+- **Stash** is every project, grouped by status.
+- **Challenges** is the kits that belong to one challenge, grouped by where they stand in it.
+
+Nothing moves when you switch. A challenge is another way of reading the same kits.
+
+### What a challenge is
+
+A challenge has a name, dates, a rule that says which kits are in it, and a requirement that says what counts.
+
+Each challenge appears as a chip. Tap a chip to see that challenge; tap **New** to make one; tap **Edit** to change or delete the one on screen.
+
+Its kits are shown in three sections:
+
+- **Eligible** — kits that are in the challenge and have not yet done what it asks.
+- **In progress** — kits that have done it, or are on the way, and are not finished.
+- **Completed** — kits that are finished and met the requirement.
+
+Completed always means the painting itself is finished. A kit that met a drills-down challenge in January stays under In progress until you finish it, and moves to Completed whenever that is.
+
+Only kits you own are in a challenge. Wish-list kits are left out, and so are abandoned ones.
+
+### What counts
+
+Choose one:
+
+- **Start and finish in the dates**
+- **Finish in the dates** — started whenever
+- **Start in the dates** — finished whenever
+- **Drills down in the dates** — any diamonds placed on the kit inside the dates
+
+Dazzle works this out from what the logbook already holds: the started and completed dates, painting sessions and progress updates. You do not tick anything.
+
+Leave a date empty for a challenge with no start or no end.
+
+### Which kits
+
+The rule is built by tapping.
+
+Tap **Add a condition**, choose what it is about, then choose the values:
+
+- **Artist**, **Title**, **Shop**, **Drill shape** — tap one or more values. More than one means any of them. Switch **is** to **is not** to turn the condition round.
+- **Canvas length + width**, **Diamond count**, **Colour count**, **Rating** — choose **at least** or **at most** and set the number.
+- **Artist’s kits I own** and **Artist’s kits I’ve finished** — about the artist rather than the kit. "At least 4 owned" with "none finished" is every artist you have collected but never completed.
+
+Conditions sit in a group that matches **All of these** or **Any of these**. **Add another group** adds a second group, joined to the first by **AND** or **OR**.
+
+The sentence under the rule reads it back in plain words, and the list below shows the kits it finds as you build.
+
+A rule with no conditions means every kit you own.
+
+Kits you add to the logbook later join a challenge on their own if they fit its rule.
+
+The artist counts are taken as they stood on the challenge's first day. Finishing an artist's first kit during the challenge does not take the artist out of it.
+
+### Hand-picked kits
+
+Some challenges cannot be described by a rule — a theme, or a list a host chose.
+
+Open **Hand-picked kits** and tick the kits. They join the challenge alongside whatever the rule finds. With no conditions at all, the hand-picked kits are the whole challenge.
+
+### Examples
+
+| Challenge | Rule | What counts |
+| --- | --- | --- |
+| An artist's paint-along | Artist is that artist | Drills down in the dates |
+| One particular painting | Title is the painting **and** Artist is its artist | Finish in the dates |
+| Artists in waiting | Artist’s kits I own at least 4 **and** Artist has none finished | Finish in the dates |
+| A large-canvas challenge | Canvas length + width at least 200 cm | Finish in the dates |
+| A themed event | Hand-picked kits | whichever the host asks for |
+
 ## Adding a project from the catalogue
 
 Tap **Add from catalogue**.
@@ -625,6 +699,7 @@ It contains:
 - hold history stored on the projects
 - progress photos
 - painting sessions
+- challenges
 
 Shop cover images are not embedded because they can normally be refetched.
 

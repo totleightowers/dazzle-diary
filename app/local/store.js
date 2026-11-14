@@ -22,6 +22,8 @@ import { readPalette, paletteSection } from '../core/palette.js';
 import { originalImage } from '../core/images.js';
 import { colourStats, distinctDrills, leanings } from '../core/colourstats.js';
 import { DAC_STATUS, readSyncResult, cleanColour } from '../core/dacsync.js';
+import { normalise as normaliseChallenge, evaluate as evaluateChallenge, activityDays,
+         describe as describeChallenge } from '../core/challenges.js';
 
 export const PROXY = '/__net/?url=';
 const via = (url) => PROXY + encodeURIComponent(url);
@@ -1116,6 +1118,11 @@ export async function localApi(path, opts = {}) {
       for (const x of await idb.byIndex('sessions', 'project_id', id)) await idb.del('sessions', x.id);
       for (const x of await idb.byIndex('progress', 'project_id', id)) await idb.del('progress', x.id);
       await idb.del('projects', id);
+      // a kit picked into a challenge by hand goes with it, or the count is wrong
+      const challenges = (await idb.get('meta', 'challenges')) || [];
+      if (challenges.some((c) => (c.picks || []).includes(id))) {
+        await idb.put('meta', challenges.map((c) => ({ ...c, picks: (c.picks || []).filter((x) => x !== id) })), 'challenges');
+      }
       return { ok: true };
     }
   }
@@ -1286,6 +1293,61 @@ export async function localApi(path, opts = {}) {
     const row = await idb.get('sessions', Number(ds[1]));
     if (row) { await idb.del('sessions', row.id); await recountHours(row.project_id); }
     return { ok: true };
+  }
+
+  /* ------------------------------------------------------------ challenges
+     A handful of small records, so they live together under one meta key
+     rather than in a store of their own. Where each kit stands is never kept:
+     it is worked out here, on every read, from the projects, the sessions and
+     the progress history — see core/challenges.js. */
+  if (p === '/challenges' || p.startsWith('/challenges/')) {
+    const all = async () => (await idb.get('meta', 'challenges')) || [];
+    const shopName = (f, v) => (f === 'shop' ? (shopById(v) || {}).name || v : v);
+    /* What a screen needs to draw one: the rule in words, and the ids of the
+       kits in each section. Ids rather than rows — the logbook already has
+       the rows, with their covers. */
+    const shaped = async (list) => {
+      const rows = await projects();
+      const days = activityDays(rows, await idb.all('sessions'), await idb.all('progress'));
+      return list.map((c) => {
+        const r = evaluateChallenge(c, rows, days);
+        return { ...c, summary: describeChallenge(c, shopName),
+                 sections: { eligible: r.eligible.map((x) => x.id), going: r.going.map((x) => x.id),
+                             done: r.done.map((x) => x.id) } };
+      });
+    };
+    const named = (body) => {
+      const c = normaliseChallenge(body);
+      if (!c.name) throw Object.assign(new Error('Give the challenge a name.'), { status: 400 });
+      return c;
+    };
+
+    if (p === '/challenges' && m === 'GET') return shaped(await all());
+    // a draft that has not been saved: the builder shows what it would hold
+    if (p === '/challenges/preview' && m === 'POST') return (await shaped([normaliseChallenge(json())]))[0];
+    if (p === '/challenges' && m === 'POST') {
+      const list = await all();
+      const c = { ...named(json()), id: list.reduce((n, x) => Math.max(n, x.id), 0) + 1, created_at: nowIso() };
+      await idb.put('meta', [...list, c], 'challenges');
+      return (await shaped([c]))[0];
+    }
+    const one = p.match(/^\/challenges\/(\d+)$/);
+    if (one) {
+      const id = Number(one[1]);
+      const list = await all();
+      const mine = list.find((c) => c.id === id);
+      if (!mine) throw Object.assign(new Error('That challenge is not here any more.'), { status: 404 });
+      if (m === 'GET') return (await shaped([mine]))[0];
+      if (m === 'PATCH') {
+        const next = { ...named(json()), id, created_at: mine.created_at, updated_at: nowIso() };
+        await idb.put('meta', list.map((c) => (c.id === id ? next : c)), 'challenges');
+        return (await shaped([next]))[0];
+      }
+      if (m === 'DELETE') {
+        await idb.put('meta', list.filter((c) => c.id !== id), 'challenges');
+        return { ok: true };
+      }
+    }
   }
 
   /* One timer at a time, kept in meta rather than on the project: it is a thing
@@ -1487,6 +1549,26 @@ export async function localApi(path, opts = {}) {
       if (legends) await idb.put('meta', all, 'legends');
     }
 
+    /* Challenges. One already here under the same name is left as it is — a
+       restore merges, and the one on this phone may have been edited since.
+       Hand-picked kits are named by id, and ids differ between phones, so they
+       are carried across through the same map the sessions and photos use. */
+    let challengesAdded = 0;
+    if (Array.isArray(data.challenges)) {
+      const mine = (await idb.get('meta', 'challenges')) || [];
+      const have = new Set(mine.map((c) => String(c.name || '').toLowerCase()));
+      let nextId = mine.reduce((n, c) => Math.max(n, c.id), 0) + 1;
+      for (const raw of data.challenges) {
+        const c = normaliseChallenge(raw);
+        if (!c.name || have.has(c.name.toLowerCase())) continue;
+        have.add(c.name.toLowerCase());
+        c.picks = c.picks.map((id) => idMap.get(id)).filter((id) => id != null);
+        mine.push({ ...c, id: nextId++, created_at: (raw && raw.created_at) || nowIso() });
+        challengesAdded++;
+      }
+      if (challengesAdded) await idb.put('meta', mine, 'challenges');
+    }
+
     /* Covers are not carried in the backup — they would treble its size — so
        they come from the catalogue, which is why it has to be synced first.
        This is backfillCovers rather than a fetch of its own: restore used to
@@ -1501,7 +1583,7 @@ export async function localApi(path, opts = {}) {
 
     return {
       added, updated, fieldsChanged, sessions: sessionsAdded, progress: progressAdded,
-      ownCovers, legends,
+      ownCovers, legends, challenges: challengesAdded,
       skipped: data.projects.length - added - updated,
       photos, photosFailed,
       covers, coversMissing,
