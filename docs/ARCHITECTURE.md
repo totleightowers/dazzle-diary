@@ -168,6 +168,8 @@ Owns what a challenge means:
 - the four requirements (start and finish, finish, start, drills down)
 - which section a kit falls in: eligible, in progress or completed
 - the plain-words reading of a rule
+- when a challenge is complete
+- the presets a new challenge can start from
 
 The store evaluates challenges through it and hands screens the project ids in each section. The logbook's challenge view and the builder draw from that; neither decides membership itself.
 

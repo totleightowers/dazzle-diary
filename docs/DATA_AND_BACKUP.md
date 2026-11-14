@@ -146,6 +146,8 @@ req             both | finish | start | drills
 join            how the groups combine: all | any
 groups          [{ mode: all | any, conds: [...] }]
 picks           ids of projects added by hand
+notes           free text
+link            a web address for the rules, http or https only
 ```
 
 Where a kit stands in a challenge is never stored. It is worked out on every read from the projects, the sessions and the progress history, so it cannot disagree with them.

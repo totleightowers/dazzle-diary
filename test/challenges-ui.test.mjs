@@ -186,3 +186,82 @@ test('challenges travel in the backup, and hand-picks find their kits on the oth
   assert.equal((await m.api('/restore', { method: 'POST', body: JSON.stringify(file) })).challenges, 0);
   assert.equal((await m.api('/challenges')).length, 1);
 });
+
+test('a preset fills the whole challenge in, with its notes and a link to the rules', async () => {
+  const m = await fresh();
+  await m.seed({ title: 'Scorpio', artist: 'Auclair Studio', status: 'received', width_in: 70 / 2.54, height_in: 130 / 2.54 });
+  await m.seed({ title: 'Small One', artist: 'Auclair Studio', status: 'received', width_in: 30 / 2.54, height_in: 40 / 2.54 });
+
+  await m.go('#/challenge/new');
+  const chips = m.all('[data-act="cbpreset"]').map((c) => c.textContent.replace(/&amp;/g, '&'));
+  for (const name of ['Refresh Your Stash 2026', '26 for 26', 'Art by Julia DP-along 2026', 'Fairy Tales & Folklore 2026',
+                      'Summer With the Masters 2026', 'Mega Drill Challenge 2027', 'Artists in Waiting 2027', 'Tiffany challenge'])
+    assert.ok(chips.includes(name), `no preset for ${name}`);
+
+  await m.tap(`[data-act="cbpreset"][data-k="${chips.indexOf('Mega Drill Challenge 2027')}"]`);
+  assert.equal(m.find('#chname').value, 'Mega Drill Challenge 2027');
+  assert.equal(m.find('#chfrom').value, '2027-01-01');
+  assert.match(m.find('#chnotes').textContent, /at least 200 cm/);
+  assert.match(m.find('#chlink').value, /^https:\/\/www\.tiktok\.com\//);
+  assert.equal(m.find('#chread').textContent, 'Owned kits where Length + width is at least 200 cm.');
+  assert.match(m.find('#chtotal').textContent, /^1 kit /);
+
+  // a link that is not a web address is refused, not quietly dropped
+  const link = m.find('#chlink');
+  link.value = 'see the video'; link.oninput({ target: link });
+  await m.tap('[data-act="cbsave"]');
+  assert.deepEqual(await m.api('/challenges'), []);
+  link.value = 'https://example.com/rules'; link.oninput({ target: link });
+  await m.tap('[data-act="cbsave"]');
+  await m.go('#/');
+  assert.match(m.find('.chnotes').textContent, /QueenConfetti/);
+  assert.equal(m.find('a.chlink').getAttribute('href'), 'https://example.com/rules');
+  // editing an existing challenge does not offer to overwrite it with a preset
+  await m.go('#/challenge/' + (await m.api('/challenges'))[0].id);
+  assert.equal(m.all('[data-act="cbpreset"]').length, 0);
+  await m.tap('[data-act="mode"][data-k="stash"]').catch(() => {});
+});
+
+test('an ongoing challenge over the oldest of the stash says so, and is complete when none are left', async () => {
+  const m = await fresh();
+  const old = await m.seed({ title: 'Oldest', status: 'received', date_ordered: '2021-05-01' });
+  for (const [t, d] of [['Second', '2022-05-01'], ['Third', '2023-05-01'], ['Newest', '2024-05-01']])
+    await m.seed({ title: t, status: 'received', date_ordered: d });
+
+  await m.go('#/challenge/new');
+  await setDate(m, 'chfrom', '2026-01-01');
+  await setDate(m, 'chto', '2026-12-31');
+  m.find('#chname').value = 'Refresh';
+  await m.tap('[data-act="cbongoing"]');
+  assert.equal(m.find('#chto').value, '', 'ongoing did not clear the end date');
+  await m.tap('[data-act="cbaddcond"]');
+  await m.tap('[data-act="cbfield"][data-k="rankAge"]');
+  assert.equal(m.find('#chread').textContent, 'Owned kits where Among the oldest 25% of the stash.');
+  assert.match(m.find('#chtotal').textContent, /^1 kit /);
+  // by number instead of share, and from the other end
+  await m.tap('[data-act="cbunit"][data-k="count"]');
+  assert.equal(m.find('#chnum').textContent, '10');
+  await m.tap('[data-act="cbunit"][data-k="pct"]');
+  await m.tap('[data-act="cbop"][data-k="bottom"]');
+  assert.equal(m.find('#chread').textContent, 'Owned kits where Among the newest 25% of the stash.');
+  await m.tap('[data-act="cbop"][data-k="top"]');
+  await m.tap('[data-act="cbclose"]');
+
+  // and "bought before" a date, set with the date box
+  await m.tap('[data-act="cbaddcond"]');
+  await m.tap('[data-act="cbfield"][data-k="bought"]');
+  await setDate(m, 'chdate', '2022-01-01');
+  assert.match(m.find('#chread').textContent, /and Bought before 1 Jan 2022\.$/);
+  await m.tap('[data-act="cbsave"]');
+  await m.go('#/');
+  assert.match(m.find('.chmeta').textContent, /From 01 Jan 2026, ongoing/);
+  assert.equal(m.find('.chdone'), null);
+  assert.deepEqual(section(m, 'eligible'), ['Oldest']);
+
+  await m.api('/projects/' + old.id, json('PATCH', { status: 'completed', date_started: '2026-02-01', date_completed: '2027-03-01' }));
+  await m.go('#/');
+  assert.deepEqual(section(m, 'done'), ['Oldest']);
+  assert.equal(m.find('.chdone').textContent, 'Complete');
+  assert.match(m.find('.chip[data-act="chpick"]').textContent, /done/);
+  await m.tap('[data-act="mode"][data-k="stash"]');
+});

@@ -127,6 +127,22 @@ Dazzle works this out from what the logbook already holds: the started and compl
 
 Leave a date empty for a challenge with no start or no end.
 
+### Ongoing challenges
+
+Tap **Ongoing** for a challenge with no end date.
+
+An ongoing challenge is not over on a day. It is **Complete** when it has kits and none of them are left to do: nothing Eligible, nothing In progress. Its chip then reads *done*.
+
+### Presets
+
+A new challenge can start from a preset: a community challenge with its dates, rule, notes and a link already filled in. Everything in a preset can be changed before saving.
+
+Where a host's rules are only given in a video, the preset's notes say which parts are a starting point to check.
+
+### Notes and a link
+
+A challenge can carry notes — who hosts it, what the rules are — and a link to where the rules are set out, such as the host's video. Both show under the challenge on the logbook; the link opens outside the app.
+
 ### Which kits
 
 The rule is built by tapping.
@@ -135,6 +151,8 @@ Tap **Add a condition**, choose what it is about, then choose the values:
 
 - **Artist**, **Title**, **Shop**, **Drill shape** — tap one or more values. More than one means any of them. Switch **is** to **is not** to turn the condition round.
 - **Canvas length + width**, **Diamond count**, **Colour count**, **Rating** — choose **at least** or **at most** and set the number.
+- **Bought** — **before** or **on or after** a date. It goes by the order date, or the delivery date if there is no order date; a kit with neither is left out.
+- **Oldest or newest in the stash**, **Largest or smallest in the stash** — a share of the stash ("the oldest 25%") or a number of kits ("the 10 largest"). Age goes by the day a kit was bought; size is the canvas area.
 - **Artist’s kits I own** and **Artist’s kits I’ve finished** — about the artist rather than the kit. "At least 4 owned" with "none finished" is every artist you have collected but never completed.
 
 Conditions sit in a group that matches **All of these** or **Any of these**. **Add another group** adds a second group, joined to the first by **AND** or **OR**.
@@ -146,6 +164,8 @@ A rule with no conditions means every kit you own.
 Kits you add to the logbook later join a challenge on their own if they fit its rule.
 
 The artist counts are taken as they stood on the challenge's first day. Finishing an artist's first kit during the challenge does not take the artist out of it.
+
+Oldest, newest, largest and smallest are worked out the same way: across the whole stash as it stood on the first day — what you owned then and had not finished. So "the oldest 25%" is a fixed set of kits. Finishing one does not pull the next-oldest in, and buying more does not move the line.
 
 ### Hand-picked kits
 
@@ -162,6 +182,7 @@ Open **Hand-picked kits** and tick the kits. They join the challenge alongside w
 | Artists in waiting | Artist’s kits I own at least 4 **and** Artist has none finished | Finish in the dates |
 | A large-canvas challenge | Canvas length + width at least 200 cm | Finish in the dates |
 | A themed event | Hand-picked kits | whichever the host asks for |
+| Refreshing the stash | Among the oldest 25% of the stash, ongoing | Finish in the dates |
 
 ## Adding a project from the catalogue
 

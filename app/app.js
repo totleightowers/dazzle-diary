@@ -7,7 +7,8 @@ import { buildTickScript, buildLegendScript } from './core/dacsync.js';
 import { buildOrdersScript } from './core/dacorders.js';
 import { originalImage } from './core/images.js';
 import { FIELDS as CHALLENGE_FIELDS, REQUIREMENTS, SECTIONS as CH_SECTIONS, blank as blankChallenge,
-         normalise as normaliseChallenge, freshCondition, conditionText } from './core/challenges.js';
+         normalise as normaliseChallenge, freshCondition, conditionText,
+         PRESETS as CHALLENGE_PRESETS } from './core/challenges.js';
 const SHOP_BY_NAME = Object.fromEntries(SHOPS.map((s) => [s.name, s]));
 /* Dazzle Diary — the whole client. Vanilla; no build step. */
 
@@ -1252,7 +1253,7 @@ const modeSwitch = () => `
 // the sections borrow the stash's own tints: waiting, under way, finished
 const CH_TINT = { eligible: 'received', going: 'started', done: 'completed' };
 const chDates = (c) => c.from && c.to ? `${dateText(c.from)} – ${dateText(c.to)}`
-  : c.from ? `From ${dateText(c.from)}` : c.to ? `Until ${dateText(c.to)}` : 'Any time';
+  : c.from ? `From ${dateText(c.from)}, ongoing` : c.to ? `Until ${dateText(c.to)}` : 'Ongoing';
 const chReq = (c) => (REQUIREMENTS.find((r) => r.k === c.req) || REQUIREMENTS[0]).label;
 const chTotal = (c) => CH_SECTIONS.reduce((n, s) => n + ((c.sections || {})[s.k] || []).length, 0);
 
@@ -1275,13 +1276,15 @@ function paintChallenges() {
       ${modeSwitch()}
       ${list.length ? `<div class="chiprow statusrow">${list.map((x) => `
         <button class="chip" data-act="chpick" data-k="${x.id}" aria-pressed="${x.id === S.chId}">
-          <span>${h(x.name)}</span><span class="n tnum">${chTotal(x)}</span></button>`).join('')}
+          <span>${h(x.name)}</span><span class="n tnum">${x.complete ? 'done' : chTotal(x)}</span></button>`).join('')}
         <button class="chip" data-go="#/challenge/new" aria-label="New challenge">${svg('add', 15, 2)}<span>New</span></button>
       </div>` : ''}
       ${c ? `<div class="panel chinfo">
         <div style="min-width:0;flex:1 1 auto">
-          <div class="chmeta">${h(chDates(c))} · ${h(chReq(c))}</div>
+          <div class="chmeta">${c.complete ? `<span class="chdone">Complete</span>` : ''}${h(chDates(c))} · ${h(chReq(c))}</div>
           <p class="chsum">${h(c.summary)}</p>
+          ${c.notes ? `<p class="chnotes">${h(c.notes)}</p>` : ''}
+          ${c.link ? `<a class="chlink" href="${h(c.link)}" target="_blank" rel="noopener noreferrer">Rules and details ${svg('chev', 14)}</a>` : ''}
         </div>
         <button class="btn ghost chedit" data-go="#/challenge/${c.id}">Edit</button>
       </div>
@@ -1312,13 +1315,15 @@ function paintChallenges() {
         <h2>No kits in this one yet</h2><p>Nothing you own matches its rule. Edit the challenge, or add the kits to your logbook.</p></div>` : ''}
     </div>
   </div>`;
+  // with a row of challenges longer than the screen, the chosen one is not left off the end of it
+  $list.querySelector('.chip[data-act="chpick"][aria-pressed="true"]')?.scrollIntoView?.({ inline: 'nearest', block: 'nearest' });
 }
 
 /* ------------------------------------------------- #/challenge/new, /:id
    Built by tapping, like the filters — typing a formula on a phone is nobody's
    idea of fun. The draft lives here rather than in the page, so every tap can
    repaint the screen without losing what has been put together. */
-const CH = { key: null, id: null, draft: null, edit: null, adding: null,
+const CH = { key: null, id: null, draft: null, edit: null, adding: null, preset: null,
              picksOpen: false, find: '', pfind: '', preview: null };
 
 route(/^#\/challenge\/(new|\d+)$/, async (which) => {
@@ -1327,7 +1332,7 @@ route(/^#\/challenge\/(new|\d+)$/, async (which) => {
   if (CH.key !== which || painted !== location.hash) {
     const saved = which === 'new' ? null : await api('/challenges/' + which);
     Object.assign(CH, { key: which, id: saved ? saved.id : null, draft: normaliseChallenge(saved || blankChallenge()),
-                        edit: null, adding: null, picksOpen: false, find: '', pfind: '', preview: null });
+                        edit: null, adding: null, preset: null, picksOpen: false, find: '', pfind: '', preview: null });
   }
   await chRefresh();
   paintBuilder();
@@ -1387,6 +1392,32 @@ function chEditor(cond) {
         placeholder="Find ${cond.f === 'title' ? 'a title' : 'an artist'}" autocomplete="off">` : ''}
       <div class="chvals" id="chvals">${chValueChips(cond)}</div>
       <p class="chhint">Tap more than one to mean any of them.</p>`;
+  } else if (F.kind === 'date') {
+    body = `
+      <div class="seg tight chseg" role="group" aria-label="Before or after">
+        <button data-act="cbop" data-k="before" aria-pressed="${cond.op === 'before'}">before</button>
+        <button data-act="cbop" data-k="after" aria-pressed="${cond.op === 'after'}">on or after</button>
+      </div>
+      <input class="fld" id="chdate" type="date" value="${h(cond.d)}" aria-label="Date">
+      <p class="chhint">Goes by the day a kit was ordered, or the day it arrived if there is no order date.
+        A kit with neither is left out.</p>`;
+  } else if (F.kind === 'rank') {
+    body = `
+      <div class="seg tight chseg" role="group" aria-label="Which end of the stash">
+        <button data-act="cbop" data-k="top" aria-pressed="${cond.op === 'top'}">${h(F.top)}</button>
+        <button data-act="cbop" data-k="bottom" aria-pressed="${cond.op === 'bottom'}">${h(F.bottom)}</button>
+      </div>
+      <div class="chstep">
+        <button data-act="cbstep" data-k="-1" aria-label="Less">−</button>
+        <span class="n tnum" id="chnum">${num(cond.n)}</span>
+        <button data-act="cbstep" data-k="1" aria-label="More">+</button>
+        <div class="seg tight chseg" role="group" aria-label="Share or number">
+          <button data-act="cbunit" data-k="pct" aria-pressed="${cond.unit === 'pct'}">% of stash</button>
+          <button data-act="cbunit" data-k="count" aria-pressed="${cond.unit === 'count'}">kits</button>
+        </div>
+      </div>
+      <p class="chhint">Ranked across your whole stash as it stood on the challenge’s first day: what you owned
+        then and had not finished. ${cond.f === 'rankAge' ? 'Age goes by the day a kit was bought.' : 'Size is the canvas area.'}</p>`;
   } else {
     body = `
       <div class="seg tight chseg" role="group" aria-label="At least or at most">
@@ -1480,6 +1511,9 @@ function paintBuilder() {
     <div class="topbar">${topbar(CH.id ? 'Edit challenge' : 'New challenge', { back: '#/', sub: true })}</div>
     <div class="scroll pad" style="padding-bottom:24px">
       <div class="stack" style="margin-top:16px">
+        ${CH.id ? '' : `<div><span class="label">Start from a preset</span>
+          <div class="chiprow">${CHALLENGE_PRESETS.map((p, i) =>
+            `<button class="chip" data-act="cbpreset" data-k="${i}" aria-pressed="${CH.preset === i}">${h(p.name)}</button>`).join('')}</div></div>`}
         <div class="panel" style="padding:14px">
           <div class="stack" style="gap:12px">
             <div><label class="label" for="chname">Name</label>
@@ -1488,6 +1522,7 @@ function paintBuilder() {
               <div><label class="label" for="chfrom">From</label><input class="fld" id="chfrom" type="date" value="${h(d.from)}"></div>
               <div><label class="label" for="chto">To</label><input class="fld" id="chto" type="date" value="${h(d.to)}"></div>
             </div>
+            <button class="chip chongoing" data-act="cbongoing" aria-pressed="${!d.to}">Ongoing: no end date, complete when no kits are left</button>
             <div><span class="label">What counts</span>
               <div class="chvals">${REQUIREMENTS.map((r) =>
                 `<button class="chip" data-act="cbreq" data-k="${r.k}" aria-pressed="${d.req === r.k}">${h(r.label)}</button>`).join('')}</div></div>
@@ -1509,6 +1544,17 @@ function paintBuilder() {
           <p class="chread" id="chread">${h(CH.preview ? CH.preview.summary : '')}</p>
         </div>
 
+        <div class="panel" style="padding:14px">
+          <div class="stack" style="gap:12px">
+            <div><label class="label" for="chnotes">Notes</label>
+              <textarea class="fld" id="chnotes" maxlength="2000" style="min-height:84px"
+                placeholder="Who hosts it, what the rules are">${h(d.notes)}</textarea></div>
+            <div><label class="label" for="chlink">Link to the rules</label>
+              <input class="fld" id="chlink" type="url" inputmode="url" value="${h(d.link)}"
+                placeholder="https://www.youtube.com/watch?v=…" autocomplete="off"></div>
+          </div>
+        </div>
+
         <div class="stack" style="gap:10px">${chPreview()}</div>
       </div>
     </div>
@@ -1522,6 +1568,16 @@ function paintBuilder() {
   if (now) now.scrollTop = at;
   const name = document.getElementById('chname');
   if (name) name.oninput = (e) => { d.name = e.target.value; };
+  for (const [id, k] of [['chnotes', 'notes'], ['chlink', 'link']]) {
+    const el = document.getElementById(id);
+    if (el) el.oninput = (e) => { d[k] = e.target.value; };
+  }
+  const when = document.getElementById('chdate');
+  if (when) when.onchange = async (e) => {
+    const cond = CH.edit && d.groups[CH.edit.g] && d.groups[CH.edit.g].conds[CH.edit.c];
+    if (cond) cond.d = e.target.value || '';
+    await chRefresh(); paintBuilder();
+  };
   for (const [id, k] of [['chfrom', 'from'], ['chto', 'to']]) {
     const el = document.getElementById(id);
     if (el) el.onchange = async (e) => {
@@ -1572,6 +1628,12 @@ async function challengeTap(act, el) {
   if (act === 'cbsave') {
     const name = document.getElementById('chname');
     if (name) d.name = name.value;
+    const link = d.link.trim();
+    if (link && !/^https?:\/\/\S+$/i.test(link)) {
+      toast('The link has to start with https://');
+      document.getElementById('chlink')?.focus();
+      return true;
+    }
     if (!d.name.trim()) { toast('Give the challenge a name.'); if (name) name.focus(); return true; }
     el.disabled = true;
     const saved = await api(CH.id ? '/challenges/' + CH.id : '/challenges', {
@@ -1595,7 +1657,17 @@ async function challengeTap(act, el) {
     return true;
   }
 
+  if (act === 'cbpreset') {
+    // a preset is a whole challenge: it replaces what was there, picks included
+    CH.draft = normaliseChallenge(CHALLENGE_PRESETS[Number(k)]);
+    Object.assign(CH, { preset: Number(k), edit: null, adding: null, picksOpen: false });
+    await chRefresh(); paintBuilder();
+    return true;
+  }
+  CH.preset = /^cb(edit|close|picks|addcond)$/.test(act) ? CH.preset : null;
   if (act === 'cbreq') d.req = k;
+  else if (act === 'cbongoing') d.to = '';
+  else if (act === 'cbunit' && cur) { cur.unit = k === 'count' ? 'count' : 'pct'; cur.n = cur.unit === 'pct' ? 25 : 10; }
   else if (act === 'cbjoin') d.join = k === 'all' ? 'all' : 'any';
   else if (act === 'cbgmode') d.groups[g].mode = k === 'any' ? 'any' : 'all';
   else if (act === 'cbaddgroup') { d.groups.push({ mode: 'all', conds: [] }); CH.adding = d.groups.length - 1; CH.edit = null; }
@@ -1622,11 +1694,20 @@ async function challengeTap(act, el) {
     cur.vals = has ? cur.vals.filter((v) => v.toLowerCase() !== k.toLowerCase()) : [...cur.vals, k];
   }
   else if (act === 'cbnot' && cur) cur.not = k === '1';
-  else if (act === 'cbop' && cur) cur.op = k === 'max' ? 'max' : 'min';
+  else if (act === 'cbop' && cur) {
+    const kind = CHALLENGE_FIELDS[cur.f].kind;
+    const ends = kind === 'date' ? ['before', 'after'] : kind === 'rank' ? ['top', 'bottom'] : ['min', 'max'];
+    if (ends.includes(k)) cur.op = k;
+  }
   else if (act === 'cbstep' && cur) {
     const F = CHALLENGE_FIELDS[cur.f];
-    cur.n = Math.max(0, cur.n + Number(k) * F.step);
-    if (F.max != null) cur.n = Math.min(F.max, cur.n);
+    if (F.kind === 'rank') {
+      cur.n = Math.max(1, cur.n + Number(k) * (cur.unit === 'pct' ? 5 : 1));
+      if (cur.unit === 'pct') cur.n = Math.min(100, cur.n);
+    } else {
+      cur.n = Math.max(0, cur.n + Number(k) * F.step);
+      if (F.max != null) cur.n = Math.min(F.max, cur.n);
+    }
   }
   else if (act === 'cbpicks') { CH.picksOpen = !CH.picksOpen; CH.pfind = ''; }
   else if (act === 'cbpickkit') {

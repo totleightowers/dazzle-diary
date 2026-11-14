@@ -176,3 +176,89 @@ test('whatever is handed in comes out as a challenge that can be trusted', () =>
   assert.deepEqual(c.picks, [3]);
   assert.deepEqual(normalise(null), blank());
 });
+
+test('bought before or after a date goes by the order date, then the delivery date', async () => {
+  const kits = [
+    kit('Old', 'A', { date_ordered: '2023-03-01' }),
+    kit('Arrived old', 'A', { date_received: '2023-12-31' }),
+    kit('New', 'A', { date_ordered: '2024-01-01' }),
+    kit('Undated', 'A')
+  ];
+  assert.deepEqual(names(evaluate(rule([{ f: 'bought', op: 'before', d: '2024-01-01' }]), kits).eligible), ['Arrived old', 'Old']);
+  assert.deepEqual(names(evaluate(rule([{ f: 'bought', op: 'after', d: '2024-01-01' }]), kits).eligible), ['New']);
+  // a date not chosen yet rules nothing out
+  assert.equal(evaluate(rule([{ f: 'bought', op: 'before', d: '' }]), kits).eligible.length, 4);
+  assert.equal(conditionText({ f: 'bought', op: 'before', d: '2024-01-01' }), 'Bought before 1 Jan 2024');
+  assert.equal(conditionText({ f: 'bought', op: 'after', d: '2024-01-01' }), 'Bought on or after 1 Jan 2024');
+});
+
+test('the oldest quarter of the stash is fixed on the first day, so an ongoing challenge can be completed', async () => {
+  const { isComplete } = await import('../app/core/challenges.js');
+  const stash = () => [
+    ...[1, 2, 3, 4, 5, 6, 7, 8].map((i) => kit(`Kit ${i}`, 'A', { date_ordered: `202${i < 5 ? 2 : 4}-0${i}-01` })),
+    kit('Finished long ago', 'A', { status: 'completed', date_ordered: '2020-01-01', date_completed: '2021-01-01' }),
+    kit('Wished', 'A', { status: 'wishlist', date_ordered: '2019-01-01' }),
+    kit('Undated', 'A')
+  ];
+  const c = rule([{ f: 'rankAge', op: 'top', n: 25, unit: 'pct' }], { req: 'finish', from: '2026-01-01', to: '' });
+  let kits = stash();
+  let r = evaluate(c, kits);
+  assert.deepEqual(names(r.eligible), ['Kit 1', 'Kit 2'], 'a quarter of the eight unfinished, dated kits');
+  assert.equal(isComplete(r), false);
+
+  // finishing one does not pull the third-oldest in to replace it
+  kits = kits.map((p) => p.title === 'Kit 1' ? { ...p, status: 'completed', date_started: '2026-01-05', date_completed: '2026-02-01' } : p);
+  r = evaluate(c, kits);
+  assert.deepEqual(names(r.done), ['Kit 1']);
+  assert.deepEqual(names(r.eligible), ['Kit 2']);
+
+  // nor does buying more move the line
+  kits = [...kits, ...[1, 2, 3, 4].map((i) => kit(`Bought later ${i}`, 'A', { date_ordered: `2026-03-0${i}` }))];
+  assert.deepEqual(names(evaluate(c, kits).eligible), ['Kit 2']);
+
+  // when the last one is finished there is nothing left, and the challenge is complete
+  kits = kits.map((p) => p.title === 'Kit 2' ? { ...p, status: 'completed', date_started: '2026-04-01', date_completed: '2027-08-01' } : p);
+  r = evaluate(c, kits);
+  assert.deepEqual(names(r.done), ['Kit 1', 'Kit 2'], 'no end date: a finish a year on still counts');
+  assert.equal(isComplete(r), true);
+  assert.equal(isComplete(evaluate(c, [])), false, 'a challenge with no kits in it is not a finished one');
+});
+
+test('newest, largest and smallest, by share or by number', () => {
+  const kits = [
+    kit('Tiny', 'A', { width_in: 8, height_in: 8, date_ordered: '2021-01-01' }),
+    kit('Mid', 'A', { width_in: 16, height_in: 20, date_ordered: '2022-01-01' }),
+    kit('Big', 'A', { width_in: 30, height_in: 40, date_ordered: '2023-01-01' }),
+    kit('Huge', 'A', { width_in: 40, height_in: 50, date_ordered: '2024-01-01' }),
+    kit('No size', 'A', { date_ordered: '2025-01-01' })
+  ];
+  const got = (cond) => names(evaluate(rule([cond]), kits).eligible);
+  assert.deepEqual(got({ f: 'rankSize', op: 'top', n: 1, unit: 'count' }), ['Huge']);
+  assert.deepEqual(got({ f: 'rankSize', op: 'bottom', n: 2, unit: 'count' }), ['Mid', 'Tiny']);
+  assert.deepEqual(got({ f: 'rankSize', op: 'top', n: 50, unit: 'pct' }), ['Big', 'Huge']);
+  assert.deepEqual(got({ f: 'rankAge', op: 'bottom', n: 2, unit: 'count' }), ['Huge', 'No size']);
+  assert.equal(conditionText({ f: 'rankAge', op: 'top', n: 25, unit: 'pct' }), 'Among the oldest 25% of the stash');
+  assert.equal(conditionText({ f: 'rankSize', op: 'bottom', n: 3, unit: 'count' }), 'Among the 3 smallest in the stash');
+  assert.equal(conditionText({ f: 'rankSize', op: 'top', n: 1, unit: 'count' }), 'The largest in the stash');
+});
+
+test('notes are kept, and only a web address is kept as the link', () => {
+  assert.equal(normalise({ notes: '  Hosted by someone  ', link: ' https://www.youtube.com/watch?v=abc ' }).link,
+    'https://www.youtube.com/watch?v=abc');
+  assert.equal(normalise({ notes: '  Hosted by someone  ' }).notes, 'Hosted by someone');
+  for (const bad of ['javascript:alert(1)', 'youtube.com/x', 'https://a b', 'https://x"onclick="y'])
+    assert.equal(normalise({ link: bad }).link, '', `${bad} was kept as a link`);
+});
+
+test('every preset is a challenge the app can open as it stands', async () => {
+  const { PRESETS } = await import('../app/core/challenges.js');
+  assert.ok(PRESETS.length >= 8);
+  assert.equal(new Set(PRESETS.map((p) => p.name)).size, PRESETS.length, 'two presets share a name');
+  for (const p of PRESETS) {
+    const c = normalise(p);
+    for (const k of ['name', 'from', 'to', 'req', 'notes', 'link']) assert.equal(c[k], p[k], `${p.name}: ${k} did not survive`);
+    assert.equal(c.groups[0].conds.length, p.groups[0].conds.length, `${p.name}: a condition was dropped`);
+    assert.ok(c.notes.length > 20, `${p.name} says nothing about itself`);
+    assert.doesNotThrow(() => { evaluate(c, [kit('X', 'Y')]); describe(c); });
+  }
+});

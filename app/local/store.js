@@ -23,7 +23,7 @@ import { originalImage } from '../core/images.js';
 import { colourStats, distinctDrills, leanings } from '../core/colourstats.js';
 import { DAC_STATUS, readSyncResult, cleanColour } from '../core/dacsync.js';
 import { normalise as normaliseChallenge, evaluate as evaluateChallenge, activityDays,
-         describe as describeChallenge } from '../core/challenges.js';
+         describe as describeChallenge, isComplete } from '../core/challenges.js';
 
 export const PROXY = '/__net/?url=';
 const via = (url) => PROXY + encodeURIComponent(url);
@@ -1311,7 +1311,7 @@ export async function localApi(path, opts = {}) {
       const days = activityDays(rows, await idb.all('sessions'), await idb.all('progress'));
       return list.map((c) => {
         const r = evaluateChallenge(c, rows, days);
-        return { ...c, summary: describeChallenge(c, shopName),
+        return { ...c, summary: describeChallenge(c, shopName), complete: isComplete(r),
                  sections: { eligible: r.eligible.map((x) => x.id), going: r.going.map((x) => x.id),
                              done: r.done.map((x) => x.id) } };
       });
