@@ -302,3 +302,12 @@ test('a challenge follows the stash: kits join as they arrive and leave as they 
     { status: 'completed', date_started: '2026-01-03', date_completed: '2026-02-01', sold_price: 60 })];
   assert.deepEqual(names(evaluate(c, finishedThenSold, activityDays(finishedThenSold)).done), ['Strawberry Picnic']);
 });
+
+test('the Tiffany Fan Art preset names the artist in full, so it finds the kit', async () => {
+  const { PRESETS } = await import('../app/core/challenges.js');
+  const preset = PRESETS.find((p) => p.name === 'Tiffany Fan Art');
+  const kits = [kit('Onihime', 'Margaret Morales'), kit('Onihime', 'Somebody Else'), kit('Other', 'Margaret Morales')];
+  const r = evaluate(preset, kits);
+  assert.deepEqual(r.eligible.map((p) => p.artist), ['Margaret Morales']);
+  assert.equal(r.eligible[0].title, 'Onihime');
+});
