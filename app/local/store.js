@@ -1318,7 +1318,7 @@ export async function localApi(path, opts = {}) {
     };
     const named = (body) => {
       const c = normaliseChallenge(body);
-      if (!c.name) throw Object.assign(new Error('Give the challenge a name.'), { status: 400 });
+      if (!c.name) throw Object.assign(new Error('Enter a name for the challenge.'), { status: 400 });
       return c;
     };
 
@@ -1336,7 +1336,7 @@ export async function localApi(path, opts = {}) {
       const id = Number(one[1]);
       const list = await all();
       const mine = list.find((c) => c.id === id);
-      if (!mine) throw Object.assign(new Error('That challenge is not here any more.'), { status: 404 });
+      if (!mine) throw Object.assign(new Error('Challenge not found.'), { status: 404 });
       if (m === 'GET') return (await shaped([mine]))[0];
       if (m === 'PATCH') {
         const next = { ...named(json()), id, created_at: mine.created_at, updated_at: nowIso() };

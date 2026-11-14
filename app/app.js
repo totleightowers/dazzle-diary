@@ -1245,7 +1245,7 @@ const emptyLogbook = () => `
    something you have signed up to. Same screen, same cards, one switch at the
    top — a challenge is a way of reading the stash, not somewhere else to go. */
 const modeSwitch = () => `
-  <div class="seg tight modeswitch" role="group" aria-label="What the logbook shows">
+  <div class="seg tight modeswitch" role="group" aria-label="View">
     <button data-act="mode" data-k="stash" aria-pressed="${S.mode !== 'challenges'}">Stash</button>
     <button data-act="mode" data-k="challenges" aria-pressed="${S.mode === 'challenges'}">Challenges</button>
   </div>`;
@@ -1253,7 +1253,7 @@ const modeSwitch = () => `
 // the sections borrow the stash's own tints: waiting, under way, finished
 const CH_TINT = { eligible: 'received', going: 'started', done: 'completed' };
 const chDates = (c) => c.from && c.to ? `${dateText(c.from)} – ${dateText(c.to)}`
-  : c.from ? `From ${dateText(c.from)}, ongoing` : c.to ? `Until ${dateText(c.to)}` : 'Ongoing';
+  : c.from ? `From ${dateText(c.from)} · Ongoing` : c.to ? `Until ${dateText(c.to)}` : 'Ongoing';
 const chReq = (c) => (REQUIREMENTS.find((r) => r.k === c.req) || REQUIREMENTS[0]).label;
 const chTotal = (c) => CH_SECTIONS.reduce((n, s) => n + ((c.sections || {})[s.k] || []).length, 0);
 
@@ -1276,7 +1276,7 @@ function paintChallenges() {
       ${modeSwitch()}
       ${list.length ? `<div class="chiprow statusrow">${list.map((x) => `
         <button class="chip" data-act="chpick" data-k="${x.id}" aria-pressed="${x.id === S.chId}">
-          <span>${h(x.name)}</span><span class="n tnum">${x.complete ? 'done' : chTotal(x)}</span></button>`).join('')}
+          <span>${h(x.name)}</span><span class="n tnum">${x.complete ? 'Complete' : chTotal(x)}</span></button>`).join('')}
         <button class="chip" data-go="#/challenge/new" aria-label="New challenge">${svg('add', 15, 2)}<span>New</span></button>
       </div>` : ''}
       ${c ? `<div class="panel chinfo">
@@ -1284,7 +1284,7 @@ function paintChallenges() {
           <div class="chmeta">${c.complete ? `<span class="chdone">Complete</span>` : ''}${h(chDates(c))} · ${h(chReq(c))}</div>
           <p class="chsum">${h(c.summary)}</p>
           ${c.notes ? `<p class="chnotes">${h(c.notes)}</p>` : ''}
-          ${c.link ? `<a class="chlink" href="${h(c.link)}" target="_blank" rel="noopener noreferrer">Rules and details ${svg('chev', 14)}</a>` : ''}
+          ${c.link ? `<a class="chlink" href="${h(c.link)}" target="_blank" rel="noopener noreferrer">View rules ${svg('chev', 14)}</a>` : ''}
         </div>
         <button class="btn ghost chedit" data-go="#/challenge/${c.id}">Edit</button>
       </div>
@@ -1301,8 +1301,7 @@ function paintChallenges() {
     <div class="scroll pad" style="padding-bottom:24px">
       ${!c ? `<div class="empty">${svg('gem', 44, 1.2)}
         <h2>No challenges yet</h2>
-        <p>A challenge picks kits out of your stash by a rule — an artist, a size, one particular painting —
-          and shows which are waiting, which are under way and which are finished.</p>
+        <p>Track community or personal challenges against the kits in your stash.</p>
         <button class="btn primary wide" style="margin-top:8px" data-go="#/challenge/new">${svg('add', 18, 2)} New challenge</button>
       </div>` : ''}
       ${groups.filter((g) => g.items.length).map((g) => `
@@ -1312,7 +1311,7 @@ function paintChallenges() {
           <div class="group-body">${g.items.map(card).join('')}</div>
         </section>`).join('')}
       ${c && !total ? `<div class="empty">${svg('gem', 40, 1.3)}
-        <h2>No kits in this one yet</h2><p>Nothing you own matches its rule. Edit the challenge, or add the kits to your logbook.</p></div>` : ''}
+        <h2>No eligible kits</h2><p>No kits in your stash match this challenge.</p></div>` : ''}
     </div>
   </div>`;
   // with a row of challenges longer than the screen, the chosen one is not left off the end of it
@@ -1375,8 +1374,8 @@ function chValueChips(cond) {
   const chip = ([v, n], pressed) =>
     `<button class="chip" data-act="cbval" data-k="${h(v)}" aria-pressed="${pressed}">${h(n)}</button>`;
   return picked.map((o) => chip(o, true)).join('') + rest.slice(0, CH_SHOWN).map((o) => chip(o, false)).join('')
-    + (rest.length > CH_SHOWN ? `<span class="chmore">${rest.length - CH_SHOWN} more — type to narrow them down</span>` : '')
-    + (!picked.length && !rest.length ? `<span class="chmore">Nothing in your logbook matches that.</span>` : '');
+    + (rest.length > CH_SHOWN ? `<span class="chmore">${rest.length - CH_SHOWN} more. Search to find them.</span>` : '')
+    + (!picked.length && !rest.length ? `<span class="chmore">No matches.</span>` : '');
 }
 
 function chEditor(cond) {
@@ -1389,9 +1388,9 @@ function chEditor(cond) {
         <button data-act="cbnot" data-k="1" aria-pressed="${!!cond.not}">is not</button>
       </div>
       ${chOptions(cond.f).length > 12 ? `<input class="fld" id="chfind" value="${h(CH.find)}"
-        placeholder="Find ${cond.f === 'title' ? 'a title' : 'an artist'}" autocomplete="off">` : ''}
+        placeholder="Search ${cond.f === 'title' ? 'titles' : 'artists'}" autocomplete="off">` : ''}
       <div class="chvals" id="chvals">${chValueChips(cond)}</div>
-      <p class="chhint">Tap more than one to mean any of them.</p>`;
+      <p class="chhint">Select one or more.</p>`;
   } else if (F.kind === 'date') {
     body = `
       <div class="seg tight chseg" role="group" aria-label="Before or after">
@@ -1399,11 +1398,10 @@ function chEditor(cond) {
         <button data-act="cbop" data-k="after" aria-pressed="${cond.op === 'after'}">on or after</button>
       </div>
       <input class="fld" id="chdate" type="date" value="${h(cond.d)}" aria-label="Date">
-      <p class="chhint">Goes by the day a kit was ordered, or the day it arrived if there is no order date.
-        A kit with neither is left out.</p>`;
+      <p class="chhint">Uses the order date, or the received date if there is none.</p>`;
   } else if (F.kind === 'rank') {
     body = `
-      <div class="seg tight chseg" role="group" aria-label="Which end of the stash">
+      <div class="seg tight chseg" role="group" aria-label="Order">
         <button data-act="cbop" data-k="top" aria-pressed="${cond.op === 'top'}">${h(F.top)}</button>
         <button data-act="cbop" data-k="bottom" aria-pressed="${cond.op === 'bottom'}">${h(F.bottom)}</button>
       </div>
@@ -1411,26 +1409,24 @@ function chEditor(cond) {
         <button data-act="cbstep" data-k="-1" aria-label="Less">−</button>
         <span class="n tnum" id="chnum">${num(cond.n)}</span>
         <button data-act="cbstep" data-k="1" aria-label="More">+</button>
-        <div class="seg tight chseg" role="group" aria-label="Share or number">
-          <button data-act="cbunit" data-k="pct" aria-pressed="${cond.unit === 'pct'}">% of stash</button>
+        <div class="seg tight chseg" role="group" aria-label="Unit">
+          <button data-act="cbunit" data-k="pct" aria-pressed="${cond.unit === 'pct'}">%</button>
           <button data-act="cbunit" data-k="count" aria-pressed="${cond.unit === 'count'}">kits</button>
         </div>
       </div>
-      <p class="chhint">Ranked across the kits you own and have not finished, as they stand today, so it moves on as
-        you finish kits and buy more. ${cond.f === 'rankAge' ? 'Age goes by the day a kit was bought.' : 'Size is the canvas area.'}</p>`;
+      <p class="chhint">Ranked among unfinished kits in your stash. Updates as you finish or add kits. ${cond.f === 'rankAge' ? 'Age uses the purchase date.' : 'Size uses canvas area.'}</p>`;
   } else {
     body = `
       <div class="seg tight chseg" role="group" aria-label="At least or at most">
-        <button data-act="cbop" data-k="min" aria-pressed="${cond.op === 'min'}">at least</button>
-        <button data-act="cbop" data-k="max" aria-pressed="${cond.op === 'max'}">at most</button>
+        <button data-act="cbop" data-k="min" aria-pressed="${cond.op === 'min'}">≥ at least</button>
+        <button data-act="cbop" data-k="max" aria-pressed="${cond.op === 'max'}">≤ at most</button>
       </div>
       <div class="chstep">
         <button data-act="cbstep" data-k="-1" aria-label="Less">−</button>
         <span class="n tnum" id="chnum">${num(cond.n)}</span>${F.unit ? `<span class="chhint">${h(F.unit)}</span>` : ''}
         <button data-act="cbstep" data-k="1" aria-label="More">+</button>
       </div>
-      ${/^artist/.test(cond.f) ? `<p class="chhint">Counted as your stash stands today. Finish a kit by an artist with
-        “none finished” and their other kits leave the challenge; the one you finished stays, as completed.</p>` : ''}`;
+      ${/^artist/.test(cond.f) ? `<p class="chhint">Counts kits in your stash by the same artist. Updates as you finish kits.</p>` : ''}`;
   }
   return `<div class="cheditor">
     <span class="label" style="margin:0">${h(F.label)}</span>${body}
@@ -1452,8 +1448,8 @@ function chPickRows() {
       <span class="box"></span>
       <span class="t">${h(p.title)}</span><span class="a">${h(p.artist || '')}</span></button>`;
   return picked.map((p) => row(p, true)).join('') + rest.slice(0, CH_SHOWN).map((p) => row(p, false)).join('')
-    + (rest.length > CH_SHOWN ? `<span class="chmore">${rest.length - CH_SHOWN} more — type to narrow them down</span>` : '')
-    + (!kits.length ? `<span class="chmore">There are no kits in your logbook yet.</span>` : '');
+    + (rest.length > CH_SHOWN ? `<span class="chmore">${rest.length - CH_SHOWN} more. Search to find them.</span>` : '')
+    + (!kits.length ? `<span class="chmore">No kits in your stash.</span>` : '');
 }
 
 function chPreview() {
@@ -1472,9 +1468,9 @@ function chPreview() {
       ${items.length > 6 ? `<div class="chmore">and ${items.length - 6} more</div>` : ''}</div>`;
   };
   return `
-    <h2 class="chh" id="chtotal">${total} ${total === 1 ? 'kit' : 'kits'} in this challenge</h2>
+    <h2 class="chh" id="chtotal">${total} ${total === 1 ? 'kit' : 'kits'} match</h2>
     ${total ? CH_SECTIONS.map(section).join('')
-      : `<p class="chhint">Nothing you own matches yet. Kits you add later join on their own if they fit the rule.</p>`}`;
+      : `<p class="chhint">No kits in your stash match yet.</p>`}`;
 }
 
 function paintBuilder() {
@@ -1484,14 +1480,14 @@ function paintBuilder() {
   const multi = d.groups.length > 1;
 
   const groups = d.groups.map((g, gi) => `
-    ${gi ? `<div class="seg tight chseg chjoin" role="group" aria-label="How the groups combine">
+    ${gi ? `<div class="seg tight chseg chjoin" role="group" aria-label="Combine groups with">
       <button data-act="cbjoin" data-k="all" aria-pressed="${d.join === 'all'}">AND</button>
       <button data-act="cbjoin" data-k="any" aria-pressed="${d.join === 'any'}">OR</button></div>` : ''}
     <div class="panel chgroup">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
         <div class="seg tight chseg" role="group" aria-label="Match all or any">
-          <button data-act="cbgmode" data-g="${gi}" data-k="all" aria-pressed="${g.mode === 'all'}">All of these</button>
-          <button data-act="cbgmode" data-g="${gi}" data-k="any" aria-pressed="${g.mode === 'any'}">Any of these</button>
+          <button data-act="cbgmode" data-g="${gi}" data-k="all" aria-pressed="${g.mode === 'all'}">Match all</button>
+          <button data-act="cbgmode" data-g="${gi}" data-k="any" aria-pressed="${g.mode === 'any'}">Match any</button>
         </div>
         ${multi ? `<button class="iconbtn" data-act="cbdelgroup" data-g="${gi}" aria-label="Remove this group">${svg('close', 14, 2.2)}</button>` : ''}
       </div>
@@ -1500,10 +1496,10 @@ function paintBuilder() {
         return `<button class="chcond${open ? ' open' : ''}" data-act="cbedit" data-g="${gi}" data-c="${ci}">${
           h(conditionText(cond, chValName))}</button>${open ? chEditor(cond) : ''}`;
       }).join('')}
-      ${CH.adding === gi ? `<div class="cheditor"><span class="label" style="margin:0">What about the kit?</span>
+      ${CH.adding === gi ? `<div class="cheditor"><span class="label" style="margin:0">Choose a field</span>
           <div class="chvals">${Object.entries(CHALLENGE_FIELDS).map(([k, F]) =>
             `<button class="chip" data-act="cbfield" data-g="${gi}" data-k="${k}">${h(F.label)}</button>`).join('')}</div></div>`
-        : `<button class="btn dashed wide chsmall" data-act="cbaddcond" data-g="${gi}">${svg('add', 16, 2)} Add a condition</button>`}
+        : `<button class="btn dashed wide chsmall" data-act="cbaddcond" data-g="${gi}">${svg('add', 16, 2)} Add condition</button>`}
     </div>`).join('');
 
   $out.innerHTML = `
@@ -1511,34 +1507,33 @@ function paintBuilder() {
     <div class="topbar">${topbar(CH.id ? 'Edit challenge' : 'New challenge', { back: '#/', sub: true })}</div>
     <div class="scroll pad" style="padding-bottom:24px">
       <div class="stack" style="margin-top:16px">
-        ${CH.id ? '' : `<div><span class="label">Start from a preset</span>
+        ${CH.id ? '' : `<div><span class="label">Presets</span>
           <div class="chiprow">${CHALLENGE_PRESETS.map((p, i) =>
             `<button class="chip" data-act="cbpreset" data-k="${i}" aria-pressed="${CH.preset === i}">${h(p.name)}</button>`).join('')}</div></div>`}
         <div class="panel" style="padding:14px">
           <div class="stack" style="gap:12px">
             <div><label class="label" for="chname">Name</label>
-              <input class="fld" id="chname" value="${h(d.name)}" placeholder="Artists in Waiting 2027" autocomplete="off" maxlength="80"></div>
+              <input class="fld" id="chname" value="${h(d.name)}" placeholder="Challenge name" autocomplete="off" maxlength="80"></div>
             <div class="grid2">
               <div><label class="label" for="chfrom">From</label><input class="fld" id="chfrom" type="date" value="${h(d.from)}"></div>
               <div><label class="label" for="chto">To</label><input class="fld" id="chto" type="date" value="${h(d.to)}"></div>
             </div>
-            <button class="chip chongoing" data-act="cbongoing" aria-pressed="${!d.to}">Ongoing: no end date, complete when no kits are left</button>
-            <div><span class="label">What counts</span>
+            <button class="chip chongoing" data-act="cbongoing" aria-pressed="${!d.to}">Ongoing (no end date)</button>
+            <div><span class="label">Requirement</span>
               <div class="chvals">${REQUIREMENTS.map((r) =>
                 `<button class="chip" data-act="cbreq" data-k="${r.k}" aria-pressed="${d.req === r.k}">${h(r.label)}</button>`).join('')}</div></div>
           </div>
         </div>
 
         <div class="stack" style="gap:10px">
-          <h2 class="chh">Which kits</h2>
+          <h2 class="chh">Eligible kits</h2>
           ${groups}
-          <button class="btn dashed wide chsmall" data-act="cbaddgroup">${svg('add', 16, 2)} Add another group</button>
+          <button class="btn dashed wide chsmall" data-act="cbaddgroup">${svg('add', 16, 2)} Add group</button>
           <div class="panel chgroup">
             <button class="chcond plain" data-act="cbpicks" aria-expanded="${CH.picksOpen}">
-              <span>Hand-picked kits · <span class="tnum" id="chpickn">${d.picks.length}</span></span>${svg(CH.picksOpen ? 'close' : 'add', 14, 2.2)}</button>
-            ${CH.picksOpen ? `<p class="chhint">For kits no rule can describe — a theme, a host’s list. They join the challenge
-                alongside whatever the rule finds.</p>
-              <input class="fld" id="chpfind" value="${h(CH.pfind)}" placeholder="Find a kit by title or artist" autocomplete="off">
+              <span>Added manually · <span class="tnum" id="chpickn">${d.picks.length}</span></span>${svg(CH.picksOpen ? 'close' : 'add', 14, 2.2)}</button>
+            ${CH.picksOpen ? `<p class="chhint">Add kits that the conditions can’t describe, such as a theme.</p>
+              <input class="fld" id="chpfind" value="${h(CH.pfind)}" placeholder="Search kits" autocomplete="off">
               <div class="chpicks" id="chpicks">${chPickRows()}</div>` : ''}
           </div>
           <p class="chread" id="chread">${h(CH.preview ? CH.preview.summary : '')}</p>
@@ -1548,8 +1543,8 @@ function paintBuilder() {
           <div class="stack" style="gap:12px">
             <div><label class="label" for="chnotes">Notes</label>
               <textarea class="fld" id="chnotes" maxlength="2000" style="min-height:84px"
-                placeholder="Who hosts it, what the rules are">${h(d.notes)}</textarea></div>
-            <div><label class="label" for="chlink">Link to the rules</label>
+                placeholder="Host, rules, anything else">${h(d.notes)}</textarea></div>
+            <div><label class="label" for="chlink">Rules link</label>
               <input class="fld" id="chlink" type="url" inputmode="url" value="${h(d.link)}"
                 placeholder="https://www.youtube.com/watch?v=…" autocomplete="off"></div>
           </div>
@@ -1630,11 +1625,11 @@ async function challengeTap(act, el) {
     if (name) d.name = name.value;
     const link = d.link.trim();
     if (link && !/^https?:\/\/\S+$/i.test(link)) {
-      toast('The link has to start with https://');
+      toast('Enter a link starting with https://');
       document.getElementById('chlink')?.focus();
       return true;
     }
-    if (!d.name.trim()) { toast('Give the challenge a name.'); if (name) name.focus(); return true; }
+    if (!d.name.trim()) { toast('Enter a name'); if (name) name.focus(); return true; }
     el.disabled = true;
     const saved = await api(CH.id ? '/challenges/' + CH.id : '/challenges', {
       method: CH.id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d)
@@ -1648,7 +1643,7 @@ async function challengeTap(act, el) {
     return true;
   }
   if (act === 'cbdelete') {
-    if (!CH.id || !confirm('Delete this challenge? Your kits are not touched.')) return true;
+    if (!CH.id || !confirm('Delete this challenge? Your kits won’t be affected.')) return true;
     await api('/challenges/' + CH.id, { method: 'DELETE' });
     CH.key = null; S.chId = null;
     forgetScroll('#/');

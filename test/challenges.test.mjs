@@ -160,15 +160,15 @@ test('canvas size adds length to width, and a kit with no size cannot qualify', 
 });
 
 test('the rule reads back in plain words', () => {
-  assert.equal(describe(blank()), 'Every kit you own.');
+  assert.equal(describe(blank()), 'Eligible: all kits in stash.');
   assert.equal(describe(rule([is('title', 'Onihime'), is('artist', 'MM')])),
-    'Owned kits where Title is Onihime and Artist is MM.');
+    'Eligible: Title is Onihime and Artist is MM.');
   assert.equal(describe(rule([{ f: 'artistOwned', op: 'min', n: 4 }, { f: 'artistFinished', op: 'max', n: 0 }])),
-    'Owned kits where Artist has at least 4 kits owned and Artist has none finished.');
-  assert.equal(describe({ ...blank(), picks: [1, 2] }), '2 picked by hand.');
+    'Eligible: Artist’s kits owned ≥ 4 and Artist’s kits finished = 0.');
+  assert.equal(describe({ ...blank(), picks: [1, 2] }), 'Eligible: 2 kits added manually.');
   assert.equal(describe(rule([is('shop', 'dac')], { picks: [1] }), (f, v) => f === 'shop' ? 'Diamond Art Club' : v),
-    'Owned kits where Shop is Diamond Art Club, plus 1 picked by hand.');
-  assert.equal(conditionText(freshCondition('artist')), 'Artist: choose…');
+    'Eligible: Shop is Diamond Art Club, plus 1 kit added manually.');
+  assert.equal(conditionText(freshCondition('artist')), 'Artist: select…');
 });
 
 test('whatever is handed in comes out as a challenge that can be trusted', () => {
@@ -198,8 +198,8 @@ test('bought before or after a date goes by the order date, then the delivery da
   assert.deepEqual(names(evaluate(rule([{ f: 'bought', op: 'after', d: '2024-01-01' }]), kits).eligible), ['New']);
   // a date not chosen yet rules nothing out
   assert.equal(evaluate(rule([{ f: 'bought', op: 'before', d: '' }]), kits).eligible.length, 4);
-  assert.equal(conditionText({ f: 'bought', op: 'before', d: '2024-01-01' }), 'Bought before 1 Jan 2024');
-  assert.equal(conditionText({ f: 'bought', op: 'after', d: '2024-01-01' }), 'Bought on or after 1 Jan 2024');
+  assert.equal(conditionText({ f: 'bought', op: 'before', d: '2024-01-01' }), 'Purchase date before 1 Jan 2024');
+  assert.equal(conditionText({ f: 'bought', op: 'after', d: '2024-01-01' }), 'Purchase date on or after 1 Jan 2024');
 });
 
 test('the oldest quarter of the stash is recalculated as kits are finished and bought', async () => {
@@ -250,9 +250,9 @@ test('newest, largest and smallest, by share or by number', () => {
   assert.deepEqual(got({ f: 'rankSize', op: 'bottom', n: 2, unit: 'count' }), ['Mid', 'Tiny']);
   assert.deepEqual(got({ f: 'rankSize', op: 'top', n: 50, unit: 'pct' }), ['Big', 'Huge']);
   assert.deepEqual(got({ f: 'rankAge', op: 'bottom', n: 2, unit: 'count' }), ['Huge', 'No size']);
-  assert.equal(conditionText({ f: 'rankAge', op: 'top', n: 25, unit: 'pct' }), 'Among the oldest 25% of the stash');
-  assert.equal(conditionText({ f: 'rankSize', op: 'bottom', n: 3, unit: 'count' }), 'Among the 3 smallest in the stash');
-  assert.equal(conditionText({ f: 'rankSize', op: 'top', n: 1, unit: 'count' }), 'The largest in the stash');
+  assert.equal(conditionText({ f: 'rankAge', op: 'top', n: 25, unit: 'pct' }), 'Oldest 25% of stash');
+  assert.equal(conditionText({ f: 'rankSize', op: 'bottom', n: 3, unit: 'count' }), '3 smallest kits in stash');
+  assert.equal(conditionText({ f: 'rankSize', op: 'top', n: 1, unit: 'count' }), 'Largest kit in stash');
 });
 
 test('notes are kept, and only a web address is kept as the link', () => {

@@ -91,109 +91,94 @@ If you open a project from a long logbook and go back, the logbook should return
 
 ## Challenges
 
-The switch at the top of the logbook changes what it shows:
+Use the **Stash / Challenges** switch at the top of the logbook.
 
-- **Stash** is every project, grouped by status.
-- **Challenges** is the kits that belong to one challenge, grouped by where they stand in it.
+- **Stash** shows all projects by status.
+- **Challenges** shows the kits in one challenge.
 
-Nothing moves when you switch. A challenge is another way of reading the same kits.
+Tap a challenge's chip to open it. Tap **New** to create one, or **Edit** to change or delete it.
 
-### What a challenge is
+### Sections
 
-A challenge has a name, dates, a rule that says which kits are in it, and a requirement that says what counts.
+A challenge lists its kits in three sections:
 
-Each challenge appears as a chip. Tap a chip to see that challenge; tap **New** to make one; tap **Edit** to change or delete the one on screen.
+- **Eligible**: matches the challenge, requirement not met yet.
+- **In progress**: requirement met or under way, kit not finished.
+- **Completed**: kit finished and requirement met.
 
-Its kits are shown in three sections:
+Completed always means the kit itself is finished. A kit that met a drills-down requirement in January stays In progress until you finish it.
 
-- **Eligible** — kits that are in the challenge and have not yet done what it asks.
-- **In progress** — kits that have done it, or are on the way, and are not finished.
-- **Completed** — kits that are finished and met the requirement.
+Only kits in your stash are included. Wish-list kits, abandoned kits and kits sold unfinished are excluded.
 
-Completed always means the painting itself is finished. A kit that met a drills-down challenge in January stays under In progress until you finish it, and moves to Completed whenever that is.
+### Creating a challenge
 
-Only kits in your stash are in a challenge. Wish-list kits are left out, and so are abandoned ones and kits sold unfinished.
+Set a **Name**, the **From** and **To** dates, a **Requirement** and the **Eligible kits**.
 
-### What counts
+**Presets** fill in a community challenge for you. Everything in a preset can be changed before saving. Where a host's rules are only in a video, the preset's notes say the requirement is a default to check.
 
-Choose one:
+### Requirement
 
-- **Start and finish in the dates**
-- **Finish in the dates** — started whenever
-- **Start in the dates** — finished whenever
-- **Drills down in the dates** — any diamonds placed on the kit inside the dates
+- **Start and finish during challenge**
+- **Finish during challenge**
+- **Start during challenge**
+- **Drills down during challenge**: any work on the kit between the dates.
 
-Dazzle works this out from what the logbook already holds: the started and completed dates, painting sessions and progress updates. You do not tick anything.
+Dazzle checks these from the kit's started and completed dates, sessions and progress updates.
 
-Leave a date empty for a challenge with no start or no end.
+### Ongoing
 
-### Ongoing challenges
+Tap **Ongoing (no end date)** for a challenge without an end date.
 
-Tap **Ongoing** for a challenge with no end date.
+An ongoing challenge shows **Complete** when it has kits and none are left under Eligible or In progress.
 
-An ongoing challenge is not over on a day. It is **Complete** when it has kits and none of them are left to do: nothing Eligible, nothing In progress. Its chip then reads *done*.
+### Eligible kits
 
-### Presets
+Tap **Add condition**, choose a field, then set it.
 
-A new challenge can start from a preset: a community challenge with its dates, rule, notes and a link already filled in. Everything in a preset can be changed before saving.
+| Field | Options |
+| --- | --- |
+| Artist, Title, Shop, Drill shape | **is** / **is not**, one or more values |
+| Canvas size (L + W), Drill count, Colours, Rating | **≥ at least** / **≤ at most** a number |
+| Purchase date | **before** / **on or after** a date. Uses the order date, or the received date if there is none. |
+| Oldest / newest in stash | a percentage of the stash, or a number of kits, by purchase date |
+| Largest / smallest in stash | a percentage of the stash, or a number of kits, by canvas area |
+| Artist’s kits owned, Artist’s kits finished | **≥ at least** / **≤ at most** a number, counted across the artist's kits in your stash |
 
-Where a host's rules are only given in a video, the preset's notes say which parts are a starting point to check.
+Conditions are in a group set to **Match all** or **Match any**. **Add group** adds another group; groups combine with **AND** or **OR**.
 
-### Notes and a link
+With no conditions, all kits in your stash are eligible.
 
-A challenge can carry notes — who hosts it, what the rules are — and a link to where the rules are set out, such as the host's video. Both show under the challenge on the logbook; the link opens outside the app.
+The line under the conditions shows the rule in words, and the list below shows the matching kits.
 
-### Which kits
+### Added manually
 
-The rule is built by tapping.
+Open **Added manually** to tick kits that conditions can't describe, such as a theme. They are included alongside any kits the conditions match. With no conditions, only the manually added kits are eligible.
 
-Tap **Add a condition**, choose what it is about, then choose the values:
+### Notes and rules link
 
-- **Artist**, **Title**, **Shop**, **Drill shape** — tap one or more values. More than one means any of them. Switch **is** to **is not** to turn the condition round.
-- **Canvas length + width**, **Diamond count**, **Colour count**, **Rating** — choose **at least** or **at most** and set the number.
-- **Bought** — **before** or **on or after** a date. It goes by the order date, or the delivery date if there is no order date; a kit with neither is left out.
-- **Oldest or newest in the stash**, **Largest or smallest in the stash** — a share of the stash ("the oldest 25%") or a number of kits ("the 10 largest"). Age goes by the day a kit was bought; size is the canvas area.
-- **Artist’s kits I own** and **Artist’s kits I’ve finished** — about the artist rather than the kit. "At least 4 owned" with "none finished" is every artist you have collected but never completed.
+A challenge can have **Notes** and a **Rules link** (a web address). Both show under the challenge; **View rules** opens the link outside the app.
 
-Conditions sit in a group that matches **All of these** or **Any of these**. **Add another group** adds a second group, joined to the first by **AND** or **OR**.
+### Challenges update with your stash
 
-The sentence under the rule reads it back in plain words, and the list below shows the kits it finds as you build.
+Eligibility is recalculated every time you open a challenge.
 
-A rule with no conditions means every kit you own.
+- A kit you add that matches the conditions is included, including one that moves off the wish list.
+- A kit you delete, abandon or sell unfinished is removed. A kit you finished and then sold still counts.
+- A kit that no longer matches the conditions is removed.
+- Artist counts and oldest / newest / largest / smallest are based on your current stash. For example, with "Artist’s kits finished = 0", finishing one kit by an artist removes that artist's other kits; the finished kit stays under Completed.
 
-Kits you add to the logbook later join a challenge on their own if they fit its rule.
-
-### Challenges recalculate
-
-A challenge is worked out again every time you look at it, from the stash as it stands.
-
-- A kit you add that fits the rule joins the challenge, including one that moves off the wish list.
-- A kit that leaves the stash leaves the challenge: one you delete, abandon, or sell unfinished (a sold price on a kit that is not completed). A painting you finished and then sold still counts.
-- A kit whose details change so that it no longer fits the rule leaves too.
-
-- Finish a kit by an artist with "none finished", and that artist's other kits leave the challenge. The kit you finished stays, under Completed.
-- "The oldest 25%" is a quarter of what you own and have not finished. Finish one and the next-oldest takes its place; buy more and the quarter grows.
-
-A finished kit is judged by how the stash stood just before you finished it, which is why the finish that met the challenge still counts.
-
-For a set of kits that does not move, use **Bought before** a date.
-
-### Hand-picked kits
-
-Some challenges cannot be described by a rule — a theme, or a list a host chose.
-
-Open **Hand-picked kits** and tick the kits. They join the challenge alongside whatever the rule finds. With no conditions at all, the hand-picked kits are the whole challenge.
+For a list that doesn't change, use **Purchase date**.
 
 ### Examples
 
-| Challenge | Rule | What counts |
+| Challenge | Eligible kits | Requirement |
 | --- | --- | --- |
-| An artist's paint-along | Artist is that artist | Drills down in the dates |
-| One particular painting | Title is the painting **and** Artist is its artist | Finish in the dates |
-| Artists in waiting | Artist’s kits I own at least 4 **and** Artist has none finished | Finish in the dates |
-| A large-canvas challenge | Canvas length + width at least 200 cm | Finish in the dates |
-| A themed event | Hand-picked kits | whichever the host asks for |
-| Refreshing the stash | Among the oldest 25% of the stash, ongoing | Finish in the dates |
+| An artist's paint-along | Artist is the artist | Drills down during challenge |
+| One painting | Title is the painting AND Artist is its artist | Finish during challenge |
+| Artists in waiting | Artist’s kits owned ≥ 4 AND Artist’s kits finished = 0 | Finish during challenge |
+| A large-canvas challenge | Canvas size (L + W) ≥ 200 cm | Finish during challenge |
+| A themed event | Added manually | as the host sets |
+| Refreshing the stash | Oldest 25% of stash, ongoing | Finish during challenge |
 
 ## Adding a project from the catalogue
 

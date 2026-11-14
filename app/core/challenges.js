@@ -34,23 +34,23 @@ export const FIELDS = {
   title:   { label: 'Title', kind: 'list' },
   shop:    { label: 'Shop', kind: 'list' },
   shape:   { label: 'Drill shape', kind: 'list' },
-  size:    { label: 'Canvas length + width', kind: 'num', unit: 'cm', step: 10, start: 200, op: 'min' },
-  drills:  { label: 'Diamond count', kind: 'num', unit: '', step: 10000, start: 50000, op: 'min' },
-  colours: { label: 'Colour count', kind: 'num', unit: '', step: 5, start: 40, op: 'min' },
+  size:    { label: 'Canvas size (L + W)', kind: 'num', unit: 'cm', step: 10, start: 200, op: 'min' },
+  drills:  { label: 'Drill count', kind: 'num', unit: '', step: 10000, start: 50000, op: 'min' },
+  colours: { label: 'Colours', kind: 'num', unit: '', step: 5, start: 40, op: 'min' },
   rating:  { label: 'Rating', kind: 'num', unit: '', step: 1, start: 4, op: 'min', max: 5 },
-  bought:   { label: 'Bought', kind: 'date' },
-  rankAge:  { label: 'Oldest or newest in the stash', kind: 'rank', top: 'oldest', bottom: 'newest' },
-  rankSize: { label: 'Largest or smallest in the stash', kind: 'rank', top: 'largest', bottom: 'smallest' },
-  artistOwned:    { label: 'Artist’s kits I own', kind: 'num', unit: '', step: 1, start: 4, op: 'min' },
-  artistFinished: { label: 'Artist’s kits I’ve finished', kind: 'num', unit: '', step: 1, start: 0, op: 'max' }
+  bought:   { label: 'Purchase date', kind: 'date' },
+  rankAge:  { label: 'Oldest / newest in stash', kind: 'rank', top: 'oldest', bottom: 'newest' },
+  rankSize: { label: 'Largest / smallest in stash', kind: 'rank', top: 'largest', bottom: 'smallest' },
+  artistOwned:    { label: 'Artist’s kits owned', kind: 'num', unit: '', step: 1, start: 4, op: 'min' },
+  artistFinished: { label: 'Artist’s kits finished', kind: 'num', unit: '', step: 1, start: 0, op: 'max' }
 };
 
 /** What has to happen inside the dates. */
 export const REQUIREMENTS = [
-  { k: 'both',   label: 'Start and finish in the dates' },
-  { k: 'finish', label: 'Finish in the dates' },
-  { k: 'start',  label: 'Start in the dates' },
-  { k: 'drills', label: 'Drills down in the dates' }
+  { k: 'both',   label: 'Start and finish during challenge' },
+  { k: 'finish', label: 'Finish during challenge' },
+  { k: 'start',  label: 'Start during challenge' },
+  { k: 'drills', label: 'Drills down during challenge' }
 ];
 const REQ_KEYS = REQUIREMENTS.map((r) => r.k);
 
@@ -298,26 +298,22 @@ export function conditionText(cond, name = (_f, v) => v) {
   const F = FIELDS[cond.f];
   if (!F) return '';
   if (F.kind === 'list') {
-    if (!cond.vals.length) return `${F.label}: choose…`;
+    if (!cond.vals.length) return `${F.label}: select…`;
     return `${F.label} ${cond.not ? 'is not' : 'is'} ${cond.vals.map((v) => name(cond.f, v)).join(' or ')}`;
   }
   if (F.kind === 'date') {
-    if (!cond.d) return `${F.label}: choose a date…`;
-    return `Bought ${cond.op === 'before' ? 'before' : 'on or after'} ${dayText(cond.d)}`;
+    if (!cond.d) return `${F.label}: select a date…`;
+    return `${F.label} ${cond.op === 'before' ? 'before' : 'on or after'} ${dayText(cond.d)}`;
   }
   if (F.kind === 'rank') {
     const end = F[cond.op];
-    if (cond.unit === 'pct') return `Among the ${end} ${cond.n}% of the stash`;
-    return cond.n === 1 ? `The ${end} in the stash` : `Among the ${cond.n} ${end} in the stash`;
+    const End = end[0].toUpperCase() + end.slice(1);
+    if (cond.unit === 'pct') return `${End} ${cond.n}% of stash`;
+    return cond.n === 1 ? `${End} kit in stash` : `${cond.n} ${end} kits in stash`;
   }
-  const word = cond.op === 'min' ? 'at least' : 'at most';
-  if (cond.f === 'artistFinished') {
-    return cond.op === 'max' && cond.n === 0 ? 'Artist has none finished' : `Artist has ${word} ${cond.n} finished`;
-  }
-  if (cond.f === 'artistOwned') return `Artist has ${word} ${cond.n} kits owned`;
-  if (cond.f === 'size') return `Length + width is ${word} ${cond.n} cm`;
-  if (cond.f === 'rating') return `Rating is ${word} ${cond.n}`;
-  return `${F.label} is ${word} ${cond.n.toLocaleString('en-GB')}`;
+  const sign = cond.op === 'min' ? '≥' : '≤';
+  if (cond.op === 'max' && cond.n === 0) return `${F.label} = 0`;
+  return `${F.label} ${sign} ${cond.n.toLocaleString('en-GB')}${F.unit ? ' ' + F.unit : ''}`;
 }
 
 /** The whole rule read back as a sentence, so a tapped-together rule can be checked. */
@@ -328,10 +324,9 @@ export function describe(challenge, name) {
     const t = g.conds.map((x) => conditionText(x, name)).join(g.mode === 'all' ? ' and ' : ' or ');
     return live.length > 1 && g.conds.length > 1 ? `(${t})` : t;
   });
-  let s = parts.length ? 'Owned kits where ' + parts.join(c.join === 'all' ? ' AND ' : ' OR ')
-        : (c.picks.length ? '' : 'Every kit you own');
-  if (c.picks.length) s += `${s ? ', plus ' : ''}${c.picks.length} picked by hand`;
-  return s + '.';
+  const manual = `${c.picks.length} ${c.picks.length === 1 ? 'kit' : 'kits'} added manually`;
+  if (!parts.length) return `Eligible: ${c.picks.length ? manual : 'all kits in stash'}.`;
+  return 'Eligible: ' + parts.join(c.join === 'all' ? ' AND ' : ' OR ') + (c.picks.length ? `, plus ${manual}` : '') + '.';
 }
 
 /**
@@ -353,30 +348,30 @@ export const PRESETS = [
   { name: 'Refresh Your Stash 2026', from: '2026-01-01', to: '', req: 'finish',
     groups: group({ f: 'rankAge', op: 'top', n: 25, unit: 'pct' }),
     link: 'https://www.youtube.com/watch?v=qr0-2wGZlQg',
-    notes: 'Hosted by Lisette Crafts and Tells: work through the older kits in your stash. The host sets no age cut-off, so this starts from the oldest quarter of your stash, which moves on to the next-oldest kits as you finish. For a fixed set, swap it for “Bought before” a date. Ongoing: it is complete when none are left.' },
+    notes: 'Host: Lisette Crafts and Tells. Finish older kits from your stash. The host sets no age limit; this preset uses the oldest 25% of your stash, which updates as you finish kits. For a fixed list, use Purchase date instead.' },
   { name: '26 for 26', from: '2026-01-01', to: '2026-12-31', req: 'drills', groups: group(),
     link: 'https://www.youtube.com/watch?v=CRzIQbnZ9Ao',
-    notes: 'Hosted by Shire Shenanigans: “26 wips for 2026. We are kitting up 26 projects for 2026.” Pick your 26 under Hand-picked kits. “Drills down” is a starting point; check the video for what the host counts.' },
+    notes: 'Host: Shire Shenanigans. “26 wips for 2026. We are kitting up 26 projects for 2026.” Add your 26 kits manually. The requirement is a default; check the video.' },
   { name: 'Art by Julia DP-along 2026', from: '2026-01-01', to: '2026-01-31', req: 'drills',
     groups: group({ f: 'artist', vals: ['Art by Julia'] }),
     link: 'https://www.youtube.com/watch?v=buJ1BKZpb7o',
-    notes: 'Hosted by dietcoke.and.diamonds, Diamonds at Tiffani’s and Michaela Renee. Any Art by Julia kit counts. “Drills down” is a starting point; the linked video goes through the rules.' },
+    notes: 'Hosts: dietcoke.and.diamonds, Diamonds at Tiffani’s, Michaela Renee. Any Art by Julia kit is eligible. The requirement is a default; check the rules video.' },
   { name: 'Fairy Tales & Folklore 2026', from: '2026-02-01', to: '2026-02-28', req: 'drills', groups: group(),
     link: 'https://www.youtube.com/watch?v=a5AZz84mnYI',
-    notes: 'Hosted by Diamonds and Washi and Diamond Painting & Dr. Pepper: “celebrates mythology, classic fairy tales, and more”. A theme cannot be worked out from a kit, so pick yours under Hand-picked kits. The video says what qualifies.' },
+    notes: 'Hosts: Diamonds and Washi, Diamond Painting & Dr. Pepper. Theme: mythology, classic fairy tales and more. Add your kits manually. The requirement is a default; check the video.' },
   { name: 'Summer With the Masters 2026', from: '2026-06-01', to: '2026-07-31', req: 'drills', groups: group(),
     link: 'https://www.youtube.com/watch?v=k9qPf-5eKC8',
-    notes: 'Hosted by Diamonds and Washi: “artwork created anywhere, by anyone, from the year 1930 or earlier”. The logbook does not record when an artwork was made, so pick yours under Hand-picked kits.' },
+    notes: 'Host: Diamonds and Washi. Artwork made in 1930 or earlier. Add your kits manually. The requirement is a default; check the video.' },
   { name: 'Mega Drill Challenge 2027', from: '2027-01-01', to: '2027-12-31', req: 'finish',
     groups: group({ f: 'size', op: 'min', n: 200 }),
     link: 'https://www.tiktok.com/@queenmotherconfettiqueen/video/7655429023895473422',
-    notes: 'Hosted by QueenConfetti: a canvas whose length and width add up to at least 200 cm, finished by 31 December 2027. Registration with the host runs 31 December 2026 to 31 January 2027.' },
+    notes: 'Host: QueenConfetti. Canvas length + width of at least 200 cm, finished by 31 Dec 2027. Register with the host between 31 Dec 2026 and 31 Jan 2027.' },
   { name: 'Artists in Waiting 2027', from: '2027-01-01', to: '2027-12-31', req: 'finish',
     groups: group({ f: 'artistOwned', op: 'min', n: 4 }, { f: 'artistFinished', op: 'max', n: 0 }),
     link: '',
-    notes: 'Complete a painting for each artist you have several kits by and have never finished one of. Four or more kits is the starting point; change the number to suit your stash.' },
+    notes: 'Finish one kit by each artist you own several kits by but have never finished. The preset uses 4 or more kits; change the number to suit.' },
   { name: 'Tiffany Fan Art', from: '', to: '', req: 'drills',
     groups: group({ f: 'title', vals: ['Onihime'] }, { f: 'artist', vals: ['Margaret Morales'] }),
     link: '',
-    notes: 'The only painting allowed is Onihime by Margaret Morales. Set the dates and what counts once the challenge says.' }
+    notes: 'Only Onihime by Margaret Morales is eligible. Set the dates and requirement when the challenge announces them.' }
 ];
