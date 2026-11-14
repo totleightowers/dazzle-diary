@@ -73,6 +73,14 @@ for (const width of [390, 1028]) {
     assert.deepEqual(section(m, 'eligible'), ['Moonlit Tea', 'Panda Cafe']);
     assert.deepEqual(section(m, 'going'), []);
 
+    // a kit bought after the challenge was made joins it; one sold unfinished leaves it
+    const late = await m.seed({ title: 'Bubble Tea Bunny', artist: 'Art by Julia', status: 'received' });
+    await m.go('#/');
+    assert.deepEqual(section(m, 'eligible'), ['Bubble Tea Bunny', 'Moonlit Tea', 'Panda Cafe']);
+    await m.api('/projects/' + late.id, json('PATCH', { sold_price: 25 }));
+    await m.go('#/');
+    assert.deepEqual(section(m, 'eligible'), ['Moonlit Tea', 'Panda Cafe']);
+
     // drills go down in January: the kit is in progress for the challenge
     await m.api(`/projects/${panda.id}/sessions`, json('POST', { on: '2026-01-12', minutes: 40 }));
     await m.go('#/');

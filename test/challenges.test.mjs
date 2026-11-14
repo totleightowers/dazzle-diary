@@ -275,3 +275,30 @@ test('every preset is a challenge the app can open as it stands', async () => {
     assert.doesNotThrow(() => { evaluate(c, [kit('X', 'Y')]); describe(c); });
   }
 });
+
+test('a challenge follows the stash: kits join as they arrive and leave as they go', () => {
+  const c = rule([is('artist', 'Art by Julia')], { req: 'drills', from: '2026-01-01', to: '2026-01-31' });
+  let kits = [kit('Panda Cafe', 'Art by Julia'), kit('Moonlit Tea', 'Art by Julia'),
+              kit('Ramen Night', 'Art by Julia', { status: 'wishlist' })];
+  assert.deepEqual(names(evaluate(c, kits).eligible), ['Moonlit Tea', 'Panda Cafe']);
+
+  // a new Art by Julia kit is bought mid-challenge, and the wished-for one arrives
+  kits = [...kits.map((p) => p.title === 'Ramen Night' ? { ...p, status: 'received' } : p),
+          kit('Bubble Tea Bunny', 'Art by Julia', { status: 'notReceived' })];
+  assert.deepEqual(names(evaluate(c, kits).eligible), ['Bubble Tea Bunny', 'Moonlit Tea', 'Panda Cafe', 'Ramen Night']);
+
+  // one is sold unfinished, one is given up on, one is deleted from the logbook
+  kits = kits.filter((p) => p.title !== 'Bubble Tea Bunny')
+    .map((p) => p.title === 'Moonlit Tea' ? { ...p, sold_price: 20 }
+      : p.title === 'Ramen Night' ? { ...p, status: 'abandoned' } : p);
+  assert.deepEqual(names(evaluate(c, kits).eligible), ['Panda Cafe']);
+
+  // and a kit that stops matching the rule leaves too
+  kits = kits.map((p) => p.title === 'Panda Cafe' ? { ...p, artist: 'Someone Else' } : p);
+  assert.deepEqual(evaluate(c, kits).eligible, []);
+
+  // a painting finished for the challenge and sold afterwards is still a completion
+  const finishedThenSold = [kit('Strawberry Picnic', 'Art by Julia',
+    { status: 'completed', date_started: '2026-01-03', date_completed: '2026-02-01', sold_price: 60 })];
+  assert.deepEqual(names(evaluate(c, finishedThenSold, activityDays(finishedThenSold)).done), ['Strawberry Picnic']);
+});

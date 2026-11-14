@@ -131,9 +131,12 @@ export function normalise(raw) {
   };
 }
 
-/* A kit on the wish list is not owned, so it is in no challenge. */
-const owned = (p) => p.status !== 'wishlist';
+/* What is in the stash right now. A kit on the wish list is not owned yet, and
+   an unfinished kit that has been sold is not owned any more — a finished
+   painting that was sold afterwards is still one you finished. */
 const finished = (p) => p.status === 'completed';
+const sold = (p) => p.sold_price != null && p.sold_price !== '';
+const owned = (p) => p.status !== 'wishlist' && !(sold(p) && !finished(p));
 const begun = (p) => !!p.date_started || ['started', 'onHold', 'completed'].includes(p.status);
 
 /**

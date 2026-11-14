@@ -112,7 +112,7 @@ Its kits are shown in three sections:
 
 Completed always means the painting itself is finished. A kit that met a drills-down challenge in January stays under In progress until you finish it, and moves to Completed whenever that is.
 
-Only kits you own are in a challenge. Wish-list kits are left out, and so are abandoned ones.
+Only kits in your stash are in a challenge. Wish-list kits are left out, and so are abandoned ones and kits sold unfinished.
 
 ### What counts
 
@@ -166,6 +166,10 @@ Kits you add to the logbook later join a challenge on their own if they fit its 
 ### Challenges recalculate
 
 A challenge is worked out again every time you look at it, from the stash as it stands.
+
+- A kit you add that fits the rule joins the challenge, including one that moves off the wish list.
+- A kit that leaves the stash leaves the challenge: one you delete, abandon, or sell unfinished (a sold price on a kit that is not completed). A painting you finished and then sold still counts.
+- A kit whose details change so that it no longer fits the rule leaves too.
 
 - Finish a kit by an artist with "none finished", and that artist's other kits leave the challenge. The kit you finished stays, under Completed.
 - "The oldest 25%" is a quarter of what you own and have not finished. Finish one and the next-oldest takes its place; buy more and the quarter grows.
