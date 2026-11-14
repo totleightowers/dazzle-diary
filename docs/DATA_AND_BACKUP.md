@@ -145,14 +145,14 @@ from, to        the dates, either of which may be empty
 req             both | finish | start | drills
 join            how the groups combine: all | any
 groups          [{ mode: all | any, conds: [...] }]
-picks           ids of projects added by hand
+picks           ids of projects added manually
 notes           free text
 link            a web address for the rules, http or https only
 ```
 
 Where a kit stands in a challenge is never stored. It is worked out on every read from the projects, the sessions and the progress history, so it cannot disagree with them.
 
-Deleting a project removes it from any challenge it was hand-picked into.
+Deleting a project removes it from any challenge it was added to manually.
 
 ## Media files
 
@@ -251,7 +251,7 @@ The current payload is version 2 and contains:
 }
 ```
 
-Challenges are carried as definitions only. On restore, a challenge whose name is already present is left alone, and hand-picked kits are matched to the restored projects' new ids.
+Challenges are carried as definitions only. On restore, a challenge whose name is already present is left alone, and manually added kits are matched to the restored projects' new ids.
 
 Hold history is contained in each project.
 

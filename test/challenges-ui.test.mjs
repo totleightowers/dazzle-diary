@@ -54,7 +54,7 @@ for (const width of [390, 1028]) {
     await m.tap('[data-act="cbfield"][data-k="artist"]');
     await m.tap('[data-act="cbval"][data-k="Art by Julia"]');
     assert.match(m.find('#chtotal').textContent, /^2 kits/, 'the wish-list kit is not owned');
-    assert.equal(m.find('#chread').textContent, 'Owned kits where Artist is Art by Julia.');
+    assert.equal(m.find('#chread').textContent, 'Eligible: Artist is Art by Julia.');
     assert.equal(m.find('#chname').value, 'Art by Julia along', 'tapping wiped the name');
     await m.tap('[data-act="cbclose"]');
 
@@ -122,7 +122,7 @@ test('a challenge can be edited and deleted, and the kits are left alone', async
   await m.tap('[data-act="cbgmode"][data-k="all"]');
   await m.tap('[data-act="cbsave"]');
   const saved = (await m.api('/challenges'))[0];
-  assert.equal(saved.summary, 'Owned kits where Artist is MM and Title is Onihime.');
+  assert.equal(saved.summary, 'Eligible: Artist is MM and Title is Onihime.');
   assert.deepEqual(saved.sections.eligible.length, 1);
 
   await m.go('#/challenge/' + c.id);
@@ -148,7 +148,7 @@ test('kits no rule can describe are picked by hand, and a number is set with the
   await m.tap('[data-act="cbpicks"]');
   await m.tap(`[data-act="cbpickkit"][data-k="${a.id}"]`);
   assert.match(m.find('#chtotal').textContent, /^1 kit /, 'hand-picks alone are the whole challenge');
-  assert.equal(m.find('#chread').textContent, '1 picked by hand.');
+  assert.equal(m.find('#chread').textContent, 'Eligible: 1 kit added manually.');
 
   // length + width of at least 200 cm, then stepped down until the small one fits
   await m.tap('[data-act="cbaddcond"]');
@@ -211,7 +211,7 @@ test('a preset fills the whole challenge in, with its notes and a link to the ru
   assert.equal(m.find('#chfrom').value, '2027-01-01');
   assert.match(m.find('#chnotes').textContent, /at least 200 cm/);
   assert.match(m.find('#chlink').value, /^https:\/\/www\.tiktok\.com\//);
-  assert.equal(m.find('#chread').textContent, 'Owned kits where Length + width is at least 200 cm.');
+  assert.equal(m.find('#chread').textContent, 'Eligible: Canvas size (L + W) ≥ 200 cm.');
   assert.match(m.find('#chtotal').textContent, /^1 kit /);
 
   // a link that is not a web address is refused, not quietly dropped
@@ -244,14 +244,14 @@ test('an ongoing challenge over the oldest of the stash says so, and is complete
   assert.equal(m.find('#chto').value, '', 'ongoing did not clear the end date');
   await m.tap('[data-act="cbaddcond"]');
   await m.tap('[data-act="cbfield"][data-k="rankAge"]');
-  assert.equal(m.find('#chread').textContent, 'Owned kits where Among the oldest 25% of the stash.');
+  assert.equal(m.find('#chread').textContent, 'Eligible: Oldest 25% of stash.');
   assert.match(m.find('#chtotal').textContent, /^1 kit /);
   // by number instead of share, and from the other end
   await m.tap('[data-act="cbunit"][data-k="count"]');
   assert.equal(m.find('#chnum').textContent, '10');
   await m.tap('[data-act="cbunit"][data-k="pct"]');
   await m.tap('[data-act="cbop"][data-k="bottom"]');
-  assert.equal(m.find('#chread').textContent, 'Owned kits where Among the newest 25% of the stash.');
+  assert.equal(m.find('#chread').textContent, 'Eligible: Newest 25% of stash.');
   await m.tap('[data-act="cbop"][data-k="top"]');
   await m.tap('[data-act="cbclose"]');
 
@@ -259,10 +259,10 @@ test('an ongoing challenge over the oldest of the stash says so, and is complete
   await m.tap('[data-act="cbaddcond"]');
   await m.tap('[data-act="cbfield"][data-k="bought"]');
   await setDate(m, 'chdate', '2022-01-01');
-  assert.match(m.find('#chread').textContent, /and Bought before 1 Jan 2022\.$/);
+  assert.match(m.find('#chread').textContent, /and Purchase date before 1 Jan 2022\.$/);
   await m.tap('[data-act="cbsave"]');
   await m.go('#/');
-  assert.match(m.find('.chmeta').textContent, /From 01 Jan 2026, ongoing/);
+  assert.match(m.find('.chmeta').textContent, /From 01 Jan 2026 · Ongoing/);
   assert.equal(m.find('.chdone'), null);
   assert.deepEqual(section(m, 'eligible'), ['Oldest']);
 
@@ -270,6 +270,6 @@ test('an ongoing challenge over the oldest of the stash says so, and is complete
   await m.go('#/');
   assert.deepEqual(section(m, 'done'), ['Oldest']);
   assert.equal(m.find('.chdone').textContent, 'Complete');
-  assert.match(m.find('.chip[data-act="chpick"]').textContent, /done/);
+  assert.match(m.find('.chip[data-act="chpick"]').textContent, /Complete/);
   await m.tap('[data-act="mode"][data-k="stash"]');
 });

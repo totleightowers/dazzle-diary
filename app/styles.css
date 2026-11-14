@@ -1088,4 +1088,5 @@ select.fld {
 .chlink { display: inline-flex; align-items: center; gap: 4px; margin-top: 8px; min-height: 32px;
   font-size: 13px; font-weight: 700; color: var(--ink); text-decoration: underline; }
 .chip.chongoing { height: auto; min-height: 38px; padding: 8px 14px; white-space: normal; text-align: left; align-self: flex-start; }
-.chstep .seg.chseg { margin-left: auto; align-self: center; }
+.chstep .seg.chseg { margin-left: auto; align-self: center; flex: 0 0 auto; }
+.chstep .seg.chseg button { min-width: 52px; }
