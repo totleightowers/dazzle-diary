@@ -203,7 +203,7 @@ test('a preset fills the whole challenge in, with its notes and a link to the ru
   await m.go('#/challenge/new');
   const chips = m.all('[data-act="cbpreset"]').map((c) => c.textContent.replace(/&amp;/g, '&'));
   for (const name of ['Refresh Your Stash 2026', '26 for 26', 'Art by Julia DP-along 2026', 'Fairy Tales & Folklore 2026',
-                      'Summer With the Masters 2026', 'Mega Drill Challenge 2027', 'Artists in Waiting 2027', 'Tiffany challenge'])
+                      'Summer With the Masters 2026', 'Mega Drill Challenge 2027', 'Artists in Waiting 2027', 'Tiffany Fan Art'])
     assert.ok(chips.includes(name), `no preset for ${name}`);
 
   await m.tap(`[data-act="cbpreset"][data-k="${chips.indexOf('Mega Drill Challenge 2027')}"]`);

@@ -375,7 +375,7 @@ export const PRESETS = [
     groups: group({ f: 'artistOwned', op: 'min', n: 4 }, { f: 'artistFinished', op: 'max', n: 0 }),
     link: '',
     notes: 'Complete a painting for each artist you have several kits by and have never finished one of. Four or more kits is the starting point; change the number to suit your stash.' },
-  { name: 'Tiffany challenge', from: '', to: '', req: 'drills',
+  { name: 'Tiffany Fan Art', from: '', to: '', req: 'drills',
     groups: group({ f: 'title', vals: ['Onihime'] }, { f: 'artist', vals: ['MM'] }),
     link: '',
     notes: 'The only painting allowed is Onihime by MM. Set the dates and what counts once the challenge says.' }
