@@ -1416,8 +1416,8 @@ function chEditor(cond) {
           <button data-act="cbunit" data-k="count" aria-pressed="${cond.unit === 'count'}">kits</button>
         </div>
       </div>
-      <p class="chhint">Ranked across your whole stash as it stood on the challenge’s first day: what you owned
-        then and had not finished. ${cond.f === 'rankAge' ? 'Age goes by the day a kit was bought.' : 'Size is the canvas area.'}</p>`;
+      <p class="chhint">Ranked across the kits you own and have not finished, as they stand today, so it moves on as
+        you finish kits and buy more. ${cond.f === 'rankAge' ? 'Age goes by the day a kit was bought.' : 'Size is the canvas area.'}</p>`;
   } else {
     body = `
       <div class="seg tight chseg" role="group" aria-label="At least or at most">
@@ -1429,8 +1429,8 @@ function chEditor(cond) {
         <span class="n tnum" id="chnum">${num(cond.n)}</span>${F.unit ? `<span class="chhint">${h(F.unit)}</span>` : ''}
         <button data-act="cbstep" data-k="1" aria-label="More">+</button>
       </div>
-      ${cond.f === 'artistFinished' ? `<p class="chhint">Counted as it stood on the challenge’s first day, so finishing one
-        during the challenge does not take the artist out of it.</p>` : ''}`;
+      ${/^artist/.test(cond.f) ? `<p class="chhint">Counted as your stash stands today. Finish a kit by an artist with
+        “none finished” and their other kits leave the challenge; the one you finished stays, as completed.</p>` : ''}`;
   }
   return `<div class="cheditor">
     <span class="label" style="margin:0">${h(F.label)}</span>${body}

@@ -137,57 +137,73 @@ const finished = (p) => p.status === 'completed';
 const begun = (p) => !!p.date_started || ['started', 'onHold', 'completed'].includes(p.status);
 
 /**
- * What each artist's shelf looked like when the challenge began. "An artist I
- * have never finished" has to be asked as of the start date: asked today, the
- * first finish would make the artist stop qualifying, and the challenge would
- * drop them the moment it was met.
+ * The stash as one kit sees it. An unfinished kit is judged against the stash
+ * as it is today, so a challenge recalculates as kits are finished: complete
+ * one kit by an artist "never finished", and that artist's other kits stop
+ * being eligible. A finished kit is judged against the stash as it stood just
+ * before it was finished — otherwise the very finish that met the challenge
+ * would be the thing that put the kit out of it, and nothing could ever be
+ * shown as completed.
+ *
+ * So everything here takes the kit asking. For a finished kit, "finished" means
+ * finished before it was, and the kit never counts itself.
  */
-function artistStats(projects, from) {
-  const stats = new Map();
-  for (const p of projects) {
+function stashView(projects) {
+  const stock = projects.filter((p) => owned(p));
+  const doneBefore = (other, p) => {
+    if (!finished(other) || other.id === p.id) return false;
+    if (!finished(p) || !p.date_completed) return true;          // p sees today
+    return !other.date_completed || other.date_completed < p.date_completed;
+  };
+  const artist = (p) => {
     const k = key(p.artist);
-    if (!k || !owned(p)) continue;
-    const a = stats.get(k) || { owned: 0, finished: 0 };
-    a.owned++;
-    if (finished(p) && (!from || !p.date_completed || p.date_completed < from)) a.finished++;
-    stats.set(k, a);
-  }
-  return stats;
+    const a = { owned: 0, finished: 0 };
+    if (!k) return a;
+    for (const o of stock) {
+      if (key(o.artist) !== k) continue;
+      a.owned++;
+      if (doneBefore(o, p)) a.finished++;
+    }
+    return a;
+  };
+  /* Where a kit comes among those still to do, oldest first or largest first.
+     Worked out once per moment asked about, not once per kit. */
+  const VALUE = {
+    rankAge: [bought, (x, y) => x.localeCompare(y)],
+    rankSize: [(p) => (p.width_in && p.height_in ? Number(p.width_in) * Number(p.height_in) : null), (x, y) => y - x]
+  };
+  const cache = new Map();
+  const rank = (field, p) => {
+    const when = finished(p) ? p.date_completed || '' : null;
+    if (when === '') return null;                 // finished, nobody knows when: it cannot be placed
+    const k = field + '|' + (when || 'now');
+    if (!cache.has(k)) {
+      const [value, cmp] = VALUE[field];
+      const list = stock
+        .filter((o) => o.status !== 'abandoned'
+          && !(finished(o) && (!when || !o.date_completed || o.date_completed < when))
+          && !(when && bought(o) && bought(o) > when))
+        .map((o) => ({ id: o.id, v: value(o) })).filter((x) => x.v != null)
+        .sort((x, y) => cmp(x.v, y.v) || x.id - y.id);
+      cache.set(k, { size: list.length, at: new Map(list.map((x, i) => [x.id, i])) });
+    }
+    const r = cache.get(k);
+    const i = r.at.get(p.id);
+    return i == null ? null : { i, size: r.size };
+  };
+  return { artist, rank };
 }
 
-/**
- * Where each kit comes in the stash, oldest first or largest first. Like the
- * artist counts, the stash is taken as it stood on the challenge's first day —
- * what was owned then and not yet finished — so "the oldest quarter" is a fixed
- * set of kits. Asked of today's stash, every finish would promote the next
- * oldest into the quarter and the challenge could never be completed; and every
- * kit bought would move the line.
- */
-function rankings(projects, from) {
-  const pool = projects.filter((p) => owned(p) && p.status !== 'abandoned'
-    && !(from && finished(p) && (!p.date_completed || p.date_completed < from))
-    && !(from && bought(p) && bought(p) > from));
-  const order = (value, cmp) => {
-    const list = pool.map((p) => ({ id: p.id, v: value(p) })).filter((x) => x.v != null)
-      .sort((a, b) => cmp(a.v, b.v) || a.id - b.id);
-    return { size: list.length, at: new Map(list.map((x, i) => [x.id, i])) };
-  };
-  return {
-    rankAge: order(bought, (a, b) => a.localeCompare(b)),
-    rankSize: order((p) => (p.width_in && p.height_in ? Number(p.width_in) * Number(p.height_in) : null), (a, b) => b - a)
-  };
-}
-
-function numberFor(field, p, stats) {
+function numberFor(field, p, view) {
   if (field === 'size') return p.width_in && p.height_in ? (Number(p.width_in) + Number(p.height_in)) * CM : null;
   if (field === 'drills') return p.drills ? Number(p.drills) : null;
   if (field === 'colours') return p.colors ? Number(p.colors) : null;
   if (field === 'rating') return Number(p.rating) || 0;
-  const a = stats.get(key(p.artist)) || { owned: 0, finished: 0 };
+  const a = view.artist(p);
   return field === 'artistOwned' ? a.owned : a.finished;
 }
 
-function holds(cond, p, stats, ranks) {
+function holds(cond, p, view) {
   const F = FIELDS[cond.f];
   if (F.kind === 'date') {
     if (!cond.d) return true;                     // no date chosen yet
@@ -196,11 +212,10 @@ function holds(cond, p, stats, ranks) {
     return cond.op === 'before' ? d < cond.d : d >= cond.d;
   }
   if (F.kind === 'rank') {
-    const r = ranks[cond.f];
-    const i = r.at.get(p.id);
-    if (i == null) return false;                  // not in the stash that was ranked
+    const r = view.rank(cond.f, p);
+    if (!r) return false;                         // no date or no size: it cannot be placed
     const k = cond.unit === 'pct' ? Math.ceil(r.size * cond.n / 100) : cond.n;
-    return cond.op === 'top' ? i < k : i >= r.size - k;
+    return cond.op === 'top' ? r.i < k : r.i >= r.size - k;
   }
   if (F.kind === 'list') {
     if (!cond.vals.length) return true;           // not filled in yet: it rules nothing out
@@ -208,7 +223,7 @@ function holds(cond, p, stats, ranks) {
     const hit = cond.vals.some((v) => key(v) === mine);
     return cond.not ? !hit : hit;
   }
-  const v = numberFor(cond.f, p, stats);
+  const v = numberFor(cond.f, p, view);
   if (v == null) return false;                    // a kit with no size cannot be "at least 200 cm"
   /* Half a centimetre of grace: sizes are kept in inches, and 100 cm + 100 cm
      comes back from them as 199.9. */
@@ -216,14 +231,14 @@ function holds(cond, p, stats, ranks) {
 }
 
 /** Does the rule, leaving hand-picks aside, describe this kit? */
-function ruleMatches(c, p, stats, ranks) {
+function ruleMatches(c, p, view) {
   const live = c.groups.filter((g) => g.conds.length);
   /* No conditions at all means every owned kit — unless kits were picked by
      hand, in which case the picks are the whole challenge. */
   if (!live.length) return !c.picks.length;
   const each = live.map((g) => g.mode === 'all'
-    ? g.conds.every((x) => holds(x, p, stats, ranks))
-    : g.conds.some((x) => holds(x, p, stats, ranks)));
+    ? g.conds.every((x) => holds(x, p, view))
+    : g.conds.some((x) => holds(x, p, view)));
   return c.join === 'all' ? each.every(Boolean) : each.some(Boolean);
 }
 
@@ -250,14 +265,13 @@ export function activityDays(projects, sessions = [], progress = []) {
 export function evaluate(challenge, projects, activity = new Map()) {
   const c = normalise(challenge);
   const inDates = (d) => isDate(d) && (!c.from || d >= c.from) && (!c.to || d <= c.to);
-  const stats = artistStats(projects, c.from);
-  const ranks = rankings(projects, c.from);
+  const view = stashView(projects);
   const picked = new Set(c.picks);
   const out = { eligible: [], going: [], done: [] };
 
   for (const p of projects) {
     if (!owned(p)) continue;
-    if (!picked.has(p.id) && !ruleMatches(c, p, stats, ranks)) continue;
+    if (!picked.has(p.id) && !ruleMatches(c, p, view)) continue;
     const fin = finished(p);
     // given up on: not something still to do, and not something done
     if (p.status === 'abandoned') continue;
@@ -336,7 +350,7 @@ export const PRESETS = [
   { name: 'Refresh Your Stash 2026', from: '2026-01-01', to: '', req: 'finish',
     groups: group({ f: 'rankAge', op: 'top', n: 25, unit: 'pct' }),
     link: 'https://www.youtube.com/watch?v=qr0-2wGZlQg',
-    notes: 'Hosted by Lisette Crafts and Tells: work through the older kits in your stash. The host sets no age cut-off, so this starts from the oldest quarter of your stash. Change the share, or swap it for “Bought before” a date, to suit. Ongoing: it is complete when none of them are left.' },
+    notes: 'Hosted by Lisette Crafts and Tells: work through the older kits in your stash. The host sets no age cut-off, so this starts from the oldest quarter of your stash, which moves on to the next-oldest kits as you finish. For a fixed set, swap it for “Bought before” a date. Ongoing: it is complete when none are left.' },
   { name: '26 for 26', from: '2026-01-01', to: '2026-12-31', req: 'drills', groups: group(),
     link: 'https://www.youtube.com/watch?v=CRzIQbnZ9Ao',
     notes: 'Hosted by Shire Shenanigans: “26 wips for 2026. We are kitting up 26 projects for 2026.” Pick your 26 under Hand-picked kits. “Drills down” is a starting point; check the video for what the host counts.' },

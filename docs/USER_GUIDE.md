@@ -163,9 +163,16 @@ A rule with no conditions means every kit you own.
 
 Kits you add to the logbook later join a challenge on their own if they fit its rule.
 
-The artist counts are taken as they stood on the challenge's first day. Finishing an artist's first kit during the challenge does not take the artist out of it.
+### Challenges recalculate
 
-Oldest, newest, largest and smallest are worked out the same way: across the whole stash as it stood on the first day — what you owned then and had not finished. So "the oldest 25%" is a fixed set of kits. Finishing one does not pull the next-oldest in, and buying more does not move the line.
+A challenge is worked out again every time you look at it, from the stash as it stands.
+
+- Finish a kit by an artist with "none finished", and that artist's other kits leave the challenge. The kit you finished stays, under Completed.
+- "The oldest 25%" is a quarter of what you own and have not finished. Finish one and the next-oldest takes its place; buy more and the quarter grows.
+
+A finished kit is judged by how the stash stood just before you finished it, which is why the finish that met the challenge still counts.
+
+For a set of kits that does not move, use **Bought before** a date.
 
 ### Hand-picked kits
 

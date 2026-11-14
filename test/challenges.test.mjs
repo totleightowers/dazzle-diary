@@ -119,7 +119,7 @@ test('start and finish in the dates: both ends have to be inside', () => {
   assert.deepEqual(names(r.done), ['Both inside']);
 });
 
-test('artists in waiting: four or more owned, none finished when the challenge begins', () => {
+test('artists in waiting: finishing one kit by an artist takes their other kits out', () => {
   const four = (artist, more = []) => [0, 1, 2, 3].map((i) => kit(`${artist} ${i + 1}`, artist, more[i] || {}));
   const kits = [
     ...four('Waiting'),
@@ -130,12 +130,22 @@ test('artists in waiting: four or more owned, none finished when the challenge b
   ];
   const c = rule([{ f: 'artistOwned', op: 'min', n: 4 }, { f: 'artistFinished', op: 'max', n: 0 }],
     { req: 'finish', from: '2027-01-01', to: '2027-12-31' });
-  const r = evaluate(c, kits);
-  // the artist finished during the challenge is still in it — that finish is the point
+  let r = evaluate(c, kits);
+  // the finish that met the challenge stays, as completed; the artist's other kits are no longer eligible
   assert.deepEqual(names(r.done), ['Finished during 1']);
-  assert.deepEqual(names(r.eligible), [
-    'Finished during 2', 'Finished during 3', 'Finished during 4',
-    'Waiting 1', 'Waiting 2', 'Waiting 3', 'Waiting 4']);
+  assert.deepEqual(names(r.eligible), ['Waiting 1', 'Waiting 2', 'Waiting 3', 'Waiting 4']);
+
+  // a second finish by the same artist is not a second completion: the artist was already done
+  const again = kits.map((p) => p.title === 'Finished during 2'
+    ? { ...p, status: 'completed', date_started: '2027-03-01', date_completed: '2027-04-01' } : p);
+  r = evaluate(c, again);
+  assert.deepEqual(names(r.done), ['Finished during 1']);
+
+  // one under way does not close the artist; finishing it does
+  const under = kits.map((p) => p.title === 'Waiting 1' ? { ...p, status: 'started', date_started: '2027-05-01' } : p);
+  r = evaluate(c, under);
+  assert.deepEqual(names(r.going), ['Waiting 1']);
+  assert.deepEqual(names(r.eligible), ['Waiting 2', 'Waiting 3', 'Waiting 4']);
 });
 
 test('canvas size adds length to width, and a kit with no size cannot qualify', () => {
@@ -192,7 +202,7 @@ test('bought before or after a date goes by the order date, then the delivery da
   assert.equal(conditionText({ f: 'bought', op: 'after', d: '2024-01-01' }), 'Bought on or after 1 Jan 2024');
 });
 
-test('the oldest quarter of the stash is fixed on the first day, so an ongoing challenge can be completed', async () => {
+test('the oldest quarter of the stash is recalculated as kits are finished and bought', async () => {
   const { isComplete } = await import('../app/core/challenges.js');
   const stash = () => [
     ...[1, 2, 3, 4, 5, 6, 7, 8].map((i) => kit(`Kit ${i}`, 'A', { date_ordered: `202${i < 5 ? 2 : 4}-0${i}-01` })),
@@ -206,19 +216,22 @@ test('the oldest quarter of the stash is fixed on the first day, so an ongoing c
   assert.deepEqual(names(r.eligible), ['Kit 1', 'Kit 2'], 'a quarter of the eight unfinished, dated kits');
   assert.equal(isComplete(r), false);
 
-  // finishing one does not pull the third-oldest in to replace it
+  // finishing one keeps it as completed, and the quarter is taken again from what is left
   kits = kits.map((p) => p.title === 'Kit 1' ? { ...p, status: 'completed', date_started: '2026-01-05', date_completed: '2026-02-01' } : p);
   r = evaluate(c, kits);
   assert.deepEqual(names(r.done), ['Kit 1']);
-  assert.deepEqual(names(r.eligible), ['Kit 2']);
+  assert.deepEqual(names(r.eligible), ['Kit 2', 'Kit 3'], 'a quarter of the seven left');
 
-  // nor does buying more move the line
+  // buying more grows the stash, and the quarter with it
   kits = [...kits, ...[1, 2, 3, 4].map((i) => kit(`Bought later ${i}`, 'A', { date_ordered: `2026-03-0${i}` }))];
-  assert.deepEqual(names(evaluate(c, kits).eligible), ['Kit 2']);
+  assert.deepEqual(names(evaluate(c, kits).eligible), ['Kit 2', 'Kit 3', 'Kit 4']);
+  assert.deepEqual(names(evaluate(c, kits).done), ['Kit 1'], 'a later purchase does not undo a completion');
 
-  // when the last one is finished there is nothing left, and the challenge is complete
+  // a fixed set comes from a date instead, and that one can be finished off
+  const fixed = rule([{ f: 'bought', op: 'before', d: '2022-03-01' }], { req: 'finish', from: '2026-01-01', to: '' });
+  assert.deepEqual(names(evaluate(fixed, kits).eligible), ['Kit 2']);
   kits = kits.map((p) => p.title === 'Kit 2' ? { ...p, status: 'completed', date_started: '2026-04-01', date_completed: '2027-08-01' } : p);
-  r = evaluate(c, kits);
+  r = evaluate(fixed, kits);
   assert.deepEqual(names(r.done), ['Kit 1', 'Kit 2'], 'no end date: a finish a year on still counts');
   assert.equal(isComplete(r), true);
   assert.equal(isComplete(evaluate(c, [])), false, 'a challenge with no kits in it is not a finished one');
