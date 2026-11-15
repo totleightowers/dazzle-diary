@@ -317,3 +317,38 @@ test('kits to complete: finish 2 from a pool of 4, and the challenge is complete
   assert.equal(m.find('#chtarget').textContent, 'All');
   await m.tap('[data-act="mode"][data-k="stash"]').catch(() => {});
 });
+
+test('one condition, or one value of a condition, can be removed on its own', async () => {
+  const m = await fresh();
+  const a = await m.seed({ title: 'Alpha', artist: 'Ann', status: 'received', shape: 'Square', cover: 'alpha.jpg' });
+  await m.seed({ title: 'Beta', artist: 'Bob', status: 'received', shape: 'Round' });
+  await m.seed({ title: 'Gamma', artist: 'Cat', status: 'received', shape: 'Square' });
+  const c = await m.api('/challenges', json('POST', { name: 'Trim me', groups: [{ mode: 'all', conds: [
+    { f: 'artist', vals: ['Ann', 'Bob', 'Cat'] }, { f: 'shape', vals: ['Square'] }] }] }));
+
+  await m.go('#/challenge/' + c.id);
+  assert.match(m.find('#chtotal').textContent, /^2 kits/);
+  assert.equal(m.all('[data-act="cbdelval"]').length, 3, 'each of the three artists should be removable');
+  assert.equal(m.all('[data-act="cbdelcond"]').length, 2);
+
+  // one value goes; the condition and its other values stay
+  await m.tap('[data-act="cbdelval"][data-k="Cat"]');
+  assert.equal(m.find('#chread').textContent, 'Eligible: Artist is Ann or Bob and Drill shape is Square.');
+  assert.match(m.find('#chtotal').textContent, /^1 kit /);
+
+  // one condition goes; the other stays in the group
+  await m.tap('[data-act="cbdelcond"][data-c="1"]');
+  assert.equal(m.find('#chread').textContent, 'Eligible: Artist is Ann or Bob.');
+  assert.match(m.find('#chtotal').textContent, /^2 kits/);
+  // with one value left there is nothing to list separately: the row's own × removes it
+  await m.tap('[data-act="cbdelval"][data-k="Bob"]');
+  assert.equal(m.all('[data-act="cbdelval"]').length, 0);
+  await m.tap('[data-act="cbdelcond"][data-c="0"]');
+  assert.equal(m.find('#chread').textContent, 'Eligible: all kits in stash.');
+
+  // kits offered for adding manually show their cover
+  await m.tap('[data-act="cbpicks"]');
+  const row = m.find(`[data-act="cbpickkit"][data-k="${a.id}"]`);
+  assert.ok(row.querySelector('.chthumb'), 'no preview beside the kit');
+  assert.match(row.querySelector('.chthumb img').getAttribute('src'), /alpha\.jpg$/);
+});

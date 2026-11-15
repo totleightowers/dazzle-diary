@@ -150,6 +150,8 @@ Tap **Add condition**, choose a field, then set it.
 | Largest / smallest in stash | a percentage of the stash, or a number of kits, by canvas area |
 | Artist’s kits owned, Artist’s kits finished | **≥ at least** / **≤ at most** a number, counted across the artist's kits in your stash |
 
+Tap **×** beside a condition to remove it. When a condition has several values, each value is listed under it with its own **×**.
+
 Conditions are in a group set to **Match all** or **Match any**. **Add group** adds another group; groups combine with **AND** or **OR**.
 
 With no conditions, all kits in your stash are eligible.
@@ -158,7 +160,7 @@ The line under the conditions shows the rule in words, and the list below shows 
 
 ### Added manually
 
-Open **Added manually** to tick kits that conditions can't describe, such as a theme. They are included alongside any kits the conditions match. With no conditions, only the manually added kits are eligible.
+Open **Added manually** to tick kits, shown with their cover pictures, that conditions can't describe, such as a theme. They are included alongside any kits the conditions match. With no conditions, only the manually added kits are eligible.
 
 ### Notes and rules link
 
