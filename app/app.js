@@ -1474,7 +1474,7 @@ function chPreview() {
       ${items.length > 6 ? `<div class="chmore">and ${items.length - 6} more</div>` : ''}</div>`;
   };
   return `
-    <h2 class="chh" id="chtotal">${total} ${total === 1 ? 'kit' : 'kits'} match</h2>
+    <h2 class="chh" id="chtotal">${total} ${total === 1 ? 'kit matches' : 'kits match'}</h2>
     ${total ? CH_SECTIONS.map(section).join('')
       : `<p class="chhint">No kits in your stash match yet.</p>`}`;
 }
@@ -1483,6 +1483,9 @@ function paintBuilder() {
   const d = CH.draft;
   const scroller = scrollerOf($out);
   const at = scroller ? scroller.scrollTop : 0;
+  /* The kit list scrolls inside the page. Ticking a kit repaints the screen,
+     and without this the list came back at its top every time. */
+  const picksAt = document.getElementById('chpicks')?.scrollTop || 0;
   const multi = d.groups.length > 1;
 
   const groups = d.groups.map((g, gi) => `
@@ -1519,7 +1522,7 @@ function paintBuilder() {
     </div>`).join('');
 
   $out.innerHTML = `
-  <div class="screen reading form">
+  <div class="screen reading form chdrop">
     <div class="topbar">${topbar(CH.id ? 'Edit challenge' : 'New challenge', { back: '#/', sub: true })}</div>
     <div class="scroll pad" style="padding-bottom:24px">
       <div class="stack" style="margin-top:16px">
@@ -1557,6 +1560,7 @@ function paintBuilder() {
           <div class="panel chgroup">
             <button class="chcond plain" data-act="cbpicks" aria-expanded="${CH.picksOpen}">
               <span>Added manually · <span class="tnum" id="chpickn">${d.picks.length}</span></span>${svg(CH.picksOpen ? 'close' : 'add', 14, 2.2)}</button>
+            ${twoPane() ? `<p class="chhint">Tick kits below, or hold a kit in the logbook and drag it here.</p>` : ''}
             ${CH.picksOpen ? `<p class="chhint">Add kits that the conditions can’t describe, such as a theme.</p>
               <input class="fld" id="chpfind" value="${h(CH.pfind)}" placeholder="Search kits" autocomplete="off">
               <div class="chpicks" id="chpicks">${chPickRows()}</div>` : ''}
@@ -1586,6 +1590,8 @@ function paintBuilder() {
 
   const now = scrollerOf($out);
   if (now) now.scrollTop = at;
+  const picksNow = document.getElementById('chpicks');
+  if (picksNow) picksNow.scrollTop = picksAt;
   const name = document.getElementById('chname');
   if (name) name.oninput = (e) => { d.name = e.target.value; };
   for (const [id, k] of [['chnotes', 'notes'], ['chlink', 'link']]) {
@@ -3953,16 +3959,40 @@ async function runJob(jobId, box, done) {
 const DRAG = { id: null, from: null, ghost: null, over: null, timer: null,
                startX: 0, startY: 0, live: false, pointerId: null, card: null };
 
+let dragEndedAt = 0;
+
 function dragCleanup() {
   clearTimeout(DRAG.timer);
   try { if (DRAG.card && DRAG.pointerId != null) DRAG.card.releasePointerCapture(DRAG.pointerId); }
   catch { /* it was never captured, or the pointer is already gone */ }
   DRAG.ghost?.remove();
-  document.querySelectorAll('.group.drop-on').forEach((g) => g.classList.remove('drop-on'));
+  document.querySelectorAll('.group.drop-on, .chdrop.drop-on').forEach((g) => g.classList.remove('drop-on'));
   document.querySelector('.card.lifted')?.classList.remove('lifted');
   document.body.classList.remove('dragging');
-  Object.assign(DRAG, { id: null, from: null, ghost: null, over: null, timer: null,
+  Object.assign(DRAG, { id: null, from: null, ghost: null, over: null, zone: null, timer: null,
                         live: false, pointerId: null, card: null });
+}
+
+/** The challenge builder, when it is open beside the logbook: somewhere a kit can be dropped. */
+const dropZone = () => (CH.draft && /^#\/challenge\//.test(location.hash) ? document.querySelector('.chdrop') : null);
+const overDropZone = (x, y) => {
+  const zone = dropZone();
+  const el = zone && document.elementFromPoint(x, y);
+  return el && zone.contains(el) ? zone : null;
+};
+
+/** A kit dragged out of the logbook and let go over the builder is added to it by hand. */
+async function dropIntoChallenge(id) {
+  const p = S.projects.find((x) => String(x.id) === String(id));
+  if (!p) return;
+  if (p.status === 'wishlist') { toast('Wish-list kits can’t be added'); return; }
+  if (CH.draft.picks.includes(p.id)) { toast(`${p.title} is already added`); return; }
+  CH.draft.picks = [...CH.draft.picks, p.id];
+  const name = document.getElementById('chname');
+  if (name) CH.draft.name = name.value;
+  await chRefresh();
+  paintBuilder();
+  toast(`${p.title} added`);
 }
 
 function groupUnder(x, y) {
@@ -3972,8 +4002,10 @@ function groupUnder(x, y) {
 
 document.addEventListener('pointerdown', (e) => {
   const card = e.target.closest('.card[data-id]');
-  // a challenge's sections are worked out, not chosen: there is nowhere to drag to
-  if (!card || e.button === 2 || !card.closest('.group[data-status]')) return;
+  /* A challenge's sections are worked out, not chosen, so their cards have
+     nowhere to be dragged to — unless a challenge is being built beside them,
+     in which case any kit in the logbook can be dragged into it. */
+  if (!card || e.button === 2 || !(card.closest('.group[data-status]') || dropZone())) return;
   DRAG.startX = e.clientX; DRAG.startY = e.clientY;
   DRAG.pointerId = e.pointerId; DRAG.card = card;
   DRAG.timer = setTimeout(() => {
@@ -4008,6 +4040,12 @@ document.addEventListener('pointermove', (e) => {
     return;
   }
   DRAG.ghost.style.transform = `translate(${e.clientX - DRAG.startX}px, ${e.clientY - DRAG.startY}px)`;
+  const zone = overDropZone(e.clientX, e.clientY);
+  if (zone !== DRAG.zone) {
+    DRAG.zone?.classList.remove('drop-on');
+    DRAG.zone = zone;
+    zone?.classList.add('drop-on');
+  }
   const g = groupUnder(e.clientX, e.clientY);
   if (g !== DRAG.over) {
     DRAG.over?.classList.remove('drop-on');
@@ -4018,8 +4056,12 @@ document.addEventListener('pointermove', (e) => {
 
 document.addEventListener('pointerup', async () => {
   if (!DRAG.live) { clearTimeout(DRAG.timer); DRAG.timer = null; return; }
-  const target = DRAG.over, id = DRAG.id;
+  const target = DRAG.over, id = DRAG.id, zone = DRAG.zone;
+  /* Letting go ends a drag, and the browser then reports a tap on the card the
+     finger started on. That tap must not open the kit. */
+  dragEndedAt = Date.now();
   dragCleanup();
+  if (zone && id) { await dropIntoChallenge(id); return; }
   if (!target || !id) return;
   const status = target.dataset.status;
   const project = S.projects.find((p) => String(p.id) === String(id));
@@ -4071,7 +4113,9 @@ document.addEventListener('change', (e) => {
   });
 });
 
-document.addEventListener('click', (e) => { handleClick(e).catch((err) => {
+document.addEventListener('click', (e) => {
+  if (Date.now() - dragEndedAt < 400) { e.preventDefault?.(); return; }
+  handleClick(e).catch((err) => {
   console.error(err);
   toast(err && err.message ? err.message : 'Something went wrong');
   document.querySelectorAll('.btn[disabled]').forEach((b) => { b.disabled = false; });

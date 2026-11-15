@@ -377,3 +377,15 @@ test('rows in the manual list cannot be squeezed shorter than their pictures', a
   const rule = css.slice(css.indexOf('.chpick {'), css.indexOf('}', css.indexOf('.chpick {')));
   assert.match(rule, /flex:\s*0 0 auto/, 'a row in a scrolling column shrinks unless told not to');
 });
+
+test('ticking a kit far down the manual list keeps the list where it was', async () => {
+  const m = await fresh();
+  let last;
+  for (let i = 1; i <= 12; i++) last = await m.seed({ title: `Kit ${String(i).padStart(2, '0')}`, artist: 'X', status: 'received' });
+  await m.go('#/challenge/new');
+  await m.tap('[data-act="cbpicks"]');
+  m.find('#chpicks').scrollTop = 480;
+  await m.tap(`[data-act="cbpickkit"][data-k="${last.id}"]`);
+  assert.equal(m.find('#chpicks').scrollTop, 480, 'the list went back to the top');
+  assert.equal(m.find(`[data-act="cbpickkit"][data-k="${last.id}"]`).getAttribute('aria-pressed'), 'true');
+});

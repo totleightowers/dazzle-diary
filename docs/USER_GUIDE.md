@@ -160,6 +160,8 @@ The line under the conditions shows the rule in words, and the list below shows 
 
 ### Added manually
 
+On a tablet or unfolded phone, where the logbook stays beside the challenge you are editing, you can also hold a kit in the logbook and drag it onto the challenge to add it.
+
 Open **Added manually** to tick kits, shown with their cover pictures, that conditions can't describe, such as a theme. They are included alongside any kits the conditions match. With no conditions, only the manually added kits are eligible.
 
 ### Notes and rules link
