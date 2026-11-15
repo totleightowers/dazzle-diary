@@ -1063,7 +1063,7 @@ select.fld {
 .chstep { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 .chstep button { width: var(--tap); height: var(--tap); border-radius: 50%; background: var(--chip-bg);
   border: 1px solid var(--line); font-size: 20px; font-weight: 700; color: var(--ink-mid); }
-.chstep .n { min-width: 3ch; text-align: center; font-family: var(--serif); font-size: 26px; font-weight: 600; }
+.chstep .n { min-width: 3ch; white-space: nowrap; text-align: center; font-family: var(--serif); font-size: 26px; font-weight: 600; }
 .chpicks { display: flex; flex-direction: column; gap: 4px; max-height: 300px; overflow-y: auto; }
 .chpick { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; align-items: center;
   width: 100%; min-height: var(--tap); padding: 8px 10px; border-radius: var(--r-thumb); text-align: left;

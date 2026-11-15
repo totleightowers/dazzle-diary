@@ -311,3 +311,20 @@ test('the Tiffany Fan Art preset names the artist in full, so it finds the kit',
   assert.deepEqual(r.eligible.map((p) => p.artist), ['Margaret Morales']);
   assert.equal(r.eligible[0].title, 'Onihime');
 });
+
+test('a target makes a challenge complete after that many kits, with others still eligible', async () => {
+  const { isComplete } = await import('../app/core/challenges.js');
+  const done = (n) => ({ status: 'completed', date_started: '2026-01-0' + n, date_completed: '2026-02-0' + n });
+  const kits = [kit('A', 'X', done(1)), kit('B', 'X', done(2)), kit('C', 'X'), kit('D', 'X'), kit('E', 'X')];
+  const c = rule([], { req: 'finish', from: '2026-01-01', to: '2026-12-31' });
+  const r = evaluate(c, kits);
+  assert.equal(isComplete(r), false, 'with no target, every kit has to be done');
+  assert.equal(isComplete(r, 3), false);
+  assert.equal(isComplete(r, 2), true);
+  assert.equal(isComplete(r, 1), true);
+  assert.equal(isComplete(evaluate(c, []), 1), false);
+  // only a whole number of one or more is a target
+  assert.equal(normalise({ target: '4' }).target, 4);
+  assert.equal(normalise({ target: 2.6 }).target, 3);
+  for (const none of [0, -3, 'x', null, undefined]) assert.equal(normalise({ target: none }).target, null);
+});

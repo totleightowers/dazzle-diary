@@ -74,7 +74,7 @@ const safeLink = (s) => {
 /** A new, empty challenge: every owned kit, finished inside dates not yet chosen. */
 export const blank = () => ({
   name: '', from: '', to: '', req: 'finish', join: 'any',
-  groups: [{ mode: 'all', conds: [] }], picks: [], notes: '', link: ''
+  groups: [{ mode: 'all', conds: [] }], picks: [], notes: '', link: '', target: null
 });
 
 /** A condition as it starts out when its field is first chosen. */
@@ -127,7 +127,9 @@ export function normalise(raw) {
     picks: [...new Set((Array.isArray(c.picks) ? c.picks : []).map(Number).filter(Number.isFinite))],
     notes: String(c.notes ?? '').trim().slice(0, 2000),
     // only a web address is kept: this ends up as a link on screen
-    link: safeLink(c.link)
+    link: safeLink(c.link),
+    // how many kits have to be completed; null means all of them
+    target: Number(c.target) >= 1 ? Math.min(999, Math.round(Number(c.target))) : null
   };
 }
 
@@ -330,12 +332,16 @@ export function describe(challenge, name) {
 }
 
 /**
- * A challenge is complete when it has kits and every one of them is done. It
- * is how an ongoing challenge — one with no end date — ever finishes: not on a
- * day, but when nothing in it is left to do.
+ * A challenge with a target is complete once that many of its kits are
+ * completed, whatever is left in the pool: "finish 4 of these". Without one it
+ * is complete when it has kits and every one of them is done — which is also
+ * how an ongoing challenge, one with no end date, ever finishes.
  */
-export const isComplete = (sections) => !!sections && sections.done.length > 0
-  && !sections.eligible.length && !sections.going.length;
+export const isComplete = (sections, target = null) => {
+  if (!sections) return false;
+  if (target) return sections.done.length >= target;
+  return sections.done.length > 0 && !sections.eligible.length && !sections.going.length;
+};
 
 /**
  * Community challenges, ready to start from. Each carries what its host has
