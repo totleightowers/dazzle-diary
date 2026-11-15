@@ -1440,16 +1440,21 @@ function chEditor(cond) {
 function chPickRows() {
   const on = new Set(CH.draft.picks);
   const q = CH.pfind.trim().toLowerCase();
-  const kits = ownedKits().sort(LB_SORT.name);
-  const picked = kits.filter((p) => on.has(p.id));
-  const rest = kits.filter((p) => !on.has(p.id)
-    && (!q || p.title.toLowerCase().includes(q) || (p.artist || '').toLowerCase().includes(q)));
+  /* Kits already added lead the list when it is opened, and then nothing
+     moves: ticking a kit must not send it to the top from under the finger. */
+  const first = new Set(CH.pickFirst || []);
+  const kits = ownedKits().sort((a, b) => (first.has(b.id) - first.has(a.id)) || LB_SORT.name(a, b));
+  const hit = (p) => !q || p.title.toLowerCase().includes(q) || (p.artist || '').toLowerCase().includes(q);
+  const lead = kits.filter((p) => first.has(p.id) && (on.has(p.id) || hit(p)));
+  const others = kits.filter((p) => !first.has(p.id) && (on.has(p.id) || hit(p)));
+  const shown = [...lead, ...others.slice(0, CH_SHOWN)];
+  const more = others.length - Math.min(others.length, CH_SHOWN);
   const row = (p, pressed) => `
     <button class="chpick" data-act="cbpickkit" data-k="${p.id}" aria-pressed="${pressed}">
       <span class="box"></span>${thumb(p, 'chthumb')}
       <span class="t">${h(p.title)}</span><span class="a">${h(p.artist || '')}</span></button>`;
-  return picked.map((p) => row(p, true)).join('') + rest.slice(0, CH_SHOWN).map((p) => row(p, false)).join('')
-    + (rest.length > CH_SHOWN ? `<span class="chmore">${rest.length - CH_SHOWN} more. Search to find them.</span>` : '')
+  return shown.map((p) => row(p, on.has(p.id))).join('')
+    + (more ? `<span class="chmore">${more} more. Search to find them.</span>` : '')
     + (!kits.length ? `<span class="chmore">No kits in your stash.</span>` : '');
 }
 
@@ -1736,7 +1741,7 @@ async function challengeTap(act, el) {
       if (F.max != null) cur.n = Math.min(F.max, cur.n);
     }
   }
-  else if (act === 'cbpicks') { CH.picksOpen = !CH.picksOpen; CH.pfind = ''; }
+  else if (act === 'cbpicks') { CH.picksOpen = !CH.picksOpen; CH.pfind = ''; CH.pickFirst = [...d.picks]; }
   else if (act === 'cbpickkit') {
     const id = Number(k);
     d.picks = d.picks.includes(id) ? d.picks.filter((x) => x !== id) : [...d.picks, id];

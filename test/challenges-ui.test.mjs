@@ -352,3 +352,28 @@ test('one condition, or one value of a condition, can be removed on its own', as
   assert.ok(row.querySelector('.chthumb'), 'no preview beside the kit');
   assert.match(row.querySelector('.chthumb img').getAttribute('src'), /alpha\.jpg$/);
 });
+
+test('ticking a kit in the manual list does not move it', async () => {
+  const m = await fresh();
+  const ids = {};
+  for (const t of ['Alpha', 'Beta', 'Gamma', 'Delta'])
+    ids[t] = (await m.seed({ title: t, artist: 'X', status: 'received' })).id;
+  await m.go('#/challenge/new');
+  await m.tap('[data-act="cbpicks"]');
+  const order = () => m.all('[data-act="cbpickkit"] .t').map((n) => n.textContent);
+  assert.deepEqual(order(), ['Alpha', 'Beta', 'Delta', 'Gamma']);
+  await m.tap(`[data-act="cbpickkit"][data-k="${ids.Gamma}"]`);
+  assert.deepEqual(order(), ['Alpha', 'Beta', 'Delta', 'Gamma'], 'the ticked kit jumped');
+  assert.equal(m.find(`[data-act="cbpickkit"][data-k="${ids.Gamma}"]`).getAttribute('aria-pressed'), 'true');
+  // closed and opened again, what is already added leads the list
+  await m.tap('[data-act="cbpicks"]');
+  await m.tap('[data-act="cbpicks"]');
+  assert.deepEqual(order(), ['Gamma', 'Alpha', 'Beta', 'Delta']);
+});
+
+test('rows in the manual list cannot be squeezed shorter than their pictures', async () => {
+  const { readFileSync } = await import('node:fs');
+  const css = readFileSync(new URL('../app/styles.css', import.meta.url), 'utf8');
+  const rule = css.slice(css.indexOf('.chpick {'), css.indexOf('}', css.indexOf('.chpick {')));
+  assert.match(rule, /flex:\s*0 0 auto/, 'a row in a scrolling column shrinks unless told not to');
+});
