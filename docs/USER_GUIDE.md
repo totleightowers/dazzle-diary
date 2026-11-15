@@ -112,9 +112,15 @@ Only kits in your stash are included. Wish-list kits, abandoned kits and kits so
 
 ### Creating a challenge
 
-Set a **Name**, the **From** and **To** dates, a **Requirement** and the **Eligible kits**.
+Set a **Name**, the **From** and **To** dates, **Kits to complete**, a **Requirement** and the **Eligible kits**.
 
 **Presets** fill in a community challenge for you. Everything in a preset can be changed before saving. Where a host's rules are only in a video, the preset's notes say the requirement is a default to check.
+
+### Kits to complete
+
+Optional. Set a number for challenges like "complete 4 kits from this list". The challenge shows **Complete** once that many eligible kits are completed, even if others are still eligible.
+
+Leave it on **All** and the challenge is complete when every eligible kit is completed.
 
 ### Requirement
 
@@ -129,7 +135,7 @@ Dazzle checks these from the kit's started and completed dates, sessions and pro
 
 Tap **Ongoing (no end date)** for a challenge without an end date.
 
-An ongoing challenge shows **Complete** when it has kits and none are left under Eligible or In progress.
+An ongoing challenge shows **Complete** when it reaches its **Kits to complete** number, or, with that set to All, when it has kits and none are left under Eligible or In progress.
 
 ### Eligible kits
 

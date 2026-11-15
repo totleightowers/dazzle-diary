@@ -273,3 +273,47 @@ test('an ongoing challenge over the oldest of the stash says so, and is complete
   assert.match(m.find('.chip[data-act="chpick"]').textContent, /Complete/);
   await m.tap('[data-act="mode"][data-k="stash"]');
 });
+
+test('kits to complete: finish 2 from a pool of 4, and the challenge is complete', async () => {
+  const m = await fresh();
+  const ids = [];
+  for (const t of ['One', 'Two', 'Three', 'Four'])
+    ids.push((await m.seed({ title: t, artist: 'Pool', status: 'received' })).id);
+
+  await m.go('#/challenge/new');
+  assert.equal(m.find('#chtarget').textContent, 'All');
+  await m.tap('[data-act="cbtarget"][data-k="1"]');
+  await m.tap('[data-act="cbtarget"][data-k="1"]');
+  await m.tap('[data-act="cbtarget"][data-k="1"]');
+  await m.tap('[data-act="cbtarget"][data-k="-1"]');
+  assert.equal(m.find('#chtarget').textContent, '2');
+  m.find('#chname').value = 'Two from four';
+  await setDate(m, 'chfrom', '2026-01-01');
+  m.find('#chname').value = 'Two from four';
+  await m.tap('[data-act="cbsave"]');
+  assert.equal((await m.api('/challenges'))[0].target, 2);
+
+  await m.go('#/');
+  assert.match(m.find('#chcount').textContent, /0 of 2 completed/);
+  assert.match(m.find('.chmeta').textContent, /Goal: 2 kits/);
+  assert.match(m.find('.chip[data-act="chpick"]').textContent, /0\/2/);
+
+  const finish = (id, day) => m.api('/projects/' + id, json('PATCH',
+    { status: 'completed', date_started: '2026-02-01', date_completed: day }));
+  await finish(ids[0], '2026-03-01');
+  await m.go('#/');
+  assert.match(m.find('.chip[data-act="chpick"]').textContent, /1\/2/);
+  assert.equal(m.find('.chdone'), null);
+  await finish(ids[1], '2026-04-01');
+  await m.go('#/');
+  assert.match(m.find('#chcount').textContent, /2 of 2 completed/);
+  assert.equal(m.find('.chdone').textContent, 'Complete');
+  assert.deepEqual(section(m, 'eligible'), ['Four', 'Three'], 'the rest of the pool is still listed');
+
+  // stepping back below 1 returns to All
+  await m.go('#/challenge/' + (await m.api('/challenges'))[0].id);
+  await m.tap('[data-act="cbtarget"][data-k="-1"]');
+  await m.tap('[data-act="cbtarget"][data-k="-1"]');
+  assert.equal(m.find('#chtarget').textContent, 'All');
+  await m.tap('[data-act="mode"][data-k="stash"]').catch(() => {});
+});

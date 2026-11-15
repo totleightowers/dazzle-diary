@@ -1311,7 +1311,7 @@ export async function localApi(path, opts = {}) {
       const days = activityDays(rows, await idb.all('sessions'), await idb.all('progress'));
       return list.map((c) => {
         const r = evaluateChallenge(c, rows, days);
-        return { ...c, summary: describeChallenge(c, shopName), complete: isComplete(r),
+        return { ...c, summary: describeChallenge(c, shopName), complete: isComplete(r, normaliseChallenge(c).target),
                  sections: { eligible: r.eligible.map((x) => x.id), going: r.going.map((x) => x.id),
                              done: r.done.map((x) => x.id) } };
       });

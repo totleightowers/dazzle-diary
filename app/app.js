@@ -1276,12 +1276,13 @@ function paintChallenges() {
       ${modeSwitch()}
       ${list.length ? `<div class="chiprow statusrow">${list.map((x) => `
         <button class="chip" data-act="chpick" data-k="${x.id}" aria-pressed="${x.id === S.chId}">
-          <span>${h(x.name)}</span><span class="n tnum">${x.complete ? 'Complete' : chTotal(x)}</span></button>`).join('')}
+          <span>${h(x.name)}</span><span class="n tnum">${x.complete ? 'Complete'
+            : x.target ? `${(x.sections.done || []).length}/${x.target}` : chTotal(x)}</span></button>`).join('')}
         <button class="chip" data-go="#/challenge/new" aria-label="New challenge">${svg('add', 15, 2)}<span>New</span></button>
       </div>` : ''}
       ${c ? `<div class="panel chinfo">
         <div style="min-width:0;flex:1 1 auto">
-          <div class="chmeta">${c.complete ? `<span class="chdone">Complete</span>` : ''}${h(chDates(c))} · ${h(chReq(c))}</div>
+          <div class="chmeta">${c.complete ? `<span class="chdone">Complete</span>` : ''}${h(chDates(c))} · ${h(chReq(c))}${c.target ? ` · Goal: ${c.target} ${c.target === 1 ? 'kit' : 'kits'}` : ''}</div>
           <p class="chsum">${h(c.summary)}</p>
           ${c.notes ? `<p class="chnotes">${h(c.notes)}</p>` : ''}
           ${c.link ? `<a class="chlink" href="${h(c.link)}" target="_blank" rel="noopener noreferrer">View rules ${svg('chev', 14)}</a>` : ''}
@@ -1290,7 +1291,7 @@ function paintChallenges() {
       </div>
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
         <span id="chcount" style="font-size:13px;font-weight:600;color:var(--ink-mid)">
-          ${done} of ${total} completed</span>
+          ${done} of ${c.target || total} completed</span>
         <div class="seg tight compact">
           <button data-act="view" data-k="grid" aria-pressed="${S.view === 'grid'}" aria-label="Grid view">${svg('grid', 16)}</button>
           <button data-act="view" data-k="list" aria-pressed="${S.view === 'list'}" aria-label="List view">${svg('list', 16)}</button>
@@ -1519,6 +1520,15 @@ function paintBuilder() {
               <div><label class="label" for="chto">To</label><input class="fld" id="chto" type="date" value="${h(d.to)}"></div>
             </div>
             <button class="chip chongoing" data-act="cbongoing" aria-pressed="${!d.to}">Ongoing (no end date)</button>
+            <div><span class="label">Kits to complete</span>
+              <div class="chstep">
+                <button data-act="cbtarget" data-k="-1" aria-label="Fewer">−</button>
+                <span class="n tnum" id="chtarget">${d.target ? num(d.target) : 'All'}</span>
+                <button data-act="cbtarget" data-k="1" aria-label="More">+</button>
+              </div>
+              <p class="chhint" style="margin-top:6px">${d.target
+                ? `Complete when ${d.target} eligible ${d.target === 1 ? 'kit is' : 'kits are'} completed.`
+                : 'Complete when all eligible kits are completed.'}</p></div>
             <div><span class="label">Requirement</span>
               <div class="chvals">${REQUIREMENTS.map((r) =>
                 `<button class="chip" data-act="cbreq" data-k="${r.k}" aria-pressed="${d.req === r.k}">${h(r.label)}</button>`).join('')}</div></div>
@@ -1662,6 +1672,10 @@ async function challengeTap(act, el) {
   CH.preset = /^cb(edit|close|picks|addcond)$/.test(act) ? CH.preset : null;
   if (act === 'cbreq') d.req = k;
   else if (act === 'cbongoing') d.to = '';
+  else if (act === 'cbtarget') {
+    const next = (d.target || 0) + Number(k);
+    d.target = next >= 1 ? Math.min(999, next) : null;     // below 1 is "All"
+  }
   else if (act === 'cbunit' && cur) { cur.unit = k === 'count' ? 'count' : 'pct'; cur.n = cur.unit === 'pct' ? 25 : 10; }
   else if (act === 'cbjoin') d.join = k === 'all' ? 'all' : 'any';
   else if (act === 'cbgmode') d.groups[g].mode = k === 'any' ? 'any' : 'all';
