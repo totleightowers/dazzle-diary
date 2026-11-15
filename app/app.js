@@ -1446,7 +1446,7 @@ function chPickRows() {
     && (!q || p.title.toLowerCase().includes(q) || (p.artist || '').toLowerCase().includes(q)));
   const row = (p, pressed) => `
     <button class="chpick" data-act="cbpickkit" data-k="${p.id}" aria-pressed="${pressed}">
-      <span class="box"></span>
+      <span class="box"></span>${thumb(p, 'chthumb')}
       <span class="t">${h(p.title)}</span><span class="a">${h(p.artist || '')}</span></button>`;
   return picked.map((p) => row(p, true)).join('') + rest.slice(0, CH_SHOWN).map((p) => row(p, false)).join('')
     + (rest.length > CH_SHOWN ? `<span class="chmore">${rest.length - CH_SHOWN} more. Search to find them.</span>` : '')
@@ -1494,8 +1494,18 @@ function paintBuilder() {
       </div>
       ${g.conds.map((cond, ci) => {
         const open = CH.edit && CH.edit.g === gi && CH.edit.c === ci;
-        return `<button class="chcond${open ? ' open' : ''}" data-act="cbedit" data-g="${gi}" data-c="${ci}">${
-          h(conditionText(cond, chValName))}</button>${open ? chEditor(cond) : ''}`;
+        /* Each condition can be removed on its own, and so can each value of a
+           condition that has several — without opening it, and without taking
+           the rest of the group with it. */
+        const many = CHALLENGE_FIELDS[cond.f].kind === 'list' && cond.vals.length > 1;
+        return `<div class="chcondrow">
+          <button class="chcond${open ? ' open' : ''}" data-act="cbedit" data-g="${gi}" data-c="${ci}">${
+            h(conditionText(cond, chValName))}</button>
+          <button class="iconbtn" data-act="cbdelcond" data-g="${gi}" data-c="${ci}" aria-label="Remove condition">${svg('close', 14, 2.2)}</button>
+        </div>${many ? `<div class="chtags">${cond.vals.map((v) => `
+          <button class="chtag" data-act="cbdelval" data-g="${gi}" data-c="${ci}" data-k="${h(v)}"
+            aria-label="Remove ${h(chValName(cond.f, v))}"><span>${h(chValName(cond.f, v))}</span>${svg('close', 11, 2.4)}</button>`).join('')}</div>` : ''}${
+          open ? chEditor(cond) : ''}`;
       }).join('')}
       ${CH.adding === gi ? `<div class="cheditor"><span class="label" style="margin:0">Choose a field</span>
           <div class="chvals">${Object.entries(CHALLENGE_FIELDS).map(([k, F]) =>
@@ -1697,6 +1707,14 @@ async function challengeTap(act, el) {
     CH.adding = null; CH.find = '';
   }
   else if (act === 'cbclose') CH.edit = null;
+  else if (act === 'cbdelcond') {
+    d.groups[g].conds.splice(Number(el.dataset.c), 1);
+    CH.edit = null;
+  }
+  else if (act === 'cbdelval') {
+    const cond = d.groups[g].conds[Number(el.dataset.c)];
+    if (cond && cond.vals) cond.vals = cond.vals.filter((v) => v.toLowerCase() !== k.toLowerCase());
+  }
   else if (act === 'cbdel' && cur) { d.groups[CH.edit.g].conds.splice(CH.edit.c, 1); CH.edit = null; }
   else if (act === 'cbval' && cur) {
     const has = cur.vals.some((v) => v.toLowerCase() === k.toLowerCase());
